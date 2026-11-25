@@ -90,7 +90,6 @@ const zh = {
   "home.empty.idleTitle": "还没有可用节点",
   "home.empty.idleDesc":
     "未导入任何订阅。打开软件会自动启动内核（仅直连）；用上方大按钮接管流量（系统代理或 TUN），或先导入订阅。",
-  "home.health.mcp": "MCP 服务",
   "home.network.online": "已连通",
   "home.network.offline": "未连通",
   "home.memoryTitle": "内存",
@@ -417,6 +416,8 @@ const zh = {
     "Windows 的 TUN 模式仍固定使用 IPv4；这两个开关仅影响系统代理。",
   "settings.autoDefaultRules": "为无规则的订阅附加默认分流规则",
   "settings.probeExitIp": "探测出口公网 IP",
+  "settings.probeExitIpHint":
+    "通过代理向 Cloudflare 探测落地 IP 与地区，并直连探测所在地用于落地地图；关闭后同时停用两项探测",
   "settings.data": "数据",
   "settings.openDataDir": "打开数据目录",
   "settings.helperStatusUnconfirmed":
@@ -665,7 +666,6 @@ const en: Record<MessageKey, string> = {
   "home.empty.idleTitle": "No nodes yet",
   "home.empty.idleDesc":
     "No subscriptions imported. The app starts the core (direct-only) automatically; capture traffic with the big button above (system proxy or TUN), or import a subscription first.",
-  "home.health.mcp": "MCP service",
   "home.network.online": "Connected",
   "home.network.offline": "Offline",
   "home.memoryTitle": "Memory",
@@ -995,6 +995,8 @@ const en: Record<MessageKey, string> = {
     "Windows TUN stays IPv4-only; these switches only affect the system proxy.",
   "settings.autoDefaultRules": "Attach default rules to rule-less subscriptions",
   "settings.probeExitIp": "Probe public exit IP",
+  "settings.probeExitIpHint":
+    "Queries Cloudflare through the proxy for the exit IP and region, and directly for your origin region on the landing map. Turn off to disable both.",
   "settings.data": "Data",
   "settings.openDataDir": "Open Data Directory",
   "settings.helperStatusUnconfirmed":

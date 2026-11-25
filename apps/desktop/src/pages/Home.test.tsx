@@ -2331,4 +2331,102 @@ describe("Home", () => {
       expect(openProxyTerminal).toHaveBeenCalledTimes(1);
     });
   });
+
+  it("shows landing map states, selectable operational values, and opens the expanded map dialog", async () => {
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: true,
+      system_proxy_recorded: true,
+      system_proxy_available: true,
+      has_nodes: true,
+      selected_outbound: {
+        tag: "Proxies",
+        outbound_type: "selector",
+        group_now: "US-1",
+        landing_ip: "203.0.113.42",
+        landing_country: "US",
+        origin_ip: "198.51.100.7",
+        origin_country: "CN",
+      },
+      ...tunStatus,
+    });
+    getSettings.mockResolvedValue({
+      mixed_listen: "127.0.0.1",
+      mixed_port: 17890,
+      clash_api_listen: "127.0.0.1",
+      clash_api_port: 19090,
+      selected_tag: "Proxies",
+      auto_set_system_proxy: true,
+      proxy_service_enabled: true,
+      allow_lan: false,
+      proxy_mode: "rule",
+      probe_exit_ip: true,
+    });
+
+    const { container } = render(<Home />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByTestId("landing-map")).toHaveAttribute("data-state", "located");
+    });
+    expect(view.getByTestId("home-outbound-ip")).toHaveAttribute("data-selectable");
+    expect(view.getByTestId("home-inbound-address")).toHaveAttribute("data-selectable");
+    expect(view.getByTestId("home-proxy-current-node")).toHaveAttribute("data-selectable");
+
+    fireEvent.click(view.getByTestId("home-landing-expand"));
+    const dialog = await screen.findByTestId("landing-map-dialog");
+    expect(within(dialog).getByTestId("landing-map-user")).toHaveAttribute("data-country", "CN");
+    expect(within(dialog).getByTestId("landing-map-exit")).toHaveAttribute("data-country", "US");
+    expect(within(dialog).getByTestId("landing-map-exit-label")).toHaveTextContent("203.0.113.42");
+  });
+
+  it("shows probing and off landing map states when exit IP is absent", async () => {
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: true,
+      system_proxy_recorded: true,
+      system_proxy_available: true,
+      has_nodes: true,
+      selected_outbound: {
+        tag: "Proxies",
+        outbound_type: "selector",
+        group_now: "US-1",
+        landing_ip: null,
+        landing_country: null,
+      },
+      ...tunStatus,
+    });
+    getSettings.mockResolvedValue({
+      mixed_listen: "127.0.0.1",
+      mixed_port: 17890,
+      clash_api_listen: "127.0.0.1",
+      clash_api_port: 19090,
+      selected_tag: "Proxies",
+      auto_set_system_proxy: true,
+      proxy_service_enabled: true,
+      allow_lan: false,
+      proxy_mode: "rule",
+      probe_exit_ip: false,
+    });
+
+    const { container } = render(<Home />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByTestId("landing-map")).toHaveAttribute("data-state", "off");
+    });
+    expect(view.getByTestId("home-outbound-ip")).toHaveTextContent(t("home.landing.off"));
+  });
 });

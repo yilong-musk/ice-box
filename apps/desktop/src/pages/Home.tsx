@@ -973,6 +973,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                       className="min-w-0 truncate text-sm"
                       title={currentNodeLabel}
                       data-testid="home-proxy-current-node"
+                      data-selectable=""
                     >
                       {currentNodeLabel}
                     </span>
@@ -1053,6 +1054,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                           className={cn("min-w-0 flex-1 justify-end", row.valueClassName)}
                           title={row.value}
                           data-testid={row.testId}
+                          data-selectable=""
                         >
                           <span className="min-w-0 truncate">{row.value}</span>
                         </ItemTitle>
@@ -1080,7 +1082,11 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                 </CardTitle>
               </CardHeader>
               <CardContent className="flex flex-col gap-3">
-                <p className="text-center font-mono text-sm tabular-nums" data-testid="home-inbound-address">
+                <p
+                  className="text-center font-mono text-sm tabular-nums"
+                  data-testid="home-inbound-address"
+                  data-selectable=""
+                >
                   {inboundLabel}
                 </p>
                 {cliProxyEndpoint ? (

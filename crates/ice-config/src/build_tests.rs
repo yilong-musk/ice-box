@@ -2649,6 +2649,16 @@ fn windows_reserved_rules_put_port_53_hijack_first_and_reject_the_tun_peer() {
     assert_eq!(rules[0]["port"][0], 53);
     assert_eq!(rules[0]["ip_version"], 4);
     assert_eq!(rules[1]["process_name"][0], "ice-box");
+    let win_procs: Vec<&str> = rules[1]["process_name"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|p| p.as_str())
+        .collect();
+    assert!(
+        win_procs.contains(&"ice-box.exe") && win_procs.contains(&"sing-box.exe"),
+        "Windows process bypass must match .exe executable names: {win_procs:?}"
+    );
     assert_eq!(rules[1]["outbound"], "direct");
     assert_eq!(rules[2]["action"], "sniff");
     assert!(

@@ -146,7 +146,7 @@ root.innerHTML = `
       <p class="hero-subtitle reveal" ${t("hero.subtitle")}></p>
       <div class="hero-actions reveal">
         <a class="button button-primary button-large hero-download" href="${heroDownloadHref}">${icon("download")}<span class="hero-download-label"></span></a>
-        <a class="button button-secondary button-large" href="#demo">${icon("play")}<span ${t("hero.tryDemo")}></span></a>
+        <a class="button button-large" href="#demo">${icon("play")}<span ${t("hero.tryDemo")}></span></a>
       </div>
       <p class="hero-meta reveal"><span ${t("hero.platforms")}></span><span class="dot-sep"></span><span>GPL-3.0-or-later</span><span class="dot-sep"></span><span>sing-box</span></p>
     </section>

@@ -351,6 +351,34 @@ const boxOf = (el: Element): Box => {
   return { left: r.left, top: r.top, width: r.width, height: r.height };
 };
 
+/**
+ * Resting viewport box of the dialog's map slot (`[data-landing-slot]`),
+ * unaffected by the dialog's active `lm-zoom-in` transform. Using
+ * `getBoundingClientRect()` on the animating dialog would ease the flight a
+ * second time (`e²`) and make the canvas lag behind the dialog frame.
+ */
+export function settledSlotBox(slot: Element): Box {
+  const dialog = slot.closest<HTMLElement>(".landing-map-dialog");
+  if (
+    dialog &&
+    slot instanceof HTMLElement &&
+    dialog.offsetWidth > 0 &&
+    dialog.offsetHeight > 0 &&
+    slot.offsetWidth > 0 &&
+    slot.offsetHeight > 0
+  ) {
+    const dialogLeft = (window.innerWidth - dialog.offsetWidth) / 2;
+    const dialogTop = (window.innerHeight - dialog.offsetHeight) / 2;
+    return {
+      left: dialogLeft + dialog.clientLeft + slot.offsetLeft,
+      top: dialogTop + dialog.clientTop + slot.offsetTop,
+      width: slot.offsetWidth,
+      height: slot.offsetHeight,
+    };
+  }
+  return boxOf(slot);
+}
+
 /** How long the globe takes to spring back after a drag. */
 const RETURN_MS = 600;
 /** Alpha levels the unrolling dots are batched into (one fill each). */
@@ -713,7 +741,7 @@ function createEngine(
         const e = easeSheet(p);
         morph = lerp(f.fromMorph, f.toMorph, e);
         if (p < 1 && el) {
-          const b = boxOf(el);
+          const b = f.toMorph === 1 ? settledSlotBox(el) : boxOf(el);
           placeStage({
             left: lerp(f.from.left, b.left, e),
             top: lerp(f.from.top, b.top, e),
@@ -814,6 +842,10 @@ function createEngine(
     };
     turning = false;
     drifting = false;
+    if (raf) {
+      cancelAnimationFrame(raf);
+      raf = 0;
+    }
     canvas.setPointerCapture?.(e.pointerId);
     canvas.style.cursor = "grabbing";
   };
@@ -878,6 +910,19 @@ function createEngine(
     update(nextState, centroid) {
       state = nextState;
       target = centroid;
+      if (dragging) {
+        // Keep an active drag undisturbed; update where the globe will spring
+        // back to (and whether it should resume drifting) on release.
+        dragging.drift = nextState === "probing" && !reduceMotion;
+        if (centroid) {
+          dragging.rest = {
+            lon: centroid[1],
+            lat: clamp(centroid[0], -MAX_TILT, MAX_TILT),
+          };
+        }
+        draw();
+        return;
+      }
       drifting = nextState === "probing" && !reduceMotion;
       if (expanded || morph > 0) {
         // Keep the globe's pose while it is the dialog's map; turn later.

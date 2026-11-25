@@ -115,7 +115,9 @@ function ConnectionItem({
           className="w-full min-w-0"
           title={row.source ? `${row.source} → ${target}` : target}
         >
-          <span className="truncate">{target}</span>
+          <span className="truncate" data-selectable="">
+            {target}
+          </span>
           <Badge variant="outline" className="font-mono">
             {row.network.toUpperCase()}
           </Badge>
@@ -137,6 +139,7 @@ function ConnectionItem({
                 className="max-w-[55%] shrink-0 truncate"
                 title={chain}
                 data-testid="connection-chain"
+                data-selectable=""
               >
                 {chain}
               </span>
@@ -146,7 +149,7 @@ function ConnectionItem({
                 <span className="shrink-0" aria-hidden="true">
                   ·
                 </span>
-                <span className="min-w-0 shrink-[2] truncate" title={row.rule}>
+                <span className="min-w-0 shrink-[2] truncate" title={row.rule} data-selectable="">
                   {rule}
                 </span>
               </>
@@ -156,7 +159,11 @@ function ConnectionItem({
                 <span className="shrink-0" aria-hidden="true">
                   ·
                 </span>
-                <span className="min-w-0 shrink-[3] truncate" title={row.process_path}>
+                <span
+                  className="min-w-0 shrink-[3] truncate"
+                  title={row.process_path}
+                  data-selectable=""
+                >
                   {process}
                 </span>
               </>

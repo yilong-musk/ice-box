@@ -68,17 +68,29 @@ pub(crate) fn clear() {
     origin.fetched_at = None;
     origin.sample = None;
     origin.inflight = false;
+    origin.consecutive_misses = 0;
 }
 
 /// How long a measured origin is reused. It does not depend on the node, only
 /// on the user's own network, so it is refreshed far less often.
 const ORIGIN_FRESH: Duration = Duration::from_secs(300);
 
+/// Back off repeated origin probe failures (`15s -> 30s -> 60s -> 120s ->
+/// 240s -> 300s`) so a network where direct Cloudflare access is blocked does
+/// not spawn a blocking thread every 15 seconds for the whole session.
+fn origin_retry_ttl(consecutive_misses: u32) -> Duration {
+    let shift = consecutive_misses.saturating_sub(1).min(5);
+    RETRY_AFTER_MISS
+        .saturating_mul(1u32 << shift)
+        .min(ORIGIN_FRESH)
+}
+
 struct OriginCache {
     generation: u64,
     fetched_at: Option<Instant>,
     sample: Option<ExitSample>,
     inflight: bool,
+    consecutive_misses: u32,
 }
 
 fn origin_lock() -> std::sync::MutexGuard<'static, OriginCache> {
@@ -90,6 +102,7 @@ fn origin_lock() -> std::sync::MutexGuard<'static, OriginCache> {
                 fetched_at: None,
                 sample: None,
                 inflight: false,
+                consecutive_misses: 0,
             })
         })
         .lock()
@@ -99,16 +112,17 @@ fn origin_lock() -> std::sync::MutexGuard<'static, OriginCache> {
 /// The user's own public IP and country: the same trace, sent without the
 /// local proxy. In system-proxy mode the app's own requests do not use the
 /// system proxy; under TUN they are captured, but the reserved
-/// `process_name: ice-box` rule (`docs/tun.md`) routes them to `direct`, so
-/// the far end still sees the real origin. Same cache-and-background shape as
-/// [`observe`].
+/// `process_name` bypass (`ice-box` / `ice-box.exe`, `docs/tun.md`) routes
+/// them to `direct`, so the far end still sees the real origin. Same
+/// cache-and-background shape as [`observe`], with exponential backoff on
+/// repeated failures.
 pub(crate) fn observe_origin() -> Option<ExitSample> {
     let mut slot = origin_lock();
     let current = slot.sample.clone();
     let ttl = if slot.sample.is_some() {
         ORIGIN_FRESH
     } else {
-        RETRY_AFTER_MISS
+        origin_retry_ttl(slot.consecutive_misses)
     };
     let fresh = slot.fetched_at.is_some_and(|at| at.elapsed() < ttl);
     if fresh || slot.inflight {
@@ -127,10 +141,18 @@ pub(crate) fn observe_origin() -> Option<ExitSample> {
             }
             slot.inflight = false;
             slot.fetched_at = Some(Instant::now());
+            if sample.is_some() {
+                slot.consecutive_misses = 0;
+            } else {
+                slot.consecutive_misses = slot.consecutive_misses.saturating_add(1);
+            }
             slot.sample = sample;
         });
     if spawned.is_err() {
-        origin_lock().inflight = false;
+        let mut slot = origin_lock();
+        if slot.generation == generation {
+            slot.inflight = false;
+        }
     }
     current
 }
@@ -272,5 +294,44 @@ mod tests {
     #[test]
     fn a_closed_proxy_does_not_invent_an_address() {
         assert!(fetch_exit("http://127.0.0.1:1").is_none());
+    }
+
+    #[test]
+    fn origin_retry_backoff_doubles_and_caps_at_origin_fresh() {
+        use super::{origin_retry_ttl, ORIGIN_FRESH, RETRY_AFTER_MISS};
+
+        assert_eq!(origin_retry_ttl(0), RETRY_AFTER_MISS);
+        assert_eq!(origin_retry_ttl(1), RETRY_AFTER_MISS);
+        assert_eq!(origin_retry_ttl(2), RETRY_AFTER_MISS * 2);
+        assert_eq!(origin_retry_ttl(3), RETRY_AFTER_MISS * 4);
+        assert_eq!(origin_retry_ttl(4), RETRY_AFTER_MISS * 8);
+        assert_eq!(origin_retry_ttl(5), RETRY_AFTER_MISS * 16);
+        assert_eq!(origin_retry_ttl(6), ORIGIN_FRESH);
+        assert_eq!(origin_retry_ttl(99), ORIGIN_FRESH);
+    }
+
+    #[test]
+    fn clear_drops_origin_cache_and_resets_backoff() {
+        use super::{clear, origin_lock, ExitSample};
+        use std::time::Instant;
+
+        let before_gen = {
+            let mut slot = origin_lock();
+            slot.sample = Some(ExitSample {
+                ip: "198.51.100.7".into(),
+                country: Some("CN".into()),
+            });
+            slot.fetched_at = Some(Instant::now());
+            slot.inflight = true;
+            slot.consecutive_misses = 4;
+            slot.generation
+        };
+        clear();
+        let slot = origin_lock();
+        assert_eq!(slot.generation, before_gen.wrapping_add(1));
+        assert!(slot.sample.is_none());
+        assert!(slot.fetched_at.is_none());
+        assert!(!slot.inflight);
+        assert_eq!(slot.consecutive_misses, 0);
     }
 }

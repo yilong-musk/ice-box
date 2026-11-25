@@ -574,9 +574,6 @@ code,
   .landing-map-marker::after {
     animation: landing-ping 2s cubic-bezier(0, 0, 0.2, 1) infinite;
   }
-  .landing-map-probing {
-    animation: landing-breathe 1.6s ease-in-out infinite;
-  }
 }
 @keyframes landing-ping {
   0% {
@@ -586,11 +583,6 @@ code,
   100% {
     transform: scale(3.6);
     opacity: 0;
-  }
-}
-@keyframes landing-breathe {
-  50% {
-    opacity: 0.45;
   }
 }
 
@@ -639,16 +631,6 @@ code,
   opacity: 0;
   transform-box: fill-box;
   transform-origin: center;
-}
-.landing-pin-label {
-  fill: var(--foreground);
-  font-size: 3.2px;
-  font-weight: 600;
-  text-anchor: middle;
-  paint-order: stroke;
-  stroke: var(--background);
-  stroke-width: 0.8px;
-  stroke-linejoin: round;
 }
 .landing-arc-base {
   fill: none;

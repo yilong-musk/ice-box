@@ -16,7 +16,7 @@ export function ErrorAlert({ children, className, role }: Props) {
   return (
     <Alert variant="destructive" className={cn("error", className)} role={role ?? "alert"}>
       <CircleAlert />
-      <AlertDescription>{children}</AlertDescription>
+      <AlertDescription data-selectable="">{children}</AlertDescription>
     </Alert>
   );
 }
@@ -25,7 +25,7 @@ export function WarnAlert({ children, className, role }: Props) {
   return (
     <Alert className={cn("warn border-warn/30 bg-warn/10", className)} role={role ?? "alert"}>
       <TriangleAlert />
-      <AlertDescription className="text-warn">{children}</AlertDescription>
+      <AlertDescription className="text-warn" data-selectable="">{children}</AlertDescription>
     </Alert>
   );
 }
@@ -34,7 +34,7 @@ export function OkAlert({ children, className }: Props) {
   return (
     <Alert className={cn("ok border-ok/30 bg-ok/10", className)}>
       <Check />
-      <AlertDescription className="text-ok">{children}</AlertDescription>
+      <AlertDescription className="text-ok" data-selectable="">{children}</AlertDescription>
     </Alert>
   );
 }

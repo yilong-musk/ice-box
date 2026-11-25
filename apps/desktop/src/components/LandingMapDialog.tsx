@@ -17,7 +17,7 @@
  * missing from the centroid table simply gets no marker.
  */
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { XIcon } from "lucide-react";
 
@@ -27,6 +27,7 @@ import { formatLocale, t, useLanguagePreference } from "../lib/i18n";
 import { countryFlagEmoji } from "../lib/flagEmoji";
 import {
   LANDING_FLAT,
+  getLandingGlobeView,
   landingFlatCenter,
   landingMapCentroid,
   setLandingFlatCenter,
@@ -192,18 +193,33 @@ export function LandingMapDialog({
 
   // Central meridian: the midpoint between the user and the exit (shortest
   // way round), so both sit symmetrically around the middle of the map; the
-  // globe's own facing when either is unknown. Picked once per open, before
-  // the card's globe reads it to start unrolling, and kept through the close.
-  const lonCRef = useRef(0);
-  const wasOpenRef = useRef(false);
-  if (open && !wasOpenRef.current) {
-    const u = landingMapCentroid(resolveUser());
-    const x = ip ? landingMapCentroid(country) : null;
-    setLandingFlatCenter(u && x ? u[1] + wrapLon(x[1] - u[1]) / 2 : null);
-    lonCRef.current = landingFlatCenter();
+  // globe's own facing when either is unknown. Picked once per open and kept
+  // through the close animation so neither pins nor legend jump while closing.
+  const [prevOpen, setPrevOpen] = useState(false);
+  const [lonC, setLonC] = useState(() => landingFlatCenter());
+  const [sessionUserCode, setSessionUserCode] = useState<string | null>(null);
+  if (open !== prevOpen) {
+    setPrevOpen(open);
+    if (open) {
+      const nextUser = resolveUser();
+      setSessionUserCode(nextUser);
+      const u = landingMapCentroid(nextUser);
+      const x = ip ? landingMapCentroid(country) : null;
+      setLonC(
+        u && x
+          ? wrapLon(u[1] + wrapLon(x[1] - u[1]) / 2)
+          : wrapLon(getLandingGlobeView().lon),
+      );
+    }
   }
-  wasOpenRef.current = open;
-  const lonC = lonCRef.current;
+  if (open && measuredOrigin && sessionUserCode !== measuredOrigin) {
+    setSessionUserCode(measuredOrigin);
+  }
+  // Publish the chosen meridian before paint and before LandingMap's
+  // useEffect reads it to begin unrolling, without mutating globals in render.
+  useLayoutEffect(() => {
+    if (open) setLandingFlatCenter(lonC);
+  }, [open, lonC]);
 
   // Measure the card's map when the dialog mounts (before its first paint)
   // and again as it starts closing, since Home may have scrolled or resized.
@@ -216,15 +232,7 @@ export function LandingMapDialog({
     if (!open && contentRef.current) syncZoomOrigin(contentRef.current);
   }, [open]);
 
-  // Resolved while open and kept through the close animation, so the legend
-  // does not flip to "unknown" as the dialog shrinks away.
-  const lastUserCodeRef = useRef<string | null>(null);
-  const userCode = useMemo(() => {
-    if (!open) return lastUserCodeRef.current;
-    lastUserCodeRef.current = resolveUser();
-    return lastUserCodeRef.current;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, measuredOrigin]);
+  const userCode = sessionUserCode;
   const userInferred = userCode != null && measuredOrigin == null;
   const exitCode = country ? country.toUpperCase() : null;
   const userCentroid = landingMapCentroid(userCode);
@@ -351,7 +359,14 @@ export function LandingMapDialog({
                 data-testid="landing-map-exit-label"
               >
                 {exitLabel}
-                {ip ? <span className="ml-2 font-mono tabular-nums text-muted-foreground">{ip}</span> : null}
+                {ip ? (
+                  <span
+                    className="ml-2 font-mono tabular-nums text-muted-foreground"
+                    data-selectable=""
+                  >
+                    {ip}
+                  </span>
+                ) : null}
               </span>
             </div>
           </div>

@@ -176,7 +176,7 @@ async function waitForShowcase(page, target) {
   const landingIp = (
     await desktop.getByTestId("home-outbound-ip").textContent({ timeout: 15_000 })
   )?.trim();
-  if (!landingIp || !/^\d{1,3}(?:\.\d{1,3}){3}$/.test(landingIp)) {
+  if (!landingIp || !/^(?:\S+\s+)?\d{1,3}(?:\.\d{1,3}){3}$/.test(landingIp)) {
     throw new Error(`Desktop demo landing IP was not ready, got ${JSON.stringify(landingIp)}`);
   }
   const node = (

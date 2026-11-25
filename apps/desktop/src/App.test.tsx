@@ -9,11 +9,14 @@ import {
   within,
 } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import App from "./App";
+import App, { resetLaunchWindowSizeForTest } from "./App";
 
-/** Lets a test stand in for the window resize; real (no-op) otherwise. */
+/** Lets a test stand in for window chrome commands; real (no-op) otherwise. */
 const windowResize = vi.hoisted(() => ({
   fn: null as null | ((delta: number, min: { width: number; height: number }) => Promise<boolean>),
+}));
+const windowCommand = vi.hoisted(() => ({
+  fn: null as null | ((command: string) => Promise<void>),
 }));
 
 vi.mock("@platform/windowChrome", async (importOriginal) => {
@@ -22,6 +25,8 @@ vi.mock("@platform/windowChrome", async (importOriginal) => {
     ...actual,
     resizeWindowWidthBy: (delta: number, min: { width: number; height: number }) =>
       windowResize.fn ? windowResize.fn(delta, min) : actual.resizeWindowWidthBy(delta, min),
+    runWindowCommand: (command: Parameters<typeof actual.runWindowCommand>[0]) =>
+      windowCommand.fn ? windowCommand.fn(command) : actual.runWindowCommand(command),
   };
 });
 import { APP_VERSION } from "./lib/appVersion";
@@ -184,6 +189,9 @@ describe("App", () => {
   beforeEach(() => {
     phoneShell.value = false;
     desktopShell.value = true;
+    windowResize.fn = null;
+    windowCommand.fn = null;
+    resetLaunchWindowSizeForTest();
     vi.clearAllMocks();
     clearNodesSnapshot();
     getSettings.mockResolvedValue(defaultSettings);
@@ -572,6 +580,73 @@ describe("App", () => {
     expect(regions[1]).toBeEmptyDOMElement();
     expect(regions[2]).toHaveTextContent("ice-box");
     expect(regions[3]).toHaveTextContent(APP_VERSION);
+  });
+
+  it("keeps accessible names on collapsed desktop navigation buttons", () => {
+    const { container } = render(<App />);
+    const sidebar = container.querySelector('[data-slot="sidebar"]');
+    expect(sidebar).toHaveAttribute("data-state", "collapsed");
+    for (const label of [
+      t("app.nav.home"),
+      t("app.nav.nodes"),
+      t("app.nav.rules"),
+      t("app.nav.subs"),
+      t("app.nav.connections"),
+      t("app.nav.mcp"),
+      t("app.nav.settings"),
+    ]) {
+      const button = within(container).getByRole("button", { name: label });
+      expect(button).toHaveAttribute("aria-label", label);
+    }
+  });
+
+  it("grows the desktop window at launch when an expanded sidebar was remembered", () => {
+    const resize = vi.fn().mockResolvedValue(true);
+    windowResize.fn = resize;
+    window.localStorage.setItem("ice-box.sidebar-open", "true");
+    try {
+      render(<App />);
+      expect(resize).toHaveBeenCalledWith(120, { width: 720, height: 500 });
+    } finally {
+      window.localStorage.removeItem("ice-box.sidebar-open");
+    }
+  });
+
+  it("drags and maximizes from the content top strip, but ignores portaled modals and selectable text", async () => {
+    const cmd = vi.fn().mockResolvedValue(undefined);
+    windowCommand.fn = cmd;
+    const { container } = render(<App />);
+    const view = within(container);
+    const content = view.getByTestId("app-content");
+
+    // Plain background in the top 48px starts drag / toggles maximize.
+    fireEvent.mouseDown(content, { button: 0, clientY: 16 });
+    expect(cmd).toHaveBeenCalledWith("startDragging");
+    fireEvent.doubleClick(content, { button: 0, clientY: 16 });
+    expect(cmd).toHaveBeenCalledWith("toggleMaximize");
+    cmd.mockClear();
+
+    // Selectable text inside the top 48px must not hijack pointer drags.
+    const selectable = document.createElement("span");
+    selectable.setAttribute("data-selectable", "");
+    content.appendChild(selectable);
+    fireEvent.mouseDown(selectable, { button: 0, clientY: 16 });
+    fireEvent.doubleClick(selectable, { button: 0, clientY: 16 });
+    expect(cmd).not.toHaveBeenCalled();
+    selectable.remove();
+
+    // Opening a portaled dialog (LandingMapDialog) renders its overlay into
+    // document.body. Synthetic events bubble through the React tree into
+    // app-content, so clicks in the top 48px must not start a window drag.
+    fireEvent.click(view.getByTestId("home-landing-expand"));
+    const overlay = await waitFor(() => {
+      const el = document.querySelector('[data-slot="dialog-overlay"]');
+      expect(el).not.toBeNull();
+      return el as HTMLElement;
+    });
+    fireEvent.mouseDown(overlay, { button: 0, clientY: 12 });
+    fireEvent.doubleClick(overlay, { button: 0, clientY: 12 });
+    expect(cmd).not.toHaveBeenCalled();
   });
 
   it("keeps the nodes list mounted when switching away and back", async () => {

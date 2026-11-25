@@ -126,6 +126,7 @@ export function PortsCard({
       <SettingsRow
         label={t("settings.probeExitIp")}
         htmlFor="settings-probe-exit-ip"
+        description={t("settings.probeExitIpHint")}
       >
         <Switch
           id="settings-probe-exit-ip"

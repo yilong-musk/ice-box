@@ -555,7 +555,7 @@ export function Rules({ onNavigate, active = true }: Props) {
                             className="w-full min-w-0"
                             title={`${summary}\n${JSON.stringify(row.rule)}`}
                           >
-                            <span className="truncate">
+                            <span className="truncate" data-selectable="">
                               {summary || JSON.stringify(row.rule)}
                             </span>
                             {row.custom ? (

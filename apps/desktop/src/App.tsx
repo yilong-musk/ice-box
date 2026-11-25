@@ -143,6 +143,11 @@ const SIDEBAR_TRANSITION_MS = 200;
 /** The launch-time window size adjustment runs once per app start. */
 let launchWindowSizeApplied = false;
 
+/** Test-only hook so each test can exercise the launch-time resize cleanly. */
+export function resetLaunchWindowSizeForTest() {
+  launchWindowSizeApplied = false;
+}
+
 function windowMinSize(open: boolean): { width: number; height: number } {
   return { width: open ? 720 : 720 - SIDEBAR_WIDTH_DELTA_PX, height: 500 };
 }
@@ -297,20 +302,22 @@ function TitlebarActionSlots({
 /** Height of the title bar strip the content slides up under (h-12). */
 const TITLEBAR_PX = 48;
 const INTERACTIVE_SELECTOR =
-  'button, a, input, select, textarea, label, summary, [role="button"], [role="link"], [role="switch"], [role="checkbox"], [role="tab"], [role="menuitem"], [role="slider"], [contenteditable=""], [contenteditable="true"], [data-no-window-drag]';
+  'button, a, input, select, textarea, label, summary, pre, code, [data-selectable], [role="button"], [role="link"], [role="switch"], [role="checkbox"], [role="tab"], [role="menuitem"], [role="slider"], [contenteditable=""], [contenteditable="true"], [data-no-window-drag]';
 
 /**
  * The content column sits on top of the title bar (-mt-12), so the header's
  * drag region underneath never gets the pointer on the right-hand side.
  * Treat a press in the top strip of the content as a title bar press:
- * drag the window, double-click to maximize, unless it lands on a control.
+ * drag the window, double-click to maximize, unless it lands on a control
+ * or came from a portaled overlay/dialog outside the content DOM subtree.
  */
 function isTitlebarPress(e: React.MouseEvent<HTMLElement>): boolean {
   if (e.button !== 0) return false;
+  const target = e.target as Element | null;
+  if (!target || !e.currentTarget.contains(target)) return false;
   const top = e.currentTarget.getBoundingClientRect().top;
   if (e.clientY - top >= TITLEBAR_PX) return false;
-  const target = e.target as Element | null;
-  return !target?.closest?.(INTERACTIVE_SELECTOR);
+  return !target.closest?.(INTERACTIVE_SELECTOR);
 }
 
 function onContentTitlebarMouseDown(e: React.MouseEvent<HTMLElement>) {
@@ -819,6 +826,7 @@ function AppShell() {
                       <SidebarMenuButton
                         type="button"
                         isActive={tab === id}
+                        aria-label={t(labelKey)}
                         aria-current={tab === id ? "page" : undefined}
                         tooltip={t(labelKey)}
                         className={NAV_BUTTON_CLASS}
@@ -847,9 +855,9 @@ function AppShell() {
                   {phone ? null : (
                     // Placed with top-1/2 and a negative margin (no
                     // translate the button's own transitions could override).
-                    // -mt-[14px] instead of the exact -mt-4 (half of 32px):
-                    // the row's optical middle, the "ice-box" text, sits a
-                    // little below the logo's box centre.
+                    // -mt-3 (-12px) instead of the exact -mt-[14px] (half of
+                    // 28px / size-7): the row's optical middle, the "ice-box"
+                    // text, sits a little below the logo's box centre.
                     <SidebarCollapseToggle className="absolute top-1/2 -right-3 -mt-3 size-7! rounded-md group-data-[collapsible=icon]:static group-data-[collapsible=icon]:mt-0 group-data-[collapsible=icon]:size-7! group-data-[collapsible=icon]:rounded-md group-data-[collapsible=icon]:[&_svg:not(.nav-icon)]:size-4!" />
                   )}
                   {/* The update arrow is a badge on the logo's bottom-right
