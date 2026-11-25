@@ -425,7 +425,13 @@ function createEngine(
     toMorph: number;
     from: Box;
     target: () => Element | null;
+    /** Where the flight lands, measured once (see `frame`). */
+    to: Box | null;
   } | null = null;
+  /** The window was resized mid-flight: measure the landing box again. */
+  let flightTargetStale = false;
+  /** Canvas size (CSS px) held through a flight; see `placeStage`. */
+  let stageCanvas: { width: number; height: number } | null = null;
 
   const readColors = () => {
     const dark = document.documentElement.classList.contains("dark");
@@ -654,7 +660,10 @@ function createEngine(
   const draw = () => {
     if (w <= 0 || h <= 0) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, w, h);
+    // In flight the canvas can be larger than the box drawn into (see
+    // `placeStage`); clear all of it, not just the box.
+    if (stageCanvas) ctx.clearRect(0, 0, stageCanvas.width, stageCanvas.height);
+    else ctx.clearRect(0, 0, w, h);
     if (morph > 0) {
       drawMorph();
     } else {
@@ -672,13 +681,40 @@ function createEngine(
     canvas.height = Math.max(1, Math.round(h * dpr));
   };
 
-  const placeStage = (box: Box) => {
+  /**
+   * Move the stage to `box` and draw into a `box`-sized area. Resizing a
+   * canvas reallocates its backing store (a fresh GPU surface in WebKit), so
+   * a flight does not resize it every frame: the canvas is sized once to the
+   * largest box of the flight, pinned to the stage's top-left corner, and the
+   * stage (overflow hidden) shows the part drawn into.
+   */
+  const placeStage = (box: Box, largest: Box) => {
     if (!stage) return;
     stage.style.left = `${box.left}px`;
     stage.style.top = `${box.top}px`;
     stage.style.width = `${box.width}px`;
     stage.style.height = `${box.height}px`;
-    setSize(box.width, box.height);
+    const cw = Math.max(box.width, largest.width);
+    const ch = Math.max(box.height, largest.height);
+    if (!stageCanvas || cw > stageCanvas.width || ch > stageCanvas.height) {
+      stageCanvas = {
+        width: Math.max(cw, stageCanvas?.width ?? 0),
+        height: Math.max(ch, stageCanvas?.height ?? 0),
+      };
+      canvas.style.width = `${stageCanvas.width}px`;
+      canvas.style.height = `${stageCanvas.height}px`;
+      setSize(stageCanvas.width, stageCanvas.height);
+    }
+    w = box.width;
+    h = box.height;
+  };
+
+  /** Hand the canvas back to normal layout sizing after a flight. */
+  const releaseStageCanvas = () => {
+    if (!stageCanvas) return;
+    stageCanvas = null;
+    canvas.style.width = "";
+    canvas.style.height = "";
   };
 
   const turnTo = (centroid: readonly [number, number]) => {
@@ -712,6 +748,7 @@ function createEngine(
     }
     stage?.remove();
     stage = null;
+    releaseStageCanvas();
     resize();
     if (morph === 0) {
       if (pendingTurn && target) {
@@ -741,13 +778,24 @@ function createEngine(
         const e = easeSheet(p);
         morph = lerp(f.fromMorph, f.toMorph, e);
         if (p < 1 && el) {
-          const b = f.toMorph === 1 ? settledSlotBox(el) : boxOf(el);
-          placeStage({
-            left: lerp(f.from.left, b.left, e),
-            top: lerp(f.from.top, b.top, e),
-            width: lerp(f.from.width, b.width, e),
-            height: lerp(f.from.height, b.height, e),
-          });
+          // Measured once per flight (and again after a window resize):
+          // reading layout every frame, right after the previous frame
+          // moved the stage, forced a synchronous layout each frame. The
+          // card and the dialog's resting slot do not move meanwhile.
+          if (!f.to || flightTargetStale) {
+            f.to = f.toMorph === 1 ? settledSlotBox(el) : boxOf(el);
+            flightTargetStale = false;
+          }
+          const b = f.to;
+          placeStage(
+            {
+              left: lerp(f.from.left, b.left, e),
+              top: lerp(f.from.top, b.top, e),
+              width: lerp(f.from.width, b.width, e),
+              height: lerp(f.from.height, b.height, e),
+            },
+            b.width * b.height > f.from.width * f.from.height ? b : f.from,
+          );
           more = true;
         } else {
           land(el);
@@ -795,27 +843,43 @@ function createEngine(
     if (document.visibilityState === "visible" && (turning || drifting || flight)) kick();
   };
 
+  const onWindowResize = () => {
+    if (flight) flightTargetStale = true;
+  };
+
+  /** Card corner radius for the stage, read once (a style read can force a
+   * style recalc, here in the first frame of a flight). */
+  let hostRadius: string | null = null;
+
   /** Lift the canvas onto the stage where it is now, then fly it. */
   const startFlight = (toMorph: number, targetEl: () => Element | null, ms: number) => {
-    const box = boxOf(canvas);
+    // Mid-flight the canvas is larger than the stage that clips it; the
+    // stage is what is on screen.
+    const box = stage && canvas.parentElement === stage ? boxOf(stage) : boxOf(canvas);
     if (!stage) {
       stage = document.createElement("div");
       stage.className = "landing-map-stage";
       stage.setAttribute("aria-hidden", "true");
-      stage.style.borderRadius = getComputedStyle(host).borderRadius;
+      hostRadius ??= getComputedStyle(host).borderRadius;
+      stage.style.borderRadius = hostRadius;
       document.body.append(stage);
     }
     if (canvas.parentElement !== stage) stage.append(canvas);
-    placeStage(box);
+    placeStage(box, box);
     const now = performance.now();
     flight = {
       created: now,
-      start: toMorph === 1 ? null : now,
+      // The clock starts on the flight's first frame, both ways. Opening or
+      // closing the dialog re-renders Home, and in WebKit that frame can land
+      // a few hundred ms after this call; timed from here, a collapse would
+      // already be mostly over by then and snap into the card.
+      start: null,
       ms: reduceMotion ? 0 : ms,
       fromMorph: morph,
       toMorph,
       from: box,
       target: targetEl,
+      to: null,
     };
     turning = false;
     draw();
@@ -904,6 +968,7 @@ function createEngine(
     attributeFilter: ["class", "data-theme", "style"],
   });
   document.addEventListener("visibilitychange", onVisibility);
+  window.addEventListener("resize", onWindowResize);
   resize();
 
   return {
@@ -969,6 +1034,7 @@ function createEngine(
       resizeObserver?.disconnect();
       themeObserver?.disconnect();
       document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("resize", onWindowResize);
       canvas.removeEventListener("pointerdown", onPointerDown);
       canvas.removeEventListener("pointermove", onPointerMove);
       canvas.removeEventListener("pointerup", onPointerUp);

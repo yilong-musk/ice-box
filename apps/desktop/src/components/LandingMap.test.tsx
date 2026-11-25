@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { StrictMode } from "react";
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   LAND,
@@ -256,6 +256,68 @@ describe("LandingMap component", () => {
       getContext.mockRestore();
     }
   });
+
+  it("times the collapse from its first frame, so a slow first frame does not skip it", () => {
+    const getContext = vi
+      .spyOn(HTMLCanvasElement.prototype, "getContext")
+      .mockReturnValue(makeMockContext());
+    const widthSpy = vi
+      .spyOn(HTMLElement.prototype, "clientWidth", "get")
+      .mockReturnValue(300);
+    const heightSpy = vi
+      .spyOn(HTMLElement.prototype, "clientHeight", "get")
+      .mockReturnValue(144);
+    let rafCallback: FrameRequestCallback | null = null;
+    const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
+      rafCallback = cb;
+      return 1;
+    });
+    const cancelRaf = vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {
+      rafCallback = null;
+    });
+    const runFrame = (time: number) => {
+      const cb = rafCallback;
+      rafCallback = null;
+      act(() => cb?.(time));
+    };
+    // The dialog's map slot the canvas flies into.
+    const slot = document.createElement("div");
+    slot.setAttribute("data-landing-slot", "");
+    document.body.append(slot);
+    try {
+      const { container, rerender } = render(
+        <LandingMap country="JP" state="located" expanded={false} />,
+      );
+      const host = container.querySelector('[data-testid="landing-map"]') as HTMLElement;
+      const canvas = host.querySelector("canvas") as HTMLCanvasElement;
+
+      // Expand and let the flight land in the slot.
+      rerender(<LandingMap country="JP" state="located" expanded />);
+      runFrame(1_000);
+      runFrame(1_000 + 2_000);
+      expect(canvas.parentElement).toBe(slot);
+
+      // Close. The first frame arrives long after the close (a slow commit
+      // in WebKit): the canvas must still start its flight, not snap home.
+      rerender(<LandingMap country="JP" state="located" expanded={false} />);
+      expect(canvas.parentElement).toHaveClass("landing-map-stage");
+      const late = performance.now() + 2_000;
+      runFrame(late);
+      expect(canvas.parentElement).toHaveClass("landing-map-stage");
+      runFrame(late + 240);
+      expect(canvas.parentElement).toHaveClass("landing-map-stage");
+      // Done after the full collapse duration from that first frame.
+      runFrame(late + 2_000);
+      expect(canvas.parentElement).toBe(host);
+    } finally {
+      slot.remove();
+      cancelRaf.mockRestore();
+      raf.mockRestore();
+      heightSpy.mockRestore();
+      widthSpy.mockRestore();
+      getContext.mockRestore();
+    }
+  });
 });
 
 describe("LandingMapDialog", () => {
@@ -352,6 +414,34 @@ describe("LandingMapDialog", () => {
     );
     expect(screen.queryByTestId("landing-map-exit")).toBeNull();
     expect(screen.queryByTestId("landing-map-arc")).toBeNull();
+  });
+
+  it("closes on a press on the overlay without inserting a stylesheet", async () => {
+    // Radix's own overlay locks scrolling by inserting a <style> into <head>
+    // on open (and removing it on close); WebKit restyles the whole page for
+    // each, in the first frame of the zoom. The plain overlay does not.
+    const headStyles = () => document.head.querySelectorAll("style").length;
+    const before = headStyles();
+    const onOpenChange = vi.fn();
+    render(
+      <LandingMapDialog
+        open
+        onOpenChange={onOpenChange}
+        country="JP"
+        ip="203.0.113.42"
+        originCountry="CN"
+        originIp="198.51.100.7"
+      />,
+    );
+    expect(headStyles()).toBe(before);
+    const overlay = document.querySelector('[data-slot="dialog-overlay"]') as HTMLElement;
+    expect(overlay).toHaveAttribute("data-state", "open");
+    // Radix starts listening for outside presses a tick after mounting.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    fireEvent.pointerDown(overlay);
+    expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
   it("keeps the resolved origin label when closing so the legend does not flash unknown", () => {

@@ -257,9 +257,19 @@ export function LandingMapDialog({
   return (
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay
+        {/* A plain overlay, not DialogPrimitive.Overlay: Radix's overlay
+            wraps itself in react-remove-scroll, which inserts a <style> into
+            <head> on open and removes it on close. WebKit (the app's
+            webview) rebuilds the style rules for the whole page on each
+            stylesheet change, ~20ms with the app's stylesheet, right in the
+            first frame of the zoom. The app shell does not scroll the body,
+            so the lock is not needed; a press on this overlay is outside the
+            content, which closes the dialog as before. */}
+        <div
           data-slot="dialog-overlay"
-          className="landing-map-overlay fixed inset-0 z-50 bg-black/40 supports-backdrop-filter:backdrop-blur-sm"
+          data-state={open ? "open" : "closed"}
+          aria-hidden="true"
+          className="landing-map-overlay pointer-events-auto fixed inset-0 z-50 bg-black/40 supports-backdrop-filter:backdrop-blur-sm"
         />
         <DialogPrimitive.Content
           ref={setContentRef}
