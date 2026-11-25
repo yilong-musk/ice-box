@@ -432,7 +432,7 @@ main {
   position: relative;
   max-width: 1080px;
   margin-inline: auto;
-  padding: 0 0 72px;
+  padding: 0 0 32px;
 }
 
 /* The slot the expanded 860x620 window is laid out (and scaled) for. The app
@@ -525,8 +525,7 @@ main {
 .demo-caption {
   display: flex;
   max-width: 1080px;
-  margin-inline: auto;
-  padding-right: 14%;
+  margin: 24px auto 0;
   align-items: center;
   justify-content: center;
   gap: 10px;
@@ -1111,7 +1110,6 @@ main {
 
   .demo-caption {
     margin-top: 28px;
-    padding-right: 0;
   }
 
   .agent {
