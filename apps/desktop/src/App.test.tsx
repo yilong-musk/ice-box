@@ -437,14 +437,15 @@ describe("App", () => {
       );
       expect(titlebar!.firstElementChild).toBe(controls.parentElement);
       // The caption strip has no sidebar fill of its own; it only keeps the
-      // sidebar's width and overlays the sidebar's top row.
+      // sidebar's width and overlays the sidebar's top row. The desktop opens
+      // collapsed, so the strip starts at the rail's width, which leaves room
+      // for the caption buttons.
       expect(controls.parentElement).not.toHaveClass("bg-sidebar");
-      expect(controls.parentElement).toHaveClass("w-(--sidebar-width)");
+      expect(controls.parentElement).toHaveClass("w-(--sidebar-width-icon)");
 
       fireEvent.click(within(container).getByTestId("sidebar-collapse-toggle"));
-      // Collapsed to the icon rail, the strip follows the rail's width, which
-      // leaves room for the caption buttons.
-      expect(controls.parentElement).toHaveClass("w-(--sidebar-width-icon)");
+      // Expanded, the strip follows the full sidebar width.
+      expect(controls.parentElement).toHaveClass("w-(--sidebar-width)");
       expect(controls.parentElement).not.toHaveClass("bg-sidebar");
       expect(controls.compareDocumentPosition(title!)).toBe(
         Node.DOCUMENT_POSITION_FOLLOWING,
@@ -457,6 +458,27 @@ describe("App", () => {
       platform.mockRestore();
       userAgent.mockRestore();
     }
+  });
+
+  it("opens the desktop sidebar collapsed and remembers the last choice", () => {
+    const first = render(<App />);
+    const sidebar = () => document.querySelector('[data-slot="sidebar"]');
+    expect(sidebar()).toHaveAttribute("data-state", "collapsed");
+
+    fireEvent.click(within(first.container).getByTestId("sidebar-collapse-toggle"));
+    expect(sidebar()).toHaveAttribute("data-state", "expanded");
+    expect(window.localStorage.getItem("ice-box.sidebar-open")).toBe("true");
+    first.unmount();
+
+    // Next launch: the expanded choice is restored.
+    const second = render(<App />);
+    expect(sidebar()).toHaveAttribute("data-state", "expanded");
+    fireEvent.click(within(second.container).getByTestId("sidebar-collapse-toggle"));
+    expect(window.localStorage.getItem("ice-box.sidebar-open")).toBe("false");
+    second.unmount();
+
+    render(<App />);
+    expect(sidebar()).toHaveAttribute("data-state", "collapsed");
   });
 
   it("holds the content pane's width while the window follows a collapse", async () => {

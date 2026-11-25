@@ -279,19 +279,21 @@ const parts = {
 const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 
 /**
- * The Live Demo renders the desktop app at its default 860x620 window size and
- * scales that window to the available width, so the demo matches the app and
- * the README screenshots. Below 1100px the window is not scaled and the demo
- * uses the full container width instead.
+ * The Live Demo lays the desktop app out in a slot for its expanded window
+ * (860x620) and scales that slot to the available width, so the demo matches
+ * the app and the README screenshots. Below 1100px the window is not scaled
+ * and the demo uses the full container width instead.
  *
- * Collapsing the sidebar shrinks the real window by the sidebar delta (and
- * expanding grows it back), keeping its left edge. The demo asks for the same
- * resize (`resizeWindowWidthBy` in browser-window-chrome.ts) and the frame
- * follows through `--demo-width`, at the same scale.
+ * The app opens collapsed, at its configured 740px window; expanding the
+ * sidebar grows the real window by the sidebar delta (and collapsing shrinks
+ * it back), keeping its left edge. The demo asks for the same resize
+ * (`resizeWindowWidthBy` in browser-window-chrome.ts) and the frame follows
+ * through `--demo-width`, at the same scale.
  */
 const DEMO_WINDOW = { width: 860, height: 620 };
 const DEMO_SHELL_MIN_WIDTH = 1100;
-let demoWidth = DEMO_WINDOW.width;
+/** tauri.conf.json's window width; matches `--demo-width` in style.css. */
+let demoWidth = 740;
 
 function fitDemoFrame() {
   const frame = parts.demoFrame;

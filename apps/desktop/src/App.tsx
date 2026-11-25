@@ -79,11 +79,18 @@ const SIDEBAR_WIDTH = "13rem";
 /** Expanded (labels) or collapsed (icon rail) sidebar, kept across launches. */
 const SIDEBAR_OPEN_STORAGE_KEY = "ice-box.sidebar-open";
 
+/**
+ * The visitor's last choice, else the default: the desktop starts collapsed
+ * to the icon rail (its configured window size in tauri.conf.json is the
+ * collapsed width), a wide phone-shell window starts expanded.
+ */
 function readSidebarOpen(): boolean {
+  const fallback = isPhoneShell();
   try {
-    return window.localStorage.getItem(SIDEBAR_OPEN_STORAGE_KEY) !== "false";
+    const stored = window.localStorage.getItem(SIDEBAR_OPEN_STORAGE_KEY);
+    return stored == null ? fallback : stored === "true";
   } catch {
-    return true;
+    return fallback;
   }
 }
 
@@ -129,9 +136,9 @@ const SIDEBAR_WIDTH_DELTA_PX =
 const SIDEBAR_TRANSITION_MS = 200;
 
 /**
- * Window minimum size. 720 x 500 (tauri.conf.json) is for the expanded
- * sidebar; collapsed, the minimum shrinks by the same delta so the content
- * pane keeps the same minimum width.
+ * Window minimum size. tauri.conf.json configures the collapsed window
+ * (740 x 620, minimum 600 x 500); expanded, the minimum grows by the sidebar
+ * delta to 720 so the content pane keeps the same minimum width.
  */
 /** The launch-time window size adjustment runs once per app start. */
 let launchWindowSizeApplied = false;
@@ -145,7 +152,7 @@ function windowMinSize(open: boolean): { width: number; height: number } {
  * It is the collapsed minimum window width, so a desktop window never gets
  * there by collapsing or by resizing within its minimum. Not the 768px
  * default: collapsing shrinks the window by the sidebar delta, which on macOS
- * (120px) takes the default 860px window to 740px and would hide the rail.
+ * (120px) takes an expanded 860px window to 740px and would hide the rail.
  */
 const DESKTOP_SIDEBAR_BREAKPOINT_PX = windowMinSize(false).width;
 
@@ -467,16 +474,16 @@ function AppShell() {
     setSidebarOpen(next);
     writeSidebarOpen(next);
   }, []);
-  // At launch the window has its configured size, which is the expanded
-  // width. If the saved state is collapsed, shrink it by the sidebar delta so
-  // expanding later returns to the configured width, not wider. Guarded at
-  // module level: StrictMode runs effects twice in dev.
+  // At launch the window has its configured size, which is the collapsed
+  // width (the default state). If the saved state is expanded, grow it by the
+  // sidebar delta so the content pane has the same width either way. Guarded
+  // at module level: StrictMode runs effects twice in dev.
   useEffect(() => {
     if (launchWindowSizeApplied) return;
     launchWindowSizeApplied = true;
     const open = readSidebarOpen();
-    const shrink = !open && !isDesktopNarrow();
-    void resizeWindowWidthBy(shrink ? -SIDEBAR_WIDTH_DELTA_PX : 0, windowMinSize(open));
+    const grow = open && !isDesktopNarrow();
+    void resizeWindowWidthBy(grow ? SIDEBAR_WIDTH_DELTA_PX : 0, windowMinSize(open));
   }, []);
   const [tab, setTab] = useState<Tab>("home");
   const [visited, setVisited] = useState<ReadonlySet<Tab>>(

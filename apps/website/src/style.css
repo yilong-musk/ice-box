@@ -435,9 +435,10 @@ main {
   padding: 0 0 72px;
 }
 
-/* The slot the default 860x620 window is laid out (and scaled) for. */
+/* The slot the expanded 860x620 window is laid out (and scaled) for. The app
+   opens collapsed at 740 (`demoWidth` in main.js). */
 .desk-window {
-  --demo-width: 860;
+  --demo-width: 740;
   width: 86%;
   aspect-ratio: 860 / 620;
 }
