@@ -73,6 +73,10 @@ export type SelectedOutbound = {
   landing_ip?: string | null;
   /** ISO 3166-1 alpha-2 country from the same probe. */
   landing_country?: string | null;
+  /** The user's own public IP: the same probe sent directly, not via the core. */
+  origin_ip?: string | null;
+  /** ISO 3166-1 alpha-2 country of `origin_ip`. */
+  origin_country?: string | null;
 };
 
 

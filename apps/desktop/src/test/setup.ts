@@ -89,6 +89,9 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   window.localStorage.removeItem(THEME_STORAGE_KEY);
+  // The sidebar state persists across launches; each test starts from the
+  // default (collapsed on the desktop shell).
+  window.localStorage.removeItem("ice-box.sidebar-open");
   // Reset storage and the in-memory language store together so the next test
   // starts from the same preference that storage reports.
   window.localStorage.removeItem(LANGUAGE_STORAGE_KEY);
@@ -97,4 +100,12 @@ afterEach(() => {
   applyStoredLanguage();
   document.documentElement.classList.remove("dark");
   document.documentElement.style.colorScheme = "";
+});
+
+// jsdom has no canvas backend and logs "Not implemented" for getContext.
+// Components that draw (the landing globe) treat a null context as "no
+// globe", so tests stub it quietly.
+Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
+  configurable: true,
+  value: () => null,
 });

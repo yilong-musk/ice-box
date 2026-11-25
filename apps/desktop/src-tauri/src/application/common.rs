@@ -185,6 +185,11 @@ pub struct SelectedOutbound {
     /// ISO 3166-1 alpha-2 country of that IP, from the same probe. Absent when
     /// the probe has not landed or Cloudflare did not report a country.
     pub landing_country: Option<String>,
+    /// The user's own public IP, from the same trace sent directly (not
+    /// through the core's proxy). Same setting gate as the landing probe.
+    pub origin_ip: Option<String>,
+    /// ISO 3166-1 alpha-2 country of `origin_ip`.
+    pub origin_country: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize)]

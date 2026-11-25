@@ -12,7 +12,6 @@ import { ErrorAlert } from "../components/StatusAlert";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Sheet,
   SheetContent,
@@ -140,7 +139,10 @@ export function Apps({ active = true }: Props) {
   }
 
   return (
-    <div className="apps-panel flex min-h-0 flex-1 flex-col gap-3" data-testid="apps-panel">
+    <div
+      className="apps-panel no-scrollbar flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain"
+      data-testid="apps-panel"
+    >
       {error && <ErrorAlert className="shrink-0">{error}</ErrorAlert>}
 
       <div className="relative shrink-0">
@@ -160,7 +162,7 @@ export function Apps({ active = true }: Props) {
 
       <Card
         size="sm"
-        className="flex min-h-0 flex-1 flex-col overflow-hidden py-0"
+        className="flex flex-[1_0_auto] flex-col overflow-hidden py-0"
       >
         {!loaded && loading ? (
           <p className="my-auto text-center text-sm text-muted-foreground">
@@ -174,79 +176,73 @@ export function Apps({ active = true }: Props) {
             </p>
           </div>
         ) : (
-          <ScrollArea
-            type="scroll"
-            scrollHideDelay={600}
-            className="min-h-0 flex-1 overflow-hidden"
-          >
-            <div role="list" aria-label={t("apps.listAria")}>
-              {filtered.map((app) => {
-                const mode = proxies[app.package_name] ?? "follow";
-                return (
-                  <div
-                    key={app.package_name}
-                    role="listitem"
-                    className="border-b border-border/60 last:border-b-0 [content-visibility:auto]"
+          <div role="list" aria-label={t("apps.listAria")}>
+            {filtered.map((app) => {
+              const mode = proxies[app.package_name] ?? "follow";
+              return (
+                <div
+                  key={app.package_name}
+                  role="listitem"
+                  className="border-b border-border/60 last:border-b-0 [content-visibility:auto]"
+                >
+                  <button
+                    type="button"
+                    aria-label={t("apps.selectAria", { app: app.label })}
+                    className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors active:bg-muted"
+                    onClick={() => {
+                      setModeError(null);
+                      setSelected(app);
+                    }}
                   >
-                    <button
-                      type="button"
-                      aria-label={t("apps.selectAria", { app: app.label })}
-                      className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors active:bg-muted"
-                      onClick={() => {
-                        setModeError(null);
-                        setSelected(app);
-                      }}
-                    >
-                      {app.icon ? (
-                        <img
-                          src={app.icon}
-                          alt=""
-                          loading="lazy"
-                          className="size-9 shrink-0 rounded-lg object-contain"
-                          aria-hidden="true"
-                        />
-                      ) : (
-                        <span
-                          className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-sm font-medium uppercase"
-                          aria-hidden="true"
-                        >
-                          {app.label.slice(0, 1) || "?"}
-                        </span>
-                      )}
-                      <span className="min-w-0 flex-1">
-                        <span className="flex min-w-0 items-center gap-1.5">
-                          <span className="truncate text-sm font-medium">
-                            {app.label}
-                          </span>
-                          {app.system ? (
-                            <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[10px] leading-none text-muted-foreground">
-                              {t("apps.systemBadge")}
-                            </span>
-                          ) : null}
-                        </span>
-                        <span className="mt-0.5 block truncate font-mono text-[11px] text-muted-foreground">
-                          {app.package_name}
-                        </span>
-                      </span>
-                      {mode === "follow" ? (
-                        <span className="shrink-0 text-xs text-muted-foreground">
-                          {modeLabel(mode)}
-                        </span>
-                      ) : (
-                        <Badge variant={modeBadgeVariant(mode)}>
-                          {modeLabel(mode)}
-                        </Badge>
-                      )}
-                      <ChevronRight
-                        className="size-4 shrink-0 text-muted-foreground"
+                    {app.icon ? (
+                      <img
+                        src={app.icon}
+                        alt=""
+                        loading="lazy"
+                        className="size-9 shrink-0 rounded-lg object-contain"
                         aria-hidden="true"
                       />
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          </ScrollArea>
+                    ) : (
+                      <span
+                        className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-sm font-medium uppercase"
+                        aria-hidden="true"
+                      >
+                        {app.label.slice(0, 1) || "?"}
+                      </span>
+                    )}
+                    <span className="min-w-0 flex-1">
+                      <span className="flex min-w-0 items-center gap-1.5">
+                        <span className="truncate text-sm font-medium">
+                          {app.label}
+                        </span>
+                        {app.system ? (
+                          <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[10px] leading-none text-muted-foreground">
+                            {t("apps.systemBadge")}
+                          </span>
+                        ) : null}
+                      </span>
+                      <span className="mt-0.5 block truncate font-mono text-[11px] text-muted-foreground">
+                        {app.package_name}
+                      </span>
+                    </span>
+                    {mode === "follow" ? (
+                      <span className="shrink-0 text-xs text-muted-foreground">
+                        {modeLabel(mode)}
+                      </span>
+                    ) : (
+                      <Badge variant={modeBadgeVariant(mode)}>
+                        {modeLabel(mode)}
+                      </Badge>
+                    )}
+                    <ChevronRight
+                      className="size-4 shrink-0 text-muted-foreground"
+                      aria-hidden="true"
+                    />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
         )}
       </Card>
 

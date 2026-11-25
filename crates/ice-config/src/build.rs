@@ -1342,7 +1342,14 @@ pub fn tun_reserved_rules(tun: &TunSettings, platform: HostPlatform) -> Vec<Valu
 fn tun_reserved_rules_for(tun: &TunSettings, windows: bool) -> Vec<Value> {
     if windows {
         let mut rules = vec![windows_tun_dns_hijack_rule()];
-        rules.push(json!({ "process_name": ["ice-box", "sing-box"], "outbound": "direct" }));
+        // sing-box matches Windows `process_name` against the executable
+        // basename including `.exe`; keep both bare and `.exe` names so the
+        // app's own direct requests (origin probe, subscription fetches,
+        // updater) always bypass TUN.
+        rules.push(json!({
+            "process_name": ["ice-box", "sing-box", "ice-box.exe", "sing-box.exe"],
+            "outbound": "direct",
+        }));
         rules.push(json!({ "action": "sniff" }));
         let mut tun_cidrs = Vec::new();
         if let Some(cidr) = tun_network_cidr(&tun.ipv4_address) {

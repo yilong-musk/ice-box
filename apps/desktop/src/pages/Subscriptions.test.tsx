@@ -157,7 +157,7 @@ describe("Subscriptions", () => {
     await waitFor(() => {
       expect(listSubscriptions.mock.calls.length).toBeGreaterThan(fetchesBefore);
       const row = view.getByText("sub-b").closest("[data-slot=item]");
-      expect(row).toHaveClass("border-ok");
+      expect(row).toHaveClass("border-primary");
     });
     expect(clearNodesSnapshot).toHaveBeenCalled();
   });
@@ -176,17 +176,17 @@ describe("Subscriptions", () => {
     });
 
     const list = view.getByRole("list", { name: t("subs.listAria") });
-    expect(list).toHaveClass("gap-3");
+    expect(list).toHaveClass("gap-3", "pb-14");
     expect(list.querySelector("[data-slot=item-separator]")).toBeNull();
 
     const rows = list.querySelectorAll("[data-slot=item]");
     expect(rows).toHaveLength(2);
     expect(rows[0]).toHaveAttribute("data-variant", "outline");
-    expect(rows[0]).toHaveClass("bg-muted", "border-ok");
+    expect(rows[0]).toHaveClass("bg-muted", "border-primary");
     expect(rows[0]).not.toHaveClass("border-border");
     expect(rows[1]).toHaveAttribute("data-variant", "outline");
     expect(rows[1]).toHaveClass("bg-muted", "border-border");
-    expect(rows[1]).not.toHaveClass("border-ok");
+    expect(rows[1]).not.toHaveClass("border-primary");
   });
 
   it("does not drop the node snapshot when a tray event did not switch subscriptions", async () => {
@@ -1127,5 +1127,19 @@ describe("Subscriptions", () => {
     await waitFor(() => {
       expect(within(dialog).getByRole("alert")).toHaveTextContent(t("subs.shareCopyFailed"));
     });
+  });
+
+  it("marks subscription parse warnings as selectable for copying", async () => {
+    listSubscriptions.mockResolvedValue([
+      sampleMeta({
+        name: "sub-warn",
+        parse_warnings: ["skipped unsupported outbound: wireguard"],
+      }),
+    ]);
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    const warning = await view.findByText("skipped unsupported outbound: wireguard");
+    expect(warning).toHaveAttribute("data-selectable");
   });
 });

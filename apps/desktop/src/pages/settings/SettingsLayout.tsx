@@ -23,18 +23,18 @@ export function SettingsSection({
     <Card
       size="sm"
       className={cn(
-        "w-full shrink-0 gap-1.5 overflow-visible rounded-none border-0 bg-transparent py-0 shadow-none",
+        "w-full shrink-0 gap-2 overflow-visible rounded-none border-0 bg-transparent py-0 shadow-none ring-0",
         className,
       )}
     >
-      <CardHeader className="px-1">
-        <CardTitle className="text-xs font-medium tracking-wide text-muted-foreground">
+      <CardHeader className="px-2">
+        <CardTitle className="text-[13px] font-semibold text-foreground">
           {title}
         </CardTitle>
       </CardHeader>
       <div
         data-slot="settings-rows"
-        className="flex flex-col divide-y divide-border overflow-hidden rounded-lg border border-border bg-card shadow-xs"
+        className="flex flex-col overflow-hidden rounded-xl bg-card ring-1 ring-border"
       >
         {children}
       </div>
@@ -66,7 +66,7 @@ export function SettingsRow({
     <div
       data-slot="settings-row"
       className={cn(
-        "flex min-h-12 flex-wrap items-center justify-between gap-x-4 gap-y-2 px-3.5 py-2.5",
+        "flex min-h-11 flex-wrap items-center justify-between gap-x-4 gap-y-1.5 px-4 py-2",
         className,
       )}
     >
@@ -77,16 +77,16 @@ export function SettingsRow({
             uses plain text so screen readers do not announce a dangling
             form label. */}
         {label != null && htmlFor ? (
-          <FieldLabel htmlFor={htmlFor} className="text-sm font-normal">
+          <FieldLabel htmlFor={htmlFor} className="text-[13px] font-normal">
             {label}
           </FieldLabel>
         ) : label != null ? (
-          <div data-slot="settings-label" className="text-sm leading-snug">
+          <div data-slot="settings-label" className="text-[13px] leading-snug">
             {label}
           </div>
         ) : null}
         {description != null ? (
-          <div className="text-xs/relaxed text-muted-foreground">
+          <div className="text-[11px]/relaxed text-muted-foreground">
             {description}
           </div>
         ) : null}

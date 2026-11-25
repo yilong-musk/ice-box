@@ -31,9 +31,9 @@ try {
   const coreMemory = await page.getByTestId("home-memory-core").textContent();
   assert.equal(coreMemory?.trim(), "14 MB", "The Live Demo must show the mocked core memory");
   const landingIp = await page.getByTestId("home-outbound-ip").textContent();
-  assert.equal(
-    landingIp?.trim(),
-    "203.0.113.42",
+  assert.match(
+    landingIp?.trim() ?? "",
+    /^(?:\S+\s+)?203\.0\.113\.42$/,
     "The Live Demo must show the mocked landing IP",
   );
   await page.evaluate(async count => {

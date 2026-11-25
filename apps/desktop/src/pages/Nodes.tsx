@@ -1,7 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ChevronRight, CircleCheck, Gauge, Star } from "lucide-react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
+import { ChevronRight, CircleCheck, Gauge, Star, X } from "lucide-react";
 import {
   api,
   formatInvokeError,
@@ -61,6 +70,8 @@ type Props = {
   active?: boolean;
   /** Render inside the phone Home page: no title-bar portal, inline actions. */
   embedded?: boolean;
+  /** External scroll container when the host page scrolls as one surface. */
+  scrollContainerRef?: RefObject<HTMLElement | null>;
 };
 
 /** HTML id-safe token derived from a possibly spaced group tag. */
@@ -118,7 +129,7 @@ function FavoriteButton({
         // Same right inset as the card's delay button below it, so the star and
         // the delay/test glyph line up on the card's right edge.
         "relative z-10 -mr-1.5 flex h-6 shrink-0 items-center justify-end rounded px-1.5 transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50",
-        favorite ? "text-warn" : "text-muted-foreground/70 hover:text-foreground",
+        favorite ? "text-warn" : "text-muted-foreground/80 hover:text-foreground dark:text-muted-foreground/70",
       )}
       disabled={pending}
       aria-pressed={favorite}
@@ -219,7 +230,7 @@ const NodeCard = memo(function NodeCard({
       className={cn(
         "relative flex min-w-0 flex-col justify-center rounded-lg border px-3 transition-colors",
         current
-          ? "border-ok/60 bg-ok/10"
+          ? "border-primary/60 bg-primary/8"
           : "border-border bg-muted/20",
         selectable && !current && "hover:border-foreground/25 hover:bg-muted/50",
       )}
@@ -257,7 +268,7 @@ const NodeCard = memo(function NodeCard({
       <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
         {current ? (
           <CircleCheck
-            className="size-3.5 shrink-0 text-ok"
+            className="size-3.5 shrink-0 text-primary"
             role="img"
             aria-label={t("nodes.inUse")}
           />
@@ -275,7 +286,7 @@ const NodeCard = memo(function NodeCard({
             onClick={() => onTestTag(tag)}
           >
             {delay === null ? (
-              <Gauge className="size-3.5 text-muted-foreground/70" aria-hidden="true" />
+              <Gauge className="size-3.5 text-muted-foreground/80 dark:text-muted-foreground/70" aria-hidden="true" />
             ) : (
               <DelayText delay={delay} />
             )}
@@ -508,10 +519,23 @@ const SectionBlock = memo(function SectionBlock({
   );
 });
 
-export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
+/** How long the floating batch button ignores clicks after switching between
+ * "test" and "cancel". */
+const BATCH_TOGGLE_GUARD_MS = 400;
+/** Bottom scroll clearance on desktop so the last node card's right-edge
+ * controls can scroll clear of the floating batch-test button (matches pb-14). */
+const DESKTOP_FAB_CLEARANCE_PX = 56;
+
+export function Nodes({
+  onNavigate,
+  active = true,
+  embedded = false,
+  scrollContainerRef,
+}: Props) {
   // Row trimming follows the phone shell, not `embedded`: embedding is about
   // the card chrome, the narrow screen is what forces the compact row.
   const compact = isPhoneShell();
+  const externalScroll = scrollContainerRef != null;
   const { resolved: lang } = useLanguagePreference();
   const { nextGeneration, isStale } = useGenerationGuard();
   const runtime = useRuntimeStore();
@@ -551,6 +575,9 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
   const [selectionPending, setSelectionPending] = useState(false);
   const [batchProgress, setBatchProgress] = useState<string | null>(null);
   const cancelRef = useRef(false);
+  /** When the floating batch button last switched between test and cancel.
+   * A double click would otherwise start a test and cancel it at once. */
+  const batchToggleAtRef = useRef(0);
   const favoriteInFlightRef = useRef(false);
   const selectionInFlightRef = useRef(false);
   const mountedRef = useRef(true);
@@ -590,6 +617,7 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
     () => {},
   );
   const viewportRef = useRef<HTMLDivElement>(null);
+  const listBoxRef = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState({ top: 0, height: 600, width: 0 });
   const viewportStateRef = useRef(viewport);
   viewportStateRef.current = viewport;
@@ -669,8 +697,29 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
     () => (listVisible ? sectionLayout(sections, columns) : EMPTY_LAYOUT),
     [listVisible, sections, columns],
   );
-  const viewportTop = Math.max(0, Math.min(viewport.top, layout.height - viewport.height));
+  const fabClearance = !compact && !embedded ? DESKTOP_FAB_CLEARANCE_PX : 0;
+  const contentHeight = layout.height + fabClearance;
+  const viewportTop = Math.max(0, Math.min(viewport.top, contentHeight - viewport.height));
   const updateViewport = useCallback(() => {
+    if (scrollContainerRef) {
+      const container = scrollContainerRef.current;
+      const listBox = listBoxRef.current;
+      if (!container) return;
+      const top = listBox
+        ? container.getBoundingClientRect().top - listBox.getBoundingClientRect().top
+        : 0;
+      const next = {
+        top,
+        height: container.clientHeight || 600,
+        width: listBox?.clientWidth || container.clientWidth,
+      };
+      setViewport((prev) =>
+        prev.top === next.top && prev.height === next.height && prev.width === next.width
+          ? prev
+          : next,
+      );
+      return;
+    }
     const el = viewportRef.current;
     if (!el) return;
     const next = {
@@ -683,18 +732,33 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
         ? prev
         : next,
     );
-  }, []);
+  }, [scrollContainerRef]);
 
   useLayoutEffect(() => {
+    if (!listVisible) return;
+    if (scrollContainerRef) {
+      const container = scrollContainerRef.current;
+      if (!container) return;
+      updateViewport();
+      const onScroll = () => updateViewport();
+      container.addEventListener("scroll", onScroll, { passive: true });
+      const observer = new ResizeObserver(updateViewport);
+      observer.observe(container);
+      if (listBoxRef.current) observer.observe(listBoxRef.current);
+      return () => {
+        container.removeEventListener("scroll", onScroll);
+        observer.disconnect();
+      };
+    }
     const el = viewportRef.current;
-    if (!listVisible || !el) return;
+    if (!el) return;
     const height = el.clientHeight || 600;
-    el.scrollTop = Math.max(0, Math.min(viewportStateRef.current.top, layout.height - height));
+    el.scrollTop = Math.max(0, Math.min(viewportStateRef.current.top, contentHeight - height));
     updateViewport();
     const observer = new ResizeObserver(updateViewport);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [listVisible, listReady, layout.height, updateViewport]);
+  }, [listVisible, listReady, contentHeight, scrollContainerRef, updateViewport]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -1026,6 +1090,8 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
   }, []);
 
   async function onBatchTest() {
+    // Single-flight: a batch already running is not started again.
+    if (busy) return;
     if (!running || orderedNodes.length === 0) return;
     // Probe in the order the sections and cards are drawn, so a favorited
     // member (moved to the top of its group and of the standalone list) is
@@ -1122,6 +1188,9 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
     [layout.rows, viewportTop, viewport.height],
   );
 
+  // Desktop floating button: while a batch test runs, the same button turns
+  // into its cancel button instead of adding a second one beside it.
+  const floatingCancel = !compact && !embedded && busy && !!batchProgress;
   const batchButton = (
     <>
       {embedded && busy && batchProgress ? (
@@ -1136,21 +1205,55 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
         type="button"
         size="sm"
         variant={compact ? "ghost" : "outline"}
-        disabled={!running || busy || favoritePending || nodes.length === 0}
-        aria-label={compact ? t("nodes.batchTest") : undefined}
-        title={compact ? t("nodes.batchTest") : undefined}
-        onClick={() => void onBatchTest()}
+        disabled={
+          floatingCancel
+            ? false
+            : !running || busy || favoritePending || nodes.length === 0
+        }
+        // Desktop: an icon-only floating button; the name stays as its
+        // accessible name and tooltip.
+        aria-label={
+          floatingCancel
+            ? t("common.cancel")
+            : compact || !embedded
+              ? t("nodes.batchTest")
+              : undefined
+        }
+        title={
+          floatingCancel
+            ? `${t("common.cancel")} · ${batchProgress}`
+            : compact || !embedded
+              ? t("nodes.batchTest")
+              : undefined
+        }
+        data-icon-only={!compact && !embedded ? "" : undefined}
+        data-cancel={floatingCancel ? "" : undefined}
+        onClick={() => {
+          if (!compact && !embedded) {
+            // Ignore the second click of a double click: the button has just
+            // turned into the other action under the pointer.
+            const now = Date.now();
+            if (now - batchToggleAtRef.current < BATCH_TOGGLE_GUARD_MS) return;
+            batchToggleAtRef.current = now;
+          }
+          if (floatingCancel) onCancelBatch();
+          else void onBatchTest();
+        }}
       >
         {compact ? (
           <>
             <Gauge data-icon="inline-start" aria-hidden="true" />
             {t("nodes.test")}
           </>
-        ) : (
+        ) : embedded ? (
           t("nodes.batchTest")
+        ) : floatingCancel ? (
+          <X aria-hidden="true" />
+        ) : (
+          <Gauge aria-hidden="true" />
         )}
       </Button>
-      {busy && batchProgress ? (
+      {busy && batchProgress && !floatingCancel ? (
         <Button type="button" size="sm" variant="outline" onClick={onCancelBatch}>
           {t("common.cancel")}
         </Button>
@@ -1158,11 +1261,65 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
     </>
   );
 
+  const nodeList = (
+    <div
+      ref={listBoxRef}
+      role="list"
+      aria-label={t("nodes.listAria")}
+      className="relative"
+      style={{ height: contentHeight }}
+    >
+      {visible.map(({ section, index, top }) => (
+        <div
+          key={section.key}
+          role="listitem"
+          aria-posinset={index + 1}
+          aria-setsize={sections.length}
+          className="absolute inset-x-0"
+          style={{ top }}
+        >
+          <SectionBlock
+            section={section}
+            columns={columns}
+            cardRange={
+              section.collapsed
+                ? EMPTY_RANGE
+                : cardWindow(
+                    section.cards.length,
+                    columns,
+                    top + sectionCardsOffset(section),
+                    viewportTop,
+                    viewport.height,
+                  )
+            }
+            nodesByTag={nodesByTag}
+            running={running}
+            busy={busy}
+            favoritePending={favoritePending || selectionPending}
+            compact={compact}
+            headerDelay={
+              section.group
+                ? (delays[resolveExitTag(section.group.tag, nodesByTag)] ?? null)
+                : null
+            }
+            delays={section.collapsed ? EMPTY_DELAYS : delays}
+            lang={lang}
+            onToggleGroup={setGroupOpen}
+            onTestSection={onTestSection}
+            onTestTag={onTestTag}
+            onPick={handlePick}
+            onToggleFavorite={onToggleFavorite}
+          />
+        </div>
+      ))}
+    </div>
+  );
+
   return (
     <div
       className={cn(
         "nodes-panel flex min-h-0 flex-1 flex-col gap-3",
-        embedded && "h-full",
+        embedded && !externalScroll && "h-full",
       )}
       data-testid="nodes-panel"
     >
@@ -1199,7 +1356,12 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
         ) : null}
         {/* The card's own gap already spaces the list from the header bar,
             matching the side padding; no extra top padding here. */}
-        <CardContent className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <CardContent
+          className={cn(
+            "flex min-h-0 flex-1 flex-col",
+            !externalScroll && "overflow-hidden",
+          )}
+        >
           {!listReady ? (
             <p className="my-auto text-sm text-muted-foreground">
               {t("nodes.loading")}
@@ -1214,64 +1376,19 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
               onAction={() => onNavigate?.("subs")}
             />
           ) : listVisible ? (
-            <ScrollArea
-              viewportRef={viewportRef}
-              onViewportScroll={updateViewport}
-              type="scroll"
-              scrollHideDelay={600}
-              className="min-h-0 flex-1 overflow-hidden"
-            >
-              <div
-                role="list"
-                aria-label={t("nodes.listAria")}
-                className="relative"
-                style={{ height: layout.height }}
+            externalScroll ? (
+              nodeList
+            ) : (
+              <ScrollArea
+                viewportRef={viewportRef}
+                onViewportScroll={updateViewport}
+                type="scroll"
+                scrollHideDelay={600}
+                className="min-h-0 flex-1 overflow-hidden"
               >
-                {visible.map(({ section, index, top }) => (
-                  <div
-                    key={section.key}
-                    role="listitem"
-                    aria-posinset={index + 1}
-                    aria-setsize={sections.length}
-                    className="absolute inset-x-0"
-                    style={{ top }}
-                  >
-                    <SectionBlock
-                      section={section}
-                      columns={columns}
-                      cardRange={
-                        section.collapsed
-                          ? EMPTY_RANGE
-                          : cardWindow(
-                              section.cards.length,
-                              columns,
-                              top + sectionCardsOffset(section),
-                              viewportTop,
-                              viewport.height,
-                            )
-                      }
-                      nodesByTag={nodesByTag}
-                      running={running}
-                      busy={busy}
-                      favoritePending={favoritePending || selectionPending}
-                      compact={compact}
-                      headerDelay={
-                        section.group
-                          ? (delays[resolveExitTag(section.group.tag, nodesByTag)] ?? null)
-                          : null
-                      }
-                      delays={section.collapsed ? EMPTY_DELAYS : delays}
-                      lang={lang}
-                      onToggleGroup={setGroupOpen}
-                      onTestSection={onTestSection}
-                      onTestTag={onTestTag}
-                      onPick={handlePick}
-                      onToggleFavorite={onToggleFavorite}
-                    />
-                  </div>
-                ))}
-              </div>
-            </ScrollArea>
+                {nodeList}
+              </ScrollArea>
+            )
           ) : null}
         </CardContent>
       </Card>

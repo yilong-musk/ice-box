@@ -36,6 +36,13 @@ const listenStateChanged = vi.fn();
 let stateChangedHandler: (() => void) | null = null;
 
 /** The desktop Home memory card. */
+/** The current-node row in the proxy status card (the landing probe card no
+ * longer repeats the node). */
+function currentNodeRow(container: HTMLElement): HTMLElement {
+  return within(container).getByTestId("home-proxy-current-node")
+    .parentElement as HTMLElement;
+}
+
 function memoryCard(container: HTMLElement): HTMLElement {
   const card = within(container).getByText(t("home.memoryTitle")).closest("[data-slot=card]");
   if (!card) throw new Error("home memory card not found");
@@ -230,11 +237,12 @@ describe("Home", () => {
     const outboundCard = view
       .getByText(t("home.outboundTitle"))
       .closest("[data-slot=card]") as HTMLElement;
-    expect(within(outboundCard).getByText("Proxies → HK-1")).toBeInTheDocument();
+    // Landing probe: globe and exit IP; the node lives in the proxy card.
+    expect(within(outboundCard).queryByText("Proxies → HK-1")).toBeNull();
     expect(within(outboundCard).getByTestId("home-outbound-ip")).toHaveTextContent(
       "🇭🇰 1.36.1.1",
     );
-    expect(within(outboundCard).queryByTestId("home-outbound-region")).toBeNull();
+    expect(within(outboundCard).queryByTestId("home-landing-region")).toBeNull();
     expect(view.getByTestId("home-panel")).toBeInTheDocument();
     // Outbound mode is its own module, beside the proxy status card.
     const statusCard = view
@@ -589,16 +597,41 @@ describe("Home", () => {
     expect(row.className).not.toContain("text-destructive");
   });
 
-  it("shows the running MCP service in the power card, not the memory card", async () => {
+  it("shows the current node in the proxy status card instead of MCP", async () => {
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: true,
+      system_proxy_recorded: true,
+      system_proxy_available: true,
+      has_nodes: true,
+      selected_outbound: {
+        tag: "Proxies",
+        outbound_type: "selector",
+        group_now: "HK-1",
+        landing_ip: "1.36.1.1",
+        landing_country: "HK",
+      },
+      ...tunStatus,
+    });
     const { container } = render(<Home />);
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByTestId("home-health-mcp")).toHaveTextContent(t("mcp.running"));
+      expect(view.getByTestId("home-proxy-current-node")).toHaveTextContent("Proxies → HK-1");
     });
-    expect(view.getByTestId("home-health-mcp").className).toContain("text-ok");
-    expect(memoryCard(container)).not.toContainElement(view.getByTestId("home-health-mcp"));
-    expect(memoryCard(container)).toBeInTheDocument();
+    expect(view.getByTestId("home-proxy-current-node")).toHaveAttribute(
+      "title",
+      "Proxies → HK-1",
+    );
+    expect(view.queryByTestId("home-health-mcp")).toBeNull();
+    expect(getMcpStatus).not.toHaveBeenCalled();
   });
 
   it("leaves core status to the logo in the phone shell", async () => {
@@ -620,32 +653,6 @@ describe("Home", () => {
     expect(view.queryByTestId("home-health-memory")).toBeNull();
     expect(view.queryByTestId("home-health-mcp")).toBeNull();
     expect(getMcpStatus).not.toHaveBeenCalled();
-  });
-
-  it("shows a stopped MCP service and its error", async () => {
-    getMcpStatus.mockResolvedValue({
-      supported: true,
-      enabled: true,
-      running: false,
-      endpoint: null,
-      client_count: 0,
-      tool_count: 34,
-      bridge_executable: "/Applications/ice-box.app/Contents/MacOS/ice-box",
-      bridge_args: ["--mcp-stdio", "--data-dir", "/tmp/ice-box"],
-      client_config: "{}",
-      error: "listener stopped unexpectedly",
-    });
-    const { container } = render(<Home />);
-    const view = within(container);
-
-    await waitFor(() => {
-      expect(view.getByTestId("home-health-mcp")).toHaveTextContent(t("mcp.stopped"));
-    });
-    expect(view.getByTestId("home-health-mcp")).toHaveAttribute(
-      "title",
-      "listener stopped unexpectedly",
-    );
-    expect(view.getByTestId("home-health-mcp").className).toContain("text-destructive");
   });
 
   it("re-reads status and settings after an out-of-window state change", async () => {
@@ -798,10 +805,9 @@ describe("Home", () => {
     });
 
     const { container } = render(<Home />);
-    const view = within(container);
     await waitFor(() => {
       expect(
-        view.getByText(t("home.outboundTyped", { tag: "node-a", type: "socks" })),
+        within(currentNodeRow(container)).getByText(t("home.outboundTyped", { tag: "node-a", type: "socks" })),
       ).toBeInTheDocument();
     });
 
@@ -816,7 +822,7 @@ describe("Home", () => {
 
     await waitFor(() => {
       expect(
-        view.getByText(t("home.outboundTyped", { tag: "node-b", type: "vmess" })),
+        within(currentNodeRow(container)).getByText(t("home.outboundTyped", { tag: "node-b", type: "vmess" })),
       ).toBeInTheDocument();
     });
   });
@@ -852,10 +858,9 @@ describe("Home", () => {
     getSettings.mockResolvedValue(settingsFor("node-a"));
 
     const { container, rerender } = render(<Home active />);
-    const view = within(container);
     await waitFor(() => {
       expect(
-        view.getByText(t("home.outboundTyped", { tag: "node-a", type: "socks" })),
+        within(currentNodeRow(container)).getByText(t("home.outboundTyped", { tag: "node-a", type: "socks" })),
       ).toBeInTheDocument();
     });
 
@@ -879,7 +884,7 @@ describe("Home", () => {
     });
     await waitFor(() => {
       expect(
-        view.getByText(t("home.outboundTyped", { tag: "node-b", type: "vmess" })),
+        within(currentNodeRow(container)).getByText(t("home.outboundTyped", { tag: "node-b", type: "vmess" })),
       ).toBeInTheDocument();
     });
 
@@ -889,10 +894,10 @@ describe("Home", () => {
     });
 
     expect(
-      view.getByText(t("home.outboundTyped", { tag: "node-b", type: "vmess" })),
+      within(currentNodeRow(container)).getByText(t("home.outboundTyped", { tag: "node-b", type: "vmess" })),
     ).toBeInTheDocument();
     expect(
-      view.queryByText(t("home.outboundTyped", { tag: "node-a", type: "socks" })),
+      within(currentNodeRow(container)).queryByText(t("home.outboundTyped", { tag: "node-a", type: "socks" })),
     ).toBeNull();
   });
 
@@ -912,10 +917,9 @@ describe("Home", () => {
     getStatus.mockResolvedValue(statusFor("node-a", "socks", 1_000));
 
     const { container } = render(<Home />);
-    const view = within(container);
     await waitFor(() => {
       expect(
-        view.getByText(t("home.outboundTyped", { tag: "node-a", type: "socks" })),
+        within(currentNodeRow(container)).getByText(t("home.outboundTyped", { tag: "node-a", type: "socks" })),
       ).toBeInTheDocument();
     });
 
@@ -929,7 +933,7 @@ describe("Home", () => {
     });
     await waitFor(() => {
       expect(
-        view.getByText(t("home.outboundTyped", { tag: "node-b", type: "vmess" })),
+        within(currentNodeRow(container)).getByText(t("home.outboundTyped", { tag: "node-b", type: "vmess" })),
       ).toBeInTheDocument();
     });
 
@@ -940,7 +944,7 @@ describe("Home", () => {
     });
     await waitFor(() => {
       expect(
-        view.getByText(t("home.outboundTyped", { tag: "node-c", type: "trojan" })),
+        within(currentNodeRow(container)).getByText(t("home.outboundTyped", { tag: "node-c", type: "trojan" })),
       ).toBeInTheDocument();
     });
   });
@@ -2326,5 +2330,103 @@ describe("Home", () => {
     await waitFor(() => {
       expect(openProxyTerminal).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it("shows landing map states, selectable operational values, and opens the expanded map dialog", async () => {
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: true,
+      system_proxy_recorded: true,
+      system_proxy_available: true,
+      has_nodes: true,
+      selected_outbound: {
+        tag: "Proxies",
+        outbound_type: "selector",
+        group_now: "US-1",
+        landing_ip: "203.0.113.42",
+        landing_country: "US",
+        origin_ip: "198.51.100.7",
+        origin_country: "CN",
+      },
+      ...tunStatus,
+    });
+    getSettings.mockResolvedValue({
+      mixed_listen: "127.0.0.1",
+      mixed_port: 17890,
+      clash_api_listen: "127.0.0.1",
+      clash_api_port: 19090,
+      selected_tag: "Proxies",
+      auto_set_system_proxy: true,
+      proxy_service_enabled: true,
+      allow_lan: false,
+      proxy_mode: "rule",
+      probe_exit_ip: true,
+    });
+
+    const { container } = render(<Home />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByTestId("landing-map")).toHaveAttribute("data-state", "located");
+    });
+    expect(view.getByTestId("home-outbound-ip")).toHaveAttribute("data-selectable");
+    expect(view.getByTestId("home-inbound-address")).toHaveAttribute("data-selectable");
+    expect(view.getByTestId("home-proxy-current-node")).toHaveAttribute("data-selectable");
+
+    fireEvent.click(view.getByTestId("home-landing-expand"));
+    const dialog = await screen.findByTestId("landing-map-dialog");
+    expect(within(dialog).getByTestId("landing-map-user")).toHaveAttribute("data-country", "CN");
+    expect(within(dialog).getByTestId("landing-map-exit")).toHaveAttribute("data-country", "US");
+    expect(within(dialog).getByTestId("landing-map-exit-label")).toHaveTextContent("203.0.113.42");
+  });
+
+  it("shows probing and off landing map states when exit IP is absent", async () => {
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: true,
+      system_proxy_recorded: true,
+      system_proxy_available: true,
+      has_nodes: true,
+      selected_outbound: {
+        tag: "Proxies",
+        outbound_type: "selector",
+        group_now: "US-1",
+        landing_ip: null,
+        landing_country: null,
+      },
+      ...tunStatus,
+    });
+    getSettings.mockResolvedValue({
+      mixed_listen: "127.0.0.1",
+      mixed_port: 17890,
+      clash_api_listen: "127.0.0.1",
+      clash_api_port: 19090,
+      selected_tag: "Proxies",
+      auto_set_system_proxy: true,
+      proxy_service_enabled: true,
+      allow_lan: false,
+      proxy_mode: "rule",
+      probe_exit_ip: false,
+    });
+
+    const { container } = render(<Home />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByTestId("landing-map")).toHaveAttribute("data-state", "off");
+    });
+    expect(view.getByTestId("home-outbound-ip")).toHaveTextContent(t("home.landing.off"));
   });
 });

@@ -223,7 +223,10 @@ export function Subscriptions({ active = true }: Props) {
 
   return (
     <div
-      className="subs-panel relative flex min-h-0 flex-1 flex-col gap-3"
+      className={cn(
+        "subs-panel relative flex min-h-0 flex-1 flex-col",
+        !phone && "gap-3",
+      )}
       data-testid="subs-panel"
     >
       {active ? (
@@ -234,17 +237,23 @@ export function Subscriptions({ active = true }: Props) {
             variant="outline"
             disabled={busy}
             aria-label={t("subs.importTitle")}
-            title={phone ? t("subs.importTitle") : undefined}
+            title={t("subs.importTitle")}
+            data-icon-only=""
             onClick={() => {
               setError(null);
               setImportOpen(true);
             }}
           >
-            {phone ? <Plus /> : null}
-            {phone ? null : t("subs.importTitle")}
+            <Plus aria-hidden="true" />
           </Button>
         </TitlebarActions>
       ) : null}
+      <div
+        className={cn(
+          "flex min-h-0 flex-1 flex-col gap-3",
+          phone && "subs-panel-scroll no-scrollbar overflow-y-auto overscroll-contain",
+        )}
+      >
       {loadError && items.length > 0 ? (
         <div className="flex items-center gap-2">
           <ErrorAlert className="flex-1">{loadError}</ErrorAlert>
@@ -260,8 +269,19 @@ export function Subscriptions({ active = true }: Props) {
       ) : null}
       {warning && <WarnAlert className="shrink-0">{warning}</WarnAlert>}
 
-      <Card size="sm" className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <CardContent className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+      <Card
+        size="sm"
+        className={cn(
+          "flex flex-col overflow-hidden",
+          phone ? "flex-[1_0_auto]" : "min-h-0 flex-1",
+        )}
+      >
+        <CardContent
+          className={cn(
+            "relative flex flex-1 flex-col",
+            !phone && "min-h-0 overflow-hidden",
+          )}
+        >
           {items.length === 0 ? (
             <div className="my-auto flex flex-col items-start gap-2">
               <CardTitle>
@@ -283,13 +303,12 @@ export function Subscriptions({ active = true }: Props) {
                 </Button>
               ) : null}
             </div>
-          ) : (
-            <ScrollArea
-              type="scroll"
-              scrollHideDelay={600}
-              className="min-h-0 flex-1 overflow-hidden"
-            >
-              <ItemGroup aria-label={t("subs.listAria")} className="gap-3">
+          ) : (() => {
+            const subList = (
+              <ItemGroup
+                aria-label={t("subs.listAria")}
+                className={cn("gap-3", !phone && "pb-14")}
+              >
                 {items.map((s) => {
                   const warnings = s.parse_warnings ?? [];
                   const updatedAt = subscriptionUpdatedAt(s);
@@ -315,7 +334,7 @@ export function Subscriptions({ active = true }: Props) {
                         // instead of painting behind the card background.
                         "relative isolate bg-muted",
                         s.active
-                          ? "border-ok"
+                          ? "border-primary"
                           : "cursor-pointer hover:border-foreground/30 has-[[data-row-activate]:focus-visible]:border-ring has-[[data-row-activate]:focus-visible]:ring-[3px] has-[[data-row-activate]:focus-visible]:ring-ring/50",
                       )}
                       aria-current={s.active ? "true" : undefined}
@@ -396,6 +415,7 @@ export function Subscriptions({ active = true }: Props) {
                             <Button
                               type="button"
                               size="icon-sm"
+                              variant="outline"
                               disabled={busy}
                               aria-label={
                                 updatingId === s.id
@@ -453,7 +473,7 @@ export function Subscriptions({ active = true }: Props) {
                             </ItemDescription>
                           ) : null}
                           {warnings.length > 0 ? (
-                            <ItemDescription className="text-warn">
+                            <ItemDescription className="text-warn" data-selectable="">
                               {warnings.map(formatUiMessage).join("；")}
                             </ItemDescription>
                           ) : null}
@@ -512,10 +532,22 @@ export function Subscriptions({ active = true }: Props) {
                   );
                 })}
               </ItemGroup>
-            </ScrollArea>
-          )}
+            );
+            return phone ? (
+              subList
+            ) : (
+              <ScrollArea
+                type="scroll"
+                scrollHideDelay={600}
+                className="min-h-0 flex-1 overflow-hidden"
+              >
+                {subList}
+              </ScrollArea>
+            );
+          })()}
         </CardContent>
       </Card>
+      </div>
       <CapsuleToast toast={toast} onDismiss={dismissToast} />
       <ImportSubscriptionDialog
         open={importOpen}

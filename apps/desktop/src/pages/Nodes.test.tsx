@@ -2066,4 +2066,15 @@ describe("Nodes", () => {
       expect(within(nested).getByText("88 ms")).toBeInTheDocument();
     });
   });
+
+  it("adds bottom clearance to the desktop node list so the floating action button never covers the last card", async () => {
+    listNodes.mockResolvedValue([
+      { tag: "node-a", outbound_type: "vless", group_now: null, group_all: null },
+    ]);
+    const { container } = render(<Nodes />);
+    const view = within(container);
+    const list = await view.findByRole("list", { name: t("nodes.listAria") });
+    // One 60px card + 12px section gap = 72px, plus 56px FAB clearance = 128px.
+    expect(list.style.height).toBe("128px");
+  });
 });

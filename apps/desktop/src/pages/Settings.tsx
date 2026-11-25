@@ -18,6 +18,7 @@ import {
 import { ErrorAlert, OkAlert } from "../components/StatusAlert";
 import { TunInstallDialog, useTunInstallDialog } from "../components/TunInstallDialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { cn } from "@/lib/utils";
 import { isPhoneShell } from "@platform/shell";
 import { readLanguagePreference, t, useLanguagePreference } from "../lib/i18n";
 import { useThemePreference } from "../lib/theme";
@@ -624,129 +625,148 @@ export function Settings({
     !tunUiHidden &&
     status?.tun_available !== false;
 
+  const phone = isPhoneShell();
+
+  const settingsStack = (
+    <div
+      className={cn(
+        "mx-auto flex w-full max-w-2xl flex-col gap-6 pt-1",
+        phone ? "pb-0" : "pb-6",
+      )}
+      data-testid="settings-stack"
+      data-loaded={loaded ? "true" : "false"}
+    >
+      <AppearanceCard
+        themePreference={themePreference}
+        setThemePreference={setThemePreference}
+        language={form.language}
+        trayMode={status?.tray_display_supported === true ? form.tray_display_mode : null}
+        busy={busy}
+        loaded={loaded}
+        onLanguageChange={(value) => {
+          setPreference(value);
+          setForm({ ...form, language: value });
+        }}
+        onTrayModeChange={(value) =>
+          setForm({ ...form, tray_display_mode: value })
+        }
+      />
+
+      {phone ? null : (
+        <PortsCard
+          form={form}
+          setForm={setForm}
+          fieldErrors={fieldErrors}
+          busy={busy}
+          loaded={loaded}
+          clearFieldError={clearFieldError}
+          setFieldErrors={setFieldErrors}
+        />
+      )}
+
+      <Ipv6Card
+        form={form}
+        setForm={setForm}
+        busy={busy}
+        loaded={loaded}
+        tunIpv6Disabled={tunIpv6Disabled}
+      />
+
+      {tunUiHidden ? null : (
+        <TunCard
+          form={form}
+          status={status}
+          busy={busy}
+          loaded={loaded}
+          persistTunEnabled={persistTunEnabled}
+          flashSaved={flashSaved}
+          setError={setError}
+          onRequestHelperInstall={() => tunInstall.setOpen(true)}
+          onInstallHelper={() =>
+            void runHelperAction(() => api.installHelper(), true)
+          }
+          onUninstallHelper={() =>
+            void runHelperAction(() => api.uninstallHelper(), false, () => {
+              if (!form.tun.enabled) return;
+              return persistTunEnabled(false);
+            })
+          }
+        />
+      )}
+
+      {/* Hidden where the OS has no login item to write (Linux): the
+          switch there can only ever fail. */}
+      {status?.launch_at_login_supported === true && (
+        <StartupCard
+          enabled={launchAtLogin}
+          busy={busy}
+          loaded={loaded}
+          onChange={(enabled) => void persistLaunchAtLogin(enabled)}
+        />
+      )}
+
+      <div ref={updateCardRef} id="settings-app-update">
+        <UpdateCard
+          checkAppUpdates={form.check_app_updates}
+          busy={busy}
+          loaded={loaded}
+          updateBusy={updateBusy}
+          updateInfo={updateInfo}
+          updateProgress={updateProgress}
+          updateError={updateError}
+          onCheckAppUpdatesChange={(enabled) => {
+            setForm({
+              ...form,
+              check_app_updates: enabled,
+            });
+            if (enabled) {
+              publishSidebarUpdate(updateInfo, true);
+            } else {
+              onAvailableUpdate?.(null);
+            }
+          }}
+          onCheck={() => void runUpdateCheck()}
+          onInstall={() => void runUpdateInstall()}
+        />
+      </div>
+
+      {/* The Data card is desktop-only: its button opens the data folder,
+          which the phone does not have. */}
+      {phone ? (
+        <>
+          <AndroidSystemCard status={status} />
+          <PhoneLogsCard />
+        </>
+      ) : (
+        <DataCard busy={busy} loaded={loaded} setError={setError} />
+      )}
+    </div>
+  );
+
   return (
-    <div className="settings-panel flex min-h-0 flex-1 flex-col gap-3" data-testid="settings-panel">
+    <div
+      className={cn(
+        "settings-panel flex min-h-0 flex-1 flex-col gap-3",
+        phone && "no-scrollbar overflow-y-auto overscroll-contain",
+      )}
+      data-testid="settings-panel"
+    >
       {error && <ErrorAlert className="shrink-0">{error}</ErrorAlert>}
       {saved && <OkAlert className="shrink-0">{t("common.saved")}</OkAlert>}
 
-      <ScrollArea
-        type="scroll"
-        scrollHideDelay={600}
-        className="min-h-0 flex-1 overflow-hidden"
-      >
-        {/* data-loaded lets browser smoke tests wait for the settings and
-            status reads instead of guessing with a timeout. */}
-        <div
-          className="mx-auto flex w-full max-w-3xl flex-col gap-5 pb-4"
-          data-testid="settings-stack"
-          data-loaded={loaded ? "true" : "false"}
+      {/* data-loaded lets browser smoke tests wait for the settings and
+          status reads instead of guessing with a timeout. */}
+      {phone ? (
+        settingsStack
+      ) : (
+        <ScrollArea
+          type="scroll"
+          scrollHideDelay={600}
+          className="min-h-0 flex-1 overflow-hidden"
         >
-          <AppearanceCard
-            themePreference={themePreference}
-            setThemePreference={setThemePreference}
-            language={form.language}
-            trayMode={status?.tray_display_supported === true ? form.tray_display_mode : null}
-            busy={busy}
-            loaded={loaded}
-            onLanguageChange={(value) => {
-              setPreference(value);
-              setForm({ ...form, language: value });
-            }}
-            onTrayModeChange={(value) =>
-              setForm({ ...form, tray_display_mode: value })
-            }
-          />
-
-          {isPhoneShell() ? null : (
-            <PortsCard
-              form={form}
-              setForm={setForm}
-              fieldErrors={fieldErrors}
-              busy={busy}
-              loaded={loaded}
-              clearFieldError={clearFieldError}
-              setFieldErrors={setFieldErrors}
-            />
-          )}
-
-          <Ipv6Card
-            form={form}
-            setForm={setForm}
-            busy={busy}
-            loaded={loaded}
-            tunIpv6Disabled={tunIpv6Disabled}
-          />
-
-          {tunUiHidden ? null : (
-            <TunCard
-              form={form}
-              status={status}
-              busy={busy}
-              loaded={loaded}
-              persistTunEnabled={persistTunEnabled}
-              flashSaved={flashSaved}
-              setError={setError}
-              onRequestHelperInstall={() => tunInstall.setOpen(true)}
-              onInstallHelper={() =>
-                void runHelperAction(() => api.installHelper(), true)
-              }
-              onUninstallHelper={() =>
-                void runHelperAction(() => api.uninstallHelper(), false, () => {
-                  if (!form.tun.enabled) return;
-                  return persistTunEnabled(false);
-                })
-              }
-            />
-          )}
-
-          {/* Hidden where the OS has no login item to write (Linux): the
-              switch there can only ever fail. */}
-          {status?.launch_at_login_supported === true && (
-            <StartupCard
-              enabled={launchAtLogin}
-              busy={busy}
-              loaded={loaded}
-              onChange={(enabled) => void persistLaunchAtLogin(enabled)}
-            />
-          )}
-
-          <div ref={updateCardRef} id="settings-app-update">
-            <UpdateCard
-              checkAppUpdates={form.check_app_updates}
-              busy={busy}
-              loaded={loaded}
-              updateBusy={updateBusy}
-              updateInfo={updateInfo}
-              updateProgress={updateProgress}
-              updateError={updateError}
-              onCheckAppUpdatesChange={(enabled) => {
-                setForm({
-                  ...form,
-                  check_app_updates: enabled,
-                });
-                if (enabled) {
-                  publishSidebarUpdate(updateInfo, true);
-                } else {
-                  onAvailableUpdate?.(null);
-                }
-              }}
-              onCheck={() => void runUpdateCheck()}
-              onInstall={() => void runUpdateInstall()}
-            />
-          </div>
-
-          {/* The Data card is desktop-only: its button opens the data folder,
-              which the phone does not have. */}
-          {isPhoneShell() ? (
-            <>
-              <AndroidSystemCard status={status} />
-              <PhoneLogsCard />
-            </>
-          ) : (
-            <DataCard busy={busy} loaded={loaded} setError={setError} />
-          )}
-        </div>
-      </ScrollArea>
+          {settingsStack}
+        </ScrollArea>
+      )}
 
       {!tunUiHidden && (
         <TunInstallDialog

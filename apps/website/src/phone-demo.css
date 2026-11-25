@@ -1,10 +1,12 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 
-/* Live phone demo: the real Android UI in an iframe, framed in the same
-   ice-crystal pixel chassis as the desktop shell. The README phone capture
-   inlines this file (`scripts/capture-mobile.mjs`), so shell changes show up
-   in the next documentation screenshot. The stage scales the device to fit
-   the landing page; the section around it is laid out in `style.css`. */
+/* Live phone demo: the real Android UI in an iframe, framed as a current
+   Android handset (rounded glass, punch-hole camera, gesture pill). The
+   README phone capture inlines this file (`scripts/capture-mobile.mjs`), so
+   shell changes show up in the next documentation screenshot. Keep the
+   frame's own shadow tight: the capture stage clips anything past ~16px.
+   The landing page adds the deep ambient shadow in `style.css`. The stage
+   scales the device to fit; the section around it is laid out there too. */
 
 .phone-demo-stage {
   display: flex;
@@ -16,42 +18,39 @@
 .phone-frame {
   position: relative;
   width: 100%;
-  padding: 12px;
-  border: 4px solid #2c58aa;
-  background: #151a3d;
+  padding: 11px;
+  border-radius: 54px;
+  background: linear-gradient(150deg, #34363b 0%, #1a1b1e 38%, #121315 100%);
   box-shadow:
-    inset 4px 4px 0 #3a8bd8,
-    inset -4px -4px 0 #0b1020,
-    8px 8px 0 #070b16;
+    inset 0 0 0 1.5px rgb(255 255 255 / 14%),
+    inset 0 0 0 4px #0c0d0f,
+    0 2px 6px rgb(0 0 0 / 22%);
 }
 
-/* Volume and power buttons on the right edge; the SIM tray sits on the left. */
+/* Volume rocker and power key on the right edge. */
 .phone-frame::before,
 .phone-frame::after {
   content: "";
   position: absolute;
-  right: -8px;
-  width: 4px;
-  background: #2c58aa;
+  right: -3px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: linear-gradient(90deg, #1a1b1e, #3a3c42);
 }
 
 .phone-frame::before {
-  top: 168px;
-  height: 60px;
+  top: 150px;
+  height: 64px;
 }
 
 .phone-frame::after {
-  top: 244px;
-  height: 42px;
+  top: 236px;
+  height: 40px;
 }
 
+/* Current handsets have no SIM tray on the edge worth drawing. */
 .phone-sim {
-  position: absolute;
-  left: -8px;
-  top: 220px;
-  width: 4px;
-  height: 24px;
-  background: #212f6b;
+  display: none;
 }
 
 .phone-screen {
@@ -59,34 +58,39 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: #0b1020;
-  box-shadow: inset 0 0 0 2px #0b1020;
+  border-radius: 44px;
+  background: #000;
+  isolation: isolate;
 }
 
+/* The status bar is drawn over the top of the app, not above it: Android
+   windows run edge-to-edge, so the app's frosted header sits under the clock
+   and icons. `mobile-demo.tsx` (and `scripts/capture-mobile.mjs`) report the
+   same 32px as `--ice-status-inset` so the header clears it. */
 .phone-status-bar {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  right: 0;
+  left: 0;
   display: flex;
-  flex: 0 0 24px;
   align-items: center;
   justify-content: space-between;
-  height: 24px;
-  /* scripts/capture-mobile.mjs reads this value for the captured hero
-     screenshots, so the live demo and the screenshots stay in step. */
-  --phone-status-bar-padding: 0 20px 0 22px;
-  padding: var(--phone-status-bar-padding);
-  background: #131416;
+  height: 32px;
+  padding: 2px 28px 0 32px;
   color: #ecedef;
   font-family: var(--sans);
+  pointer-events: none;
 }
 
-/* The status bar belongs to the emulated OS, so it follows the same stored
-   theme as the embedded app instead of the dark site chrome. */
+/* Status bar ink belongs to the emulated OS, so it follows the same stored
+   theme as the embedded app instead of the site chrome. */
 .phone-frame[data-theme="light"] .phone-status-bar {
-  background: #f4f5f7;
   color: #16181a;
 }
 
 .phone-clock {
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.1px;
   font-variant-numeric: tabular-nums;
@@ -95,25 +99,23 @@
 .phone-status-icons {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
 }
 
 .phone-status-icons svg {
   display: block;
 }
 
-.phone-status-icons .pixel-icon {
-  shape-rendering: crispEdges;
-}
-
+/* The whole screen: a 390px-wide app viewport of 844 + 24 (gesture bar) +
+   32 (status bar), the same size `scripts/capture-mobile.mjs` shoots. */
 .phone-viewport {
   position: relative;
-  aspect-ratio: 390 / 868;
+  aspect-ratio: 390 / 900;
   background: #000;
 }
 
 .phone-frame[data-theme="light"] .phone-viewport {
-  background: #f4f5f7;
+  background: #f3f3f6;
 }
 
 /* `mobile-demo.tsx` reports the same 24px inset Android does, so the app's tab
@@ -126,43 +128,45 @@
   width: 100%;
   height: 100%;
   border: 0;
-  background: #0a0d0b;
+  background: #151619;
 }
 
 .phone-frame[data-theme="light"] .phone-viewport iframe {
-  background: #fbfbfc;
+  background: #f3f3f6;
 }
 
 .phone-gesture {
   position: absolute;
   z-index: 2;
-  bottom: 10px;
+  bottom: 9px;
   left: 50%;
-  width: 48px;
+  width: 104px;
   height: 4px;
+  border-radius: 999px;
   transform: translateX(-50%);
-  background: #dcfbff;
+  background: rgb(255 255 255 / 86%);
   pointer-events: none;
 }
 
 .phone-frame[data-theme="light"] .phone-gesture {
-  background: #151a3d;
+  background: rgb(0 0 0 / 78%);
 }
 
 .phone-camera {
   position: absolute;
   z-index: 2;
-  top: 6px;
+  top: 10px;
   left: 50%;
-  width: 8px;
-  height: 8px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
   transform: translateX(-50%);
-  background: #0b1020;
-  box-shadow: inset 0 0 0 2px #2c58aa;
+  background: radial-gradient(circle at 35% 35%, #2b3a55 0 18%, #07080a 30%);
+  box-shadow: 0 0 0 1.5px #000;
 }
 
 @media (max-width: 1100px) {
   .phone-demo-stage {
-    width: min(100%, 336px);
+    width: min(100%, 372px);
   }
 }

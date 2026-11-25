@@ -19,7 +19,7 @@
 @theme inline {
     --font-heading: var(--font-sans);
     /* Flag-only fallback; @font-face is injected when color emoji exists but flags do not. */
-    --font-sans: "Twemoji Country Flags", "Inter Variable", sans-serif;
+    --font-sans: "Twemoji Country Flags", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter Variable", "PingFang SC", "Microsoft YaHei UI", "Segoe UI", sans-serif;
     --color-sidebar-ring: var(--sidebar-ring);
     --color-sidebar-border: var(--sidebar-border);
     --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -54,6 +54,8 @@
     --color-background: var(--background);
     --color-ok: var(--ok);
     --color-warn: var(--warn);
+    --color-traffic-down: var(--traffic-down);
+    --color-traffic-up: var(--traffic-up);
     --radius-sm: calc(var(--radius) * 0.6);
     --radius-md: calc(var(--radius) * 0.8);
     --radius-lg: var(--radius);
@@ -65,82 +67,91 @@
 }
 
 :root {
-    /* macOS 26 Tahoe / current Music: neutral glass, monochrome controls.
-       Sidebar selection stays a gray fill. Accent is system blue, used for focus. */
-    --background: oklch(0.985 0.002 270);
-    --foreground: oklch(0.18 0.006 270);
+    /* Apple HIG system palette (macOS light). Accent is systemBlue. */
+    /* Layering (light): page < sidebar < card < popover, on a faintly cool
+       neutral, so surfaces separate by tone rather than by borders alone. */
+    --background: oklch(0.96 0.004 270);
+    --foreground: oklch(0.2 0.006 270);
     --card: oklch(1 0 0);
-    --card-foreground: oklch(0.18 0.006 270);
-    --popover: oklch(1 0 0);
-    --popover-foreground: oklch(0.18 0.006 270);
-    --primary: oklch(0.24 0.008 270);
-    --primary-foreground: oklch(0.99 0.002 270);
-    --secondary: oklch(0.955 0.003 270);
-    --secondary-foreground: oklch(0.24 0.008 270);
-    --muted: oklch(0.955 0.003 270);
-    --muted-foreground: oklch(0.42 0.012 270);
-    --accent: oklch(0.94 0.003 270);
-    --accent-foreground: oklch(0.18 0.006 270);
-    --destructive: oklch(0.55 0.2 25);
-    --border: oklch(0.22 0.006 270 / 16%);
-    --input: oklch(0.22 0.006 270 / 20%);
-    --ring: oklch(0.62 0.17 255);
-    --chart-1: oklch(0.27 0.008 270);
-    --chart-2: oklch(0.73 0.17 149);
-    --chart-3: oklch(0.78 0.16 70);
-    --chart-4: oklch(0.54 0.01 270);
-    --chart-5: oklch(0.4 0.008 270);
-    --ok: oklch(0.48 0.13 152);
-    --warn: oklch(0.55 0.13 65);
-    /* Square controls. rounded-sm through rounded-4xl all follow this. */
-    --radius: 0px;
-    --sidebar: oklch(0.955 0.003 270);
-    --sidebar-foreground: oklch(0.26 0.008 270);
-    --sidebar-primary: oklch(0.27 0.008 270);
-    --sidebar-primary-foreground: oklch(0.99 0.002 270);
-    --sidebar-hover: oklch(0.93 0.003 270);
-    --sidebar-accent: oklch(0.86 0.004 270);
-    --sidebar-accent-foreground: oklch(0.16 0.006 270);
-    --sidebar-border: oklch(0.22 0.006 270 / 12%);
-    --sidebar-ring: oklch(0.62 0.17 255);
+    --card-foreground: oklch(0.2 0.006 270);
+    --popover: oklch(1 0 0 / 95%);
+    --popover-foreground: oklch(0.2 0.004 286);
+    --primary: oklch(0.542 0.212 257);
+    --primary-foreground: oklch(1 0 0);
+    --secondary: oklch(0.2 0.004 286 / 6.5%);
+    --secondary-foreground: oklch(0.2 0.004 286);
+    --muted: oklch(0.2 0.004 286 / 5.5%);
+    --muted-foreground: oklch(0.2 0.006 270 / 66%);
+    --accent: oklch(0.2 0.004 286 / 6.5%);
+    --accent-foreground: oklch(0.2 0.004 286);
+    --destructive: oklch(0.525 0.205 27);
+    --border: oklch(0.2 0.004 286 / 13%);
+    --input: oklch(0.2 0.004 286 / 18%);
+    --ring: oklch(0.542 0.212 257 / 60%);
+    --chart-1: oklch(0.542 0.212 257);
+    --chart-2: oklch(0.62 0.13 215);
+    --chart-3: oklch(0.75 0.17 70);
+    --chart-4: oklch(0.56 0.2 300);
+    --chart-5: oklch(0.2 0.004 286 / 42%);
+    /* Green is kept for success / connected status only; "active" and
+       "selected" states use the primary blue. */
+    --ok: oklch(0.495 0.145 156);
+    --warn: oklch(0.53 0.145 65);
+    --traffic-down: oklch(0.515 0.205 257);
+    --traffic-up: oklch(0.515 0.185 300);
+    /* HIG-sized corners: controls 6-8px, cards ~10px, sheets ~14px. */
+    --radius: 0.5rem;
+    --sidebar: oklch(0.932 0.005 270 / 88%);
+    --sidebar-foreground: oklch(0.2 0.004 286);
+    --sidebar-primary: oklch(0.542 0.212 257);
+    --sidebar-primary-foreground: oklch(1 0 0);
+    --sidebar-hover: oklch(0.2 0.004 286 / 6%);
+    --sidebar-accent: oklch(0.2 0.004 286 / 10%);
+    --sidebar-accent-foreground: oklch(0.2 0.004 286);
+    --sidebar-border: oklch(0.2 0.004 286 / 11%);
+    --sidebar-ring: oklch(0.542 0.212 257 / 60%);
 }
 
 .dark {
-    /* Tahoe dark: graphite glass. Filled controls invert to a light surface. */
-    --background: oklch(0.16 0.004 270);
+    /* Apple HIG system palette (macOS dark). Accent is systemBlue (dark). */
+    /* Layering (dark): a deeper page and a clearer step up to cards and
+       popovers, with a slight cool tint instead of flat grey. */
+    --background: oklch(0.185 0.005 270);
     --foreground: oklch(0.96 0.003 270);
-    --card: oklch(0.22 0.005 270);
+    --card: oklch(0.24 0.006 270);
     --card-foreground: oklch(0.96 0.003 270);
-    --popover: oklch(0.22 0.005 270);
-    --popover-foreground: oklch(0.96 0.003 270);
-    --primary: oklch(0.94 0.004 270);
-    --primary-foreground: oklch(0.18 0.005 270);
-    --secondary: oklch(0.28 0.005 270);
-    --secondary-foreground: oklch(0.96 0.003 270);
-    --muted: oklch(0.28 0.005 270);
-    --muted-foreground: oklch(0.72 0.01 270);
-    --accent: oklch(0.3 0.005 270);
-    --accent-foreground: oklch(0.96 0.003 270);
-    --destructive: oklch(0.7 0.19 22);
-    --border: oklch(0.96 0.003 270 / 10%);
-    --input: oklch(0.96 0.003 270 / 12%);
-    --ring: oklch(0.7 0.14 255);
-    --chart-1: oklch(0.94 0.004 270);
-    --chart-2: oklch(0.76 0.17 150);
-    --chart-3: oklch(0.8 0.15 75);
-    --chart-4: oklch(0.72 0.01 270);
-    --chart-5: oklch(0.5 0.008 270);
-    --sidebar: oklch(0.19 0.004 270);
-    --sidebar-foreground: oklch(0.9 0.004 270);
-    --sidebar-primary: oklch(0.94 0.004 270);
-    --sidebar-primary-foreground: oklch(0.18 0.005 270);
-    --sidebar-hover: oklch(0.24 0.005 270);
-    --sidebar-accent: oklch(0.36 0.006 270);
-    --sidebar-accent-foreground: oklch(0.98 0.002 270);
-    --sidebar-border: oklch(0.96 0.003 270 / 8%);
-    --sidebar-ring: oklch(0.7 0.14 255);
-    --ok: oklch(0.76 0.17 150);
-    --warn: oklch(0.8 0.15 75);
+    --popover: oklch(0.275 0.007 270 / 94%);
+    --popover-foreground: oklch(0.97 0.002 286);
+    --primary: oklch(0.636 0.2 254);
+    --primary-foreground: oklch(1 0 0);
+    --secondary: oklch(1 0 0 / 9%);
+    --secondary-foreground: oklch(0.97 0.002 286);
+    --muted: oklch(1 0 0 / 7%);
+    --muted-foreground: oklch(1 0 0 / 55%);
+    --accent: oklch(1 0 0 / 9%);
+    --accent-foreground: oklch(0.97 0.002 286);
+    --destructive: oklch(0.67 0.21 25);
+    --border: oklch(1 0 0 / 10%);
+    --input: oklch(1 0 0 / 14%);
+    --ring: oklch(0.636 0.2 254 / 65%);
+    --chart-1: oklch(0.636 0.2 254);
+    --chart-2: oklch(0.74 0.12 215);
+    --chart-3: oklch(0.82 0.16 75);
+    --chart-4: oklch(0.68 0.19 300);
+    --chart-5: oklch(1 0 0 / 35%);
+    --traffic-down: oklch(0.68 0.18 254);
+    --traffic-up: oklch(0.7 0.17 300);
+    --sidebar: oklch(0.21 0.006 270 / 84%);
+    --sidebar-foreground: oklch(0.95 0.002 286);
+    --sidebar-primary: oklch(0.636 0.2 254);
+    --sidebar-primary-foreground: oklch(1 0 0);
+    --sidebar-hover: oklch(1 0 0 / 6%);
+    --sidebar-accent: oklch(1 0 0 / 11%);
+    --sidebar-accent-foreground: oklch(0.98 0.002 286);
+    --sidebar-border: oklch(1 0 0 / 8%);
+    --sidebar-ring: oklch(0.636 0.2 254 / 65%);
+    --ok: oklch(0.74 0.15 158);
+    --warn: oklch(0.82 0.16 75);
 }
 
 @layer base {
@@ -156,6 +167,10 @@
   }
   body {
     @apply bg-background text-foreground;
+    font-size: 13px;
+    -webkit-font-smoothing: antialiased;
+    -webkit-user-select: none;
+    user-select: none;
     margin: 0;
     min-height: 100vh;
     overflow: hidden;
@@ -232,21 +247,586 @@
   }
 }
 
-/* Pills and one-off radii do not follow --radius: switches, dots, bars,
-   toasts, the power button, scrollbar thumbs. Unlayered so this beats the
-   utility. Portaled nodes (toasts, tooltips) are covered by the class, not
-   by a #root scope. */
-.rounded-full,
-.rounded,
-.rounded-\[2px\] {
-  border-radius: 0;
-}
 
-/* Navigation glyphs (docs/brand/nav-icons). One ink, filled with the button's
-   text color. Shown at their 16px grid; the button around them is unchanged. */
+/* Navigation icons (components/NavIcon.tsx): rounded line glyphs stroked in
+   the button's text color. 20px in the phone tab bar and beside a sidebar
+   label, 24px on the collapsed rail. */
 .nav-icon {
   display: block;
   width: 16px;
   height: 16px;
   flex: none;
+}
+.phone-tab-bar .nav-icon,
+[data-sidebar="menu-button"] .nav-icon {
+  width: 20px;
+  height: 20px;
+}
+[data-collapsible="icon"] [data-sidebar="menu-button"] .nav-icon {
+  width: 24px;
+  height: 24px;
+}
+
+/* Phone frosted glass chrome (iOS 26/27 / Apple Music Web glass material):
+   translucent top header and detached floating bottom tab bar. Content scrolls
+   behind both bars while reserving clearance at the top and bottom edges. */
+.phone-shell {
+  /* Top system inset. `--ice-status-inset` stands in where the host draws its
+     own status bar over the page but reports no safe area (the website phone
+     frame and the README capture); on a device `env()` wins. */
+  --phone-status-inset: max(env(safe-area-inset-top, 0px), var(--ice-status-inset, 0px));
+  --phone-header-height: calc(max(0.75rem, var(--phone-status-inset)) + 2.75rem);
+  --phone-content-top: var(--phone-header-height);
+  --phone-nav-inset: max(env(safe-area-inset-bottom, 0px), var(--ice-nav-inset, 0px));
+  --phone-tab-bar-bottom: max(0.75rem, calc(var(--phone-nav-inset) + 0.25rem));
+  --phone-tab-bar-height: 3.75rem;
+  --phone-tab-bar-clearance: calc(
+    var(--phone-tab-bar-bottom) + var(--phone-tab-bar-height) + 0.75rem
+  );
+  --glass-backdrop-filter: saturate(220%) blur(16px);
+  --glass-bg: #f5f5f78c;
+  --glass-shadow: #0000001a;
+  --glass-stroke: #000;
+  --glass-stroke-alpha: 0.05;
+  --glass-stroke-combined: #0000000d;
+}
+.dark .phone-shell {
+  --glass-bg: #26262899;
+  --glass-shadow: #0003;
+  --glass-stroke: #fff;
+  --glass-stroke-alpha: 0.2;
+  --glass-stroke-combined: #fff3;
+}
+.phone-shell:has(> .phone-recovery) {
+  --phone-content-top: 0px;
+}
+.phone-shell > .phone-recovery {
+  padding-top: calc(var(--phone-header-height) + 0.75rem);
+}
+/* Every phone page scrolls as one unified surface from behind the frosted top
+   header down behind the floating Liquid Glass bottom tab bar. */
+.phone-shell .home-panel,
+.phone-shell .apps-panel,
+.phone-shell .rules-panel,
+.phone-shell .settings-panel,
+.phone-shell .subs-panel-scroll {
+  margin-top: -0.75rem;
+  padding-top: calc(var(--phone-content-top) + 0.75rem);
+  padding-bottom: var(--phone-tab-bar-clearance);
+}
+.phone-shell [data-testid="capsule-toast"] {
+  bottom: var(--phone-tab-bar-clearance);
+}
+
+.phone-header {
+  isolation: isolate;
+}
+.phone-header::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: var(--glass-backdrop-filter);
+  backdrop-filter: var(--glass-backdrop-filter);
+  box-shadow: inset 0 -0.5px 0 var(--glass-stroke-combined);
+  pointer-events: none;
+}
+
+.phone-tab-dock {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  z-index: 30;
+  display: flex;
+  justify-content: center;
+  padding: 0 1rem var(--phone-tab-bar-bottom);
+  pointer-events: none;
+}
+
+.phone-tab-bar {
+  pointer-events: auto;
+  isolation: isolate;
+}
+.phone-tab-bar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: var(--glass-backdrop-filter);
+  backdrop-filter: var(--glass-backdrop-filter);
+  box-shadow: 0 10px 40px var(--glass-shadow);
+  pointer-events: none;
+}
+.phone-tab-bar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  border-radius: inherit;
+  box-shadow:
+    inset 0.5px 0.5px var(--glass-stroke),
+    inset 0.5px -0.5px var(--glass-stroke),
+    inset -0.5px 0.5px var(--glass-stroke),
+    inset -0.5px -0.5px var(--glass-stroke);
+  opacity: var(--glass-stroke-alpha);
+  pointer-events: none;
+}
+
+.phone-tab-indicator {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 4px;
+  z-index: 1;
+  width: calc((100% - 8px) / var(--tab-count, 5));
+  border-radius: 9999px;
+  pointer-events: none;
+  background: rgb(0 0 0 / 0.065);
+  box-shadow:
+    inset 0 0.5px 0 rgb(255 255 255 / 0.55),
+    0 1px 2px rgb(0 0 0 / 0.04);
+  transform: translateX(calc(var(--tab-index, 0) * 100%));
+  transition: transform 340ms cubic-bezier(0.32, 0.72, 0, 1);
+  will-change: transform;
+}
+.dark .phone-tab-indicator {
+  background: rgb(255 255 255 / 0.13);
+  box-shadow:
+    inset 0 0.5px 0 rgb(255 255 255 / 0.18),
+    0 1px 4px rgb(0 0 0 / 0.18);
+}
+
+.phone-tab-item {
+  transition: color 180ms ease, transform 160ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.phone-tab-item:active {
+  transform: scale(0.95);
+}
+.phone-tab-item[aria-current="page"] .nav-icon {
+  stroke-width: 2;
+}
+
+@media (prefers-contrast: more) {
+  .phone-shell {
+    --glass-bg: #f2f2f2;
+    --glass-stroke: #0d0d0d;
+    --glass-stroke-alpha: 1;
+    --glass-stroke-combined: #0d0d0d;
+  }
+  .dark .phone-shell {
+    --glass-bg: #0e0e0e;
+    --glass-stroke: #e7e7e7;
+    --glass-stroke-alpha: 1;
+    --glass-stroke-combined: #e7e7e7;
+  }
+  .phone-header::before,
+  .phone-tab-bar::before {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  .phone-tab-bar::after {
+    box-shadow: none;
+    border: 1px solid var(--glass-stroke);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .phone-tab-indicator,
+  .phone-tab-item {
+    transition: none;
+  }
+  .phone-tab-item:active {
+    transform: none;
+  }
+}
+
+/* Apple-style interaction defaults: arrow cursor on controls, selectable
+   text only where it is content (inputs, code, logs). */
+button,
+[role="button"],
+[role="tab"],
+[role="switch"],
+[role="menuitem"] {
+  cursor: default;
+}
+input,
+textarea,
+pre,
+code,
+[data-selectable] {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* macOS sidebar selection: a soft neutral fill; only the selected item's
+   glyph takes the accent colour. */
+[data-sidebar="menu-button"][data-active="true"],
+[data-sidebar="menu-button"][data-active="true"]:hover {
+  background: var(--sidebar-accent);
+  color: var(--sidebar-accent-foreground);
+  font-weight: 500;
+}
+[data-sidebar="menu-button"][data-active="true"] .nav-icon {
+  color: var(--primary);
+}
+
+/* Grouped-form rows: separators start at the text inset, like System Settings. */
+[data-slot="settings-rows"] > * + * {
+  background: linear-gradient(var(--border), var(--border)) 1rem 0 / calc(100% - 1rem) 1px no-repeat;
+}
+
+/* Desktop floating page actions: hidden when the current page has none. */
+[data-page-toolbar]:not(:has(> [data-titlebar-slot]:not([hidden]) > *)) {
+  display: none;
+}
+
+/* Floating action button: an accent-filled capsule with a soft lift. */
+[data-page-toolbar] [data-titlebar-slot] {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+[data-page-toolbar] [data-titlebar-slot][hidden] {
+  display: none;
+}
+[data-page-toolbar] button[data-slot="button"],
+[data-page-toolbar] button {
+  height: 2.5rem;
+  padding-inline: 1.125rem;
+  border: 0;
+  border-radius: 9999px;
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-weight: 500;
+  box-shadow:
+    0 4px 14px rgb(0 0 0 / 0.18),
+    0 1px 3px rgb(0 0 0 / 0.12),
+    inset 0 0.5px 0 rgb(255 255 255 / 0.25);
+  transition: transform 150ms ease, box-shadow 150ms ease, opacity 150ms ease;
+}
+[data-page-toolbar] button:hover:not(:disabled) {
+  background: color-mix(in oklch, var(--primary), white 8%);
+  box-shadow:
+    0 6px 20px rgb(0 0 0 / 0.22),
+    0 2px 4px rgb(0 0 0 / 0.12),
+    inset 0 0.5px 0 rgb(255 255 255 / 0.25);
+}
+[data-page-toolbar] button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+[data-page-toolbar] button:disabled {
+  opacity: 0.5;
+}
+
+/* Icon-only floating action (e.g. import subscription): a round button. */
+[data-page-toolbar] button[data-icon-only] {
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0;
+}
+[data-page-toolbar] button[data-icon-only] svg {
+  width: 1.25rem;
+  height: 1.25rem;
+  stroke-width: 2.25;
+}
+
+/* Batch test in progress: the floating button is a red cancel button. */
+[data-page-toolbar] button[data-cancel],
+[data-page-toolbar] button[data-cancel]:hover:not(:disabled) {
+  background: var(--destructive);
+  color: #fff;
+}
+[data-page-toolbar] button[data-cancel]:hover:not(:disabled) {
+  background: color-mix(in oklch, var(--destructive), white 8%);
+}
+
+/* Landing probe globe (components/LandingMap.tsx), zoomed so only the area
+   around the view centre shows: the canvas draws the dots; this marker sits
+   on the exit country and pings with CSS, so a settled globe needs no
+   animation frames. */
+.landing-map-marker {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transition: opacity 200ms ease;
+  width: 8px;
+  height: 8px;
+  margin: -4px 0 0 -4px;
+  border-radius: 9999px;
+  background: var(--primary);
+  box-shadow:
+    0 0 0 1.5px var(--card),
+    0 0 10px 2px color-mix(in oklch, var(--primary), transparent 35%);
+  pointer-events: none;
+}
+.landing-map-marker::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--primary);
+  opacity: 0;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .landing-map-marker::after {
+    animation: landing-ping 2s cubic-bezier(0, 0, 0.2, 1) infinite;
+  }
+}
+@keyframes landing-ping {
+  0% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+  100% {
+    transform: scale(3.6);
+    opacity: 0;
+  }
+}
+
+/* Expanded landing map (components/LandingMapDialog.tsx). The SVG uses one
+   unit per degree, so strokes and pins are sized in degrees. */
+/* The card's globe canvas while it flies between the card and the dialog:
+   above the dialog, positioned and sized by LandingMap every frame. */
+.landing-map-stage {
+  position: fixed;
+  z-index: 60;
+  overflow: hidden;
+  pointer-events: none;
+}
+.landing-map-full > canvas {
+  z-index: 0;
+}
+.landing-map-full > svg {
+  z-index: 1;
+}
+/* On the dialog, not just the map box: the legend below the map uses it too. */
+.landing-map-dialog,
+.landing-map-full {
+  /* Warm amber for "you", against the primary blue for the exit. */
+  --landing-user: oklch(0.65 0.16 65);
+}
+.dark .landing-map-dialog,
+.dark .landing-map-full {
+  --landing-user: oklch(0.78 0.15 70);
+}
+.landing-legend-user,
+.landing-pin-user {
+  background: var(--landing-user);
+  fill: var(--landing-user);
+}
+.landing-pin-user,
+.landing-pin-exit {
+  stroke: var(--background);
+  stroke-width: 0.5;
+}
+.landing-pin-exit,
+.landing-pin-ping,
+.landing-arc-comet {
+  fill: var(--primary);
+}
+.landing-pin-ping {
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.landing-arc-base {
+  fill: none;
+  stroke: var(--primary);
+  stroke-opacity: 0.25;
+  stroke-width: 0.6;
+  stroke-linecap: round;
+}
+.landing-arc-flow {
+  fill: none;
+  stroke: var(--primary);
+  stroke-width: 0.7;
+  stroke-linecap: round;
+  /* Map units (degrees), not a share of the path, so the dash rhythm is the
+     same on every arc whatever its length. */
+  stroke-dasharray: 3 2;
+}
+.landing-arc-comet {
+  filter: drop-shadow(0 0 1.2px var(--primary));
+}
+@media (prefers-reduced-motion: no-preference) {
+  .landing-arc-flow {
+    animation: landing-arc-flow 1.2s linear infinite;
+  }
+  .landing-pin-ping {
+    animation: landing-ping 2s cubic-bezier(0, 0, 0.2, 1) infinite;
+  }
+}
+@keyframes landing-arc-flow {
+  to {
+    stroke-dashoffset: -5;
+  }
+}
+
+/* Open / close: the dialog grows out of the small map on Home and shrinks
+   back into it (start pose from syncZoomOrigin in LandingMapDialog.tsx).
+   Only transform, clip-path and opacity animate; the curve is the iOS sheet
+   curve, fast out of the gate and long, soft settle. */
+.landing-map-dialog {
+  --lm-ease: cubic-bezier(0.32, 0.72, 0, 1);
+  transform: translate(-50%, -50%);
+  transform-origin: center;
+  will-change: transform, clip-path;
+}
+.landing-map-dialog[data-state="open"] {
+  animation: lm-zoom-in 560ms var(--lm-ease) both;
+}
+.landing-map-dialog[data-state="closed"] {
+  animation: lm-zoom-out 480ms var(--lm-ease) both;
+}
+.landing-map-overlay[data-state="open"] {
+  animation: lm-fade-in 420ms var(--lm-ease) both;
+}
+/* Gone a little before the canvas lands in the card, so the card is never
+   dimmed again under it. */
+.landing-map-overlay[data-state="closed"] {
+  animation: lm-fade-out 400ms var(--lm-ease) both;
+}
+/* Title, legend and hint arrive after the map has mostly landed, and leave
+   first on close, so the shrinking box carries only the map. */
+.landing-map-dialog[data-state="open"] [data-lm-chrome] {
+  animation: lm-chrome-in 360ms var(--lm-ease) 200ms both;
+}
+.landing-map-dialog[data-state="closed"] [data-lm-chrome] {
+  animation: lm-fade-out 140ms ease-out both;
+}
+/* The canvas leaves the slot at once on close; the pins and arc drawn over
+   it go right away instead of floating over the empty frame. */
+.landing-map-dialog[data-state="closed"] .landing-map-full > svg {
+  animation: lm-fade-out 120ms ease-out both;
+}
+/* Then the story on the map: pins pop, the arc draws from you to the exit,
+   and only then does it start flowing. */
+.landing-map-dialog[data-state="open"] [data-testid="landing-map-user"] > *,
+.landing-map-dialog[data-state="open"] [data-testid="landing-map-exit"] > * {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.landing-map-dialog[data-state="open"] [data-testid="landing-map-user"] {
+  animation: lm-fade-in 240ms ease-out 360ms both;
+}
+.landing-map-dialog[data-state="open"] [data-testid="landing-map-user"] .landing-pin-user,
+.landing-map-dialog[data-state="open"] [data-testid="landing-map-exit"] .landing-pin-exit {
+  animation: lm-pin-pop 520ms cubic-bezier(0.34, 1.56, 0.64, 1) 360ms both;
+}
+.landing-map-dialog[data-state="open"] [data-testid="landing-map-exit"] {
+  animation: lm-fade-in 240ms ease-out 1080ms both;
+}
+.landing-map-dialog[data-state="open"] [data-testid="landing-map-exit"] .landing-pin-exit {
+  animation-delay: 1080ms;
+}
+.landing-map-dialog[data-state="open"] .landing-arc-base {
+  stroke-dasharray: 100;
+  animation: lm-arc-draw 700ms cubic-bezier(0.65, 0, 0.35, 1) 460ms both;
+}
+.landing-map-dialog[data-state="open"] .landing-arc-flow,
+.landing-map-dialog[data-state="open"] .landing-arc-comet {
+  opacity: 0;
+  animation:
+    lm-fade-in 300ms ease-out 1160ms forwards,
+    landing-arc-flow 1.2s linear 1160ms infinite;
+}
+.landing-map-dialog[data-state="open"] .landing-arc-comet {
+  animation: lm-fade-in 300ms ease-out 1160ms forwards;
+}
+@keyframes lm-zoom-in {
+  from {
+    transform: translate(-50%, -50%) translate(var(--lm-dx), var(--lm-dy)) scale(var(--lm-s));
+    clip-path: var(--lm-clip);
+    box-shadow: 0 0 0 0 transparent;
+  }
+  to {
+    transform: translate(-50%, -50%);
+    clip-path: inset(0px 0px 0px 0px round 12px);
+  }
+}
+/* Close: the reverse of lm-zoom-in. The frame shrinks back into the card's
+   map box on the same curve as the canvas (COLLAPSE_MS in LandingMap.tsx),
+   which flies on its own layer above it. The frame (background, border,
+   shadow) dissolves on the way, so it never lands on the card as a box. */
+@keyframes lm-zoom-out {
+  from {
+    transform: translate(-50%, -50%);
+    clip-path: inset(0px 0px 0px 0px round 12px);
+    opacity: 1;
+  }
+  /* The sheet curve front-loads the motion, so the frame is most of the way
+     to the card by 40% of the time; it is gone by then. */
+  10% {
+    opacity: 1;
+  }
+  38% {
+    opacity: 0;
+  }
+  to {
+    transform: translate(-50%, -50%) translate(var(--lm-dx), var(--lm-dy)) scale(var(--lm-s));
+    clip-path: var(--lm-clip);
+    box-shadow: 0 0 0 0 transparent;
+    opacity: 0;
+  }
+}
+@keyframes lm-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes lm-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+@keyframes lm-chrome-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes lm-pin-pop {
+  from {
+    transform: scale(0);
+  }
+  to {
+    transform: scale(1);
+  }
+}
+@keyframes lm-arc-draw {
+  from {
+    stroke-dashoffset: 100;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+/* Reduced motion: no flight, no drawing; a short cross-fade only. */
+@media (prefers-reduced-motion: reduce) {
+  .landing-map-dialog[data-state="open"],
+  .landing-map-dialog[data-state="open"] *,
+  .landing-map-overlay[data-state="open"] {
+    animation: lm-fade-in 160ms ease-out both !important;
+  }
+  .landing-map-dialog[data-state="closed"],
+  .landing-map-overlay[data-state="closed"] {
+    animation: lm-fade-out 140ms ease-out both !important;
+  }
+  .landing-map-dialog[data-state="open"] .landing-arc-flow {
+    animation: none !important;
+    opacity: 1;
+  }
 }

@@ -193,7 +193,7 @@ fn show_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.set_focus();
-        square_window_corners(&window);
+        round_window_corners(&window);
     }
 }
 
@@ -231,91 +231,38 @@ fn apply_plain_dock_icon() {
     unsafe { app.setApplicationIconImage(Some(&image)) };
 }
 
-/// Near-zero radius that AppKit keeps. `-[NSWindow _setCornerRadius:]` treats
-/// `<= 0` as "clear the override", and a titled window (this overlay title bar
-/// included) then snaps back to the 16pt system mask.
-#[cfg(target_os = "macos")]
-const WINDOW_CORNER_RADIUS: f64 = 0.01;
-
-/// Square the window corners.
+/// Give the window the system's rounded corners (Apple-style on every
+/// desktop).
 ///
-/// macOS has no public API for this. The private setter stores an associated
-/// radius and rebuilds the corner mask; `0.01` collapses that mask to a 1pt
-/// cap, which reads as a square corner. `<= 0` clears the override and a
-/// titled window snaps back to the 16pt system mask. A future OS may ignore
-/// the selector, so a missing one is skipped instead of crashing.
+/// macOS rounds a titled window on its own, so there is nothing to do there.
 ///
-/// Windows 11 rounds this window on its own. tao keeps `WS_CAPTION` and
-/// `WS_SIZEBOX` so DWM can draw the system shadow, and that frame is what DWM
-/// rounds. `DWMWCP_DONOTROUND` is the public opt-out; the shadow stays, and
-/// the corners are square, which is as close as Windows gets to the 1pt cap.
-/// Windows 10 rejects the attribute. Its windows are already square, so the
-/// error is ignored.
+/// Windows 11: the window is undecorated, but tao keeps `WS_CAPTION` and
+/// `WS_SIZEBOX` so DWM draws the system shadow, and DWM rounds that frame.
+/// `DWMWCP_ROUND` asks for the standard rounded corners explicitly, so the
+/// result does not depend on DWM's heuristics for undecorated windows.
+/// Windows 10 rejects the attribute; its windows stay square and the error is
+/// ignored.
 ///
-/// Rebuilding the macOS mask off the main thread throws and aborts the
-/// process. Tray Quit and Cmd+Q run `request_tray_quit` on a `spawn_blocking`
-/// worker, and the failure path that keeps the app open calls this after
-/// showing the window. An off-thread caller is queued onto the main thread;
-/// setup, tray menus, and the focus watchdog are already there and apply it
-/// immediately. `hwnd()` also has to run on that thread, so Windows takes the
-/// same path: `run_on_main_thread` runs the closure before returning when the
-/// caller is already there.
-pub(crate) fn square_window_corners<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
-    #[cfg(target_os = "macos")]
-    {
-        if objc2::MainThreadMarker::new().is_none() {
-            // `run_on_main_thread` borrows its receiver for the call, so the
-            // closure needs its own handle.
-            let scheduled = window.clone();
-            let _ = window
-                .clone()
-                .run_on_main_thread(move || apply_square_window_corners(&scheduled));
-            return;
-        }
-        apply_square_window_corners(window);
-    }
-    // No main-thread marker on Windows. `run_on_main_thread` runs the closure
-    // before returning when the caller is already on the UI thread, and queues
-    // it otherwise. `hwnd()` waits on that thread, so the attribute is applied
-    // there either way.
+/// `hwnd()` has to run on the UI thread: `run_on_main_thread` runs the closure
+/// before returning when the caller is already there and queues it otherwise
+/// (Tray Quit's failure path calls this from a `spawn_blocking` worker).
+pub(crate) fn round_window_corners<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
     #[cfg(windows)]
     {
         let scheduled = window.clone();
-        let _ = window.run_on_main_thread(move || apply_square_window_corners(&scheduled));
+        let _ = window.run_on_main_thread(move || apply_round_window_corners(&scheduled));
     }
-    #[cfg(not(any(target_os = "macos", windows)))]
+    #[cfg(not(windows))]
     {
         let _ = window;
     }
 }
 
-/// Apply the corner override. The caller is on the main thread.
-#[cfg(target_os = "macos")]
-fn apply_square_window_corners<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
-    let Ok(ptr) = window.ns_window() else {
-        return;
-    };
-    if ptr.is_null() {
-        return;
-    }
-    // SAFETY: `ns_window` is this webview's live NSWindow, and the caller is
-    // on the main thread. The selector only stores an associated radius and
-    // invalidates the corner mask; the window is not retained or released.
-    let ns_window = unsafe { &*ptr.cast::<objc2::runtime::AnyObject>() };
-    let selector = objc2::sel!(_setCornerRadius:);
-    let responds: objc2::runtime::Bool =
-        unsafe { objc2::msg_send![ns_window, respondsToSelector: selector] };
-    if !responds.as_bool() {
-        return;
-    }
-    let () = unsafe { objc2::msg_send![ns_window, _setCornerRadius: WINDOW_CORNER_RADIUS] };
-}
-
-/// Ask DWM not to round this window. The caller is on the UI thread.
+/// Ask DWM for rounded corners. The caller is on the UI thread.
 #[cfg(windows)]
-fn apply_square_window_corners<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
+fn apply_round_window_corners<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
     use windows_sys::Win32::Graphics::Dwm::{
-        DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND,
+        DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
     };
 
     let Ok(handle) = window.hwnd() else {
@@ -327,10 +274,10 @@ fn apply_square_window_corners<R: tauri::Runtime>(window: &tauri::WebviewWindow<
     if hwnd.is_null() {
         return;
     }
-    let preference = DWMWCP_DONOTROUND;
+    let preference = DWMWCP_ROUND;
     // SAFETY: `hwnd` is this webview's live top-level window. The call only
     // stores a DWM corner preference. Windows 10 does not recognize the
-    // attribute and returns an error, leaving its already-square window as it is.
+    // attribute and returns an error, leaving its square window as it is.
     let _ = unsafe {
         DwmSetWindowAttribute(
             hwnd,

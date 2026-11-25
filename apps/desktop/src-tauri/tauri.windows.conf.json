@@ -6,9 +6,9 @@
     "windows": [
       {
         "title": "ice-box",
-        "width": 860,
+        "width": 740,
         "height": 620,
-        "minWidth": 720,
+        "minWidth": 600,
         "minHeight": 500,
         "visible": false,
         "decorations": false,

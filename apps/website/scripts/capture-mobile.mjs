@@ -29,6 +29,9 @@ const PREVIEW_PORT = 4176;
 const MOBILE_TABS = 5;
 /** Gesture-navigation inset. The shell chrome itself comes from phone-demo.css. */
 const PHONE_NAV_INSET = 24;
+/** Status-bar inset: the height of `.phone-status-bar` in phone-demo.css, which
+ * the shell draws over the top of the shot. */
+const PHONE_STATUS_INSET = 32;
 
 /** One capture per README language; parameters are identical otherwise. */
 const TARGETS = [
@@ -179,7 +182,7 @@ function phoneShellHtml(screenshot) {
       * { box-sizing: border-box; }
       html, body { margin: 0; padding: 0; overflow: hidden; background: transparent; }
       body { width: max-content; }
-      /* Room for the side buttons and the hard pixel shadow, which sit
+      /* Room for the side buttons and the frame shadow, which sit
          outside the frame. Wider than 1100px so the landing-page mobile
          stage rule does not shrink the shell. */
       .capture-stage { display: inline-block; padding: 8px 20px 20px 16px; }
@@ -264,9 +267,13 @@ async function visitApps(page) {
 
 async function capture(browser, baseUrl, target) {
   const context = await browser.newContext({
-    // The viewport includes the gesture navigation inset so the phone UI draws
-    // edge-to-edge behind the system navigation bar, as it does on Android.
-    viewport: { width: VIEWPORT.width, height: VIEWPORT.height + PHONE_NAV_INSET },
+    // The viewport includes both system-bar insets so the phone UI draws
+    // edge-to-edge behind the status bar and the gesture navigation bar, as
+    // it does on Android.
+    viewport: {
+      width: VIEWPORT.width,
+      height: VIEWPORT.height + PHONE_STATUS_INSET + PHONE_NAV_INSET,
+    },
     deviceScaleFactor: SCALE,
     isMobile: true,
     hasTouch: true,
@@ -286,11 +293,17 @@ async function capture(browser, baseUrl, target) {
       timeout: 60_000,
     });
     // MainActivity sets --ice-nav-inset from the real navigation bar height on
-    // Android; the browser mock reports no safe-area inset, so provide it once
-    // the document exists (init scripts run before documentElement is created).
-    await page.evaluate((navInset) => {
-      document.documentElement.style.setProperty("--ice-nav-inset", `${navInset}px`);
-    }, PHONE_NAV_INSET);
+    // Android, and the device reports the status bar through env(); the
+    // browser mock reports no safe-area inset, so provide both once the
+    // document exists (init scripts run before documentElement is created).
+    await page.evaluate(
+      ({ navInset, statusInset }) => {
+        const rootStyle = document.documentElement.style;
+        rootStyle.setProperty("--ice-nav-inset", `${navInset}px`);
+        rootStyle.setProperty("--ice-status-inset", `${statusInset}px`);
+      },
+      { navInset: PHONE_NAV_INSET, statusInset: PHONE_STATUS_INSET },
+    );
     await page.getByTestId("phone-shell").waitFor({ timeout: 30_000 });
 
     // The embedded node list shares the runtime store. On the first frame the

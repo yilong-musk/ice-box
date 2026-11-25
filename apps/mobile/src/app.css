@@ -6,7 +6,5 @@
 @import "../../desktop/src/index.css";
 
 /* Gesture navigation does not report safe-area-inset-bottom on this WebView.
-   MainActivity sets --ice-nav-inset from the real navigation bar height. */
-.phone-tab-bar {
-  padding-bottom: max(env(safe-area-inset-bottom), var(--ice-nav-inset, 0px));
-}
+   MainActivity publishes --ice-nav-inset from the real navigation bar height,
+   which `.phone-shell` in desktop index.css uses to lift the floating tab bar. */

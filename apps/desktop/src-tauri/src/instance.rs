@@ -76,7 +76,7 @@ pub fn spawn_focus_watchdog<R: Runtime>(app: AppHandle<R>, paths: AppPaths) {
                 let _ = win.unminimize();
                 let _ = win.show();
                 let _ = win.set_focus();
-                crate::square_window_corners(&win);
+                crate::round_window_corners(&win);
             }
         });
     });

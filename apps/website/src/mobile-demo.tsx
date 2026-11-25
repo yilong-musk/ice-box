@@ -27,15 +27,21 @@ import "./demo-logo.css";
  */
 const NAV_INSET_PX = 24;
 
+/**
+ * The phone frame also draws the status bar over the top of the app, as an
+ * edge-to-edge Android window has it, so the frosted header extends under
+ * it. Same height as `.phone-status-bar` in `phone-demo.css`.
+ */
+const STATUS_INSET_PX = 32;
+
 applyPhoneFixtures(api);
 
-// The landing page draws a gesture bar over the bottom of the iframe; when the
-// page is opened on its own there is no bar, so keep the app edge-to-edge.
+// The landing page draws both system bars over the iframe; when the page is
+// opened on its own there are no bars, so keep the app edge-to-edge.
 if (window.self !== window.top) {
-  document.documentElement.style.setProperty(
-    "--ice-nav-inset",
-    `${NAV_INSET_PX}px`,
-  );
+  const rootStyle = document.documentElement.style;
+  rootStyle.setProperty("--ice-nav-inset", `${NAV_INSET_PX}px`);
+  rootStyle.setProperty("--ice-status-inset", `${STATUS_INSET_PX}px`);
 }
 
 bridgeStoredPreferences();

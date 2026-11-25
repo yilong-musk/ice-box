@@ -96,7 +96,7 @@ describe("TrafficChart", () => {
     expect(
       view.getByText(t("traffic.peak", { rate: formatRate(80), n: 60 })),
     ).toBeInTheDocument();
-    expect(view.getByText(`↓ ${formatRate(80)}`)).toBeInTheDocument();
+    expect(view.getByTestId("traffic-rate-down")).toHaveTextContent(`↓ ${formatRate(80)}`);
   });
 
   it("uses the 60-second window peak for the y scale", async () => {
@@ -235,7 +235,7 @@ describe("TrafficChart", () => {
       onSample({ up: 50, down: peak, t: 2_000 });
     });
 
-    expect(view.getByText(`↓ ${formatRate(peak)}`)).toBeInTheDocument();
+    expect(view.getByTestId("traffic-rate-down")).toHaveTextContent(`↓ ${formatRate(peak)}`);
     expect(
       view.getByText(t("traffic.peak", { rate: formatRate(peak), n: 60 })),
     ).toBeInTheDocument();
@@ -258,7 +258,7 @@ describe("TrafficChart", () => {
     );
     const view = within(container);
     await waitFor(() => {
-      expect(view.getByText(`↓ ${formatRate(200)}`)).toBeInTheDocument();
+      expect(view.getByTestId("traffic-rate-down")).toHaveTextContent(`↓ ${formatRate(200)}`);
     });
     await act(async () => {});
     const afterHydrate = commits;
@@ -268,7 +268,7 @@ describe("TrafficChart", () => {
     });
 
     expect(commits).toBe(afterHydrate);
-    expect(view.getByText(`↓ ${formatRate(200)}`)).toBeInTheDocument();
+    expect(view.getByTestId("traffic-rate-down")).toHaveTextContent(`↓ ${formatRate(200)}`);
   });
 
   it("polls forward from the live cursor instead of redrawing the same sample", async () => {
@@ -291,7 +291,7 @@ describe("TrafficChart", () => {
     await act(async () => {
       onSample({ up: 40, down: 80, t: 4_000 });
     });
-    expect(view.getByText(`↓ ${formatRate(80)}`)).toBeInTheDocument();
+    expect(view.getByTestId("traffic-rate-down")).toHaveTextContent(`↓ ${formatRate(80)}`);
 
     await act(async () => {
       vi.advanceTimersByTime(1000);
@@ -299,7 +299,7 @@ describe("TrafficChart", () => {
     });
 
     expect(getTrafficSince).toHaveBeenLastCalledWith(4_000);
-    expect(view.getByText(`↓ ${formatRate(80)}`)).toBeInTheDocument();
+    expect(view.getByTestId("traffic-rate-down")).toHaveTextContent(`↓ ${formatRate(80)}`);
     unmount();
   });
 
@@ -330,7 +330,7 @@ describe("TrafficChart", () => {
     });
 
     const view = within(container);
-    expect(view.getByText(`↓ ${formatRate(liveDown)}`)).toBeInTheDocument();
+    expect(view.getByTestId("traffic-rate-down")).toHaveTextContent(`↓ ${formatRate(liveDown)}`);
     expect(
       view.getByText(t("traffic.peak", { rate: formatRate(liveDown), n: 60 })),
     ).toBeInTheDocument();
@@ -359,7 +359,7 @@ describe("TrafficChart", () => {
     await act(async () => {
       onSample({ up: 10, down: liveDown, t: 5_000 });
     });
-    expect(view.getByText(`↓ ${formatRate(liveDown)}`)).toBeInTheDocument();
+    expect(view.getByTestId("traffic-rate-down")).toHaveTextContent(`↓ ${formatRate(liveDown)}`);
     expect(
       view.getByText(t("traffic.peak", { rate: formatRate(liveDown), n: 60 })),
     ).toBeInTheDocument();
@@ -370,7 +370,7 @@ describe("TrafficChart", () => {
     });
 
     expect(getTrafficSince).toHaveBeenLastCalledWith(5_000);
-    expect(view.getByText(`↓ ${formatRate(liveDown)}`)).toBeInTheDocument();
+    expect(view.getByTestId("traffic-rate-down")).toHaveTextContent(`↓ ${formatRate(liveDown)}`);
     expect(
       view.getByText(t("traffic.peak", { rate: formatRate(liveDown), n: 60 })),
     ).toBeInTheDocument();
@@ -393,14 +393,14 @@ describe("TrafficChart", () => {
     const view = within(container);
 
     await flushMicrotasks();
-    expect(view.getByText(`↓ ${formatRate(20)}`)).toBeInTheDocument();
+    expect(view.getByTestId("traffic-rate-down")).toHaveTextContent(`↓ ${formatRate(20)}`);
 
     await act(async () => {
       vi.advanceTimersByTime(1000);
       await Promise.resolve();
     });
 
-    expect(view.getByText(`↓ ${formatRate(6)}`)).toBeInTheDocument();
+    expect(view.getByTestId("traffic-rate-down")).toHaveTextContent(`↓ ${formatRate(6)}`);
     expect(
       view.getByText(t("traffic.peak", { rate: formatRate(9 * 1024), n: 60 })),
     ).toBeInTheDocument();

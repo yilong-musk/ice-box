@@ -121,9 +121,9 @@ describe("Connections", () => {
     );
     // Download and upload use the Home chart colours.
     const traffic = within(github).getByTestId("connection-traffic");
-    expect(within(traffic).getByTestId("traffic-down")).toHaveClass("text-ok");
+    expect(within(traffic).getByTestId("traffic-down").firstElementChild).toHaveClass("text-traffic-down");
     expect(within(traffic).getByTestId("traffic-down")).toHaveTextContent("↓ 4.0 KB");
-    expect(within(traffic).getByTestId("traffic-up")).toHaveClass("text-primary");
+    expect(within(traffic).getByTestId("traffic-up").firstElementChild).toHaveClass("text-traffic-up");
     expect(within(traffic).getByTestId("traffic-up")).toHaveTextContent("↑ 1.0 KB");
   });
 

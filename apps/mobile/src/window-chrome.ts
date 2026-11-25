@@ -13,4 +13,18 @@ export function isMacosHost(): boolean {
   return false;
 }
 
+/** No window buttons are drawn on the phone. */
+export function controlsFollowWindowFocus(): boolean {
+  return false;
+}
+
 export async function runWindowCommand(_command: WindowCommand): Promise<void> {}
+
+/** The phone window is sized by the system; nothing is resized. */
+export async function resizeWindowWidthBy(
+  _delta: number,
+  _min: { width: number; height: number },
+  _animation?: { durationMs: number; startedAt: number },
+): Promise<number | null> {
+  return null;
+}

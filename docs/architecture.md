@@ -368,13 +368,23 @@ and they never read or write the user's environment outside the process they
 start.
 
 While the core is running and Settings → Inbound → **Probe public exit IP**
-(`probe_exit_ip`, default on) is enabled, status assembly may start a
-background HTTPS probe through the local Mixed inbound to
-`https://www.cloudflare.com/cdn-cgi/trace`. The response’s public IP populates
-Home’s landing address, and the `loc` country on that same response is drawn
-as a flag in front of the address. `XX` and any value that is not an ISO
-alpha-2 code are omitted. Probes are keyed by the selected outbound, cached for
-about 30 seconds, and never run when the setting is off or the core is stopped.
+(`probe_exit_ip`, default on) is enabled, status assembly may start two
+background HTTPS probes to `https://www.cloudflare.com/cdn-cgi/trace`:
+
+- **Exit probe (proxied)**: sent through the local Mixed inbound. The
+  response’s public IP populates Home’s landing address, and the `loc` country
+  on that same response is drawn as a flag in front of the address and locates
+  the exit on the landing globe/map. Keyed by the selected outbound and cached
+  for about 30 seconds.
+- **Origin probe (direct)**: sent directly (without the local proxy; under TUN
+  the reserved `process_name` bypass routes `ice-box` / `ice-box.exe` to
+  `direct`) so the expanded landing map can show the user’s own region alongside
+  the exit. Cached for about 5 minutes, with exponential backoff on repeated
+  failures; if unavailable, the dialog falls back to a local time-zone /
+  language guess marked as inferred.
+
+In both responses, `XX` and any value that is not an ISO alpha-2 code are
+omitted. Neither probe runs when `probe_exit_ip` is off or the core is stopped.
 Turning the setting off is the supported opt-out; the app does not use
 plaintext third-party IP lookup fallbacks.
 

@@ -239,6 +239,16 @@ pub(crate) fn outbound_summary(
         super::exit_probe::clear();
         (None, None)
     };
+    // The user's own origin, measured directly (see `observe_origin`). Same
+    // gate as the landing probe; `clear` above drops it when that is off.
+    let (origin_ip, origin_country) = if running && probe_exit_ip_enabled(settings) {
+        match super::exit_probe::observe_origin() {
+            Some(sample) => (Some(sample.ip), sample.country),
+            None => (None, None),
+        }
+    } else {
+        (None, None)
+    };
     (
         true,
         Some(SelectedOutbound {
@@ -247,6 +257,8 @@ pub(crate) fn outbound_summary(
             group_now: shown_now,
             landing_ip,
             landing_country,
+            origin_ip,
+            origin_country,
         }),
     )
 }

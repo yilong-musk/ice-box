@@ -9,7 +9,33 @@ import {
   within,
 } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import App from "./App";
+import App, { resetLaunchWindowSizeForTest } from "./App";
+
+/** Lets a test stand in for window chrome commands; real (no-op) otherwise. */
+const windowResize = vi.hoisted(() => ({
+  fn: null as
+    | null
+    | ((
+        delta: number,
+        min: { width: number; height: number },
+        animation?: { durationMs: number; startedAt: number },
+      ) => Promise<number | null>),
+}));
+const windowCommand = vi.hoisted(() => ({
+  fn: null as null | ((command: string) => Promise<void>),
+}));
+
+vi.mock("@platform/windowChrome", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@platform/windowChrome")>();
+  return {
+    ...actual,
+    resizeWindowWidthBy: (
+      ...args: Parameters<typeof actual.resizeWindowWidthBy>
+    ) => (windowResize.fn ? windowResize.fn(...args) : actual.resizeWindowWidthBy(...args)),
+    runWindowCommand: (command: Parameters<typeof actual.runWindowCommand>[0]) =>
+      windowCommand.fn ? windowCommand.fn(command) : actual.runWindowCommand(command),
+  };
+});
 import { APP_VERSION } from "./lib/appVersion";
 import { LANGUAGE_STORAGE_KEY, t, isMessageKey } from "./lib/i18n";
 import { clearNodesSnapshot } from "./lib/nodes";
@@ -170,6 +196,9 @@ describe("App", () => {
   beforeEach(() => {
     phoneShell.value = false;
     desktopShell.value = true;
+    windowResize.fn = null;
+    windowCommand.fn = null;
+    resetLaunchWindowSizeForTest();
     vi.clearAllMocks();
     clearNodesSnapshot();
     getSettings.mockResolvedValue(defaultSettings);
@@ -414,26 +443,131 @@ describe("App", () => {
       expect(minimize.compareDocumentPosition(maximize)).toBe(
         Node.DOCUMENT_POSITION_FOLLOWING,
       );
-      const title = titlebar!.querySelector("h2");
+      // No page title any more; the header's drag strip follows the controls.
+      expect(titlebar!.querySelector("h2")).toBeNull();
+      const title = titlebar!.querySelector("header [data-tauri-drag-region]");
       expect(title).not.toBeNull();
       expect(controls.compareDocumentPosition(title!)).toBe(
         Node.DOCUMENT_POSITION_FOLLOWING,
       );
       expect(titlebar!.firstElementChild).toBe(controls.parentElement);
-      expect(controls.parentElement).toHaveClass("bg-sidebar");
-      expect(controls.parentElement).toHaveClass("w-(--sidebar-width)");
+      // The caption strip has no sidebar fill of its own; it only keeps the
+      // sidebar's width and overlays the sidebar's top row. The desktop opens
+      // collapsed, so the strip starts at the rail's width, which leaves room
+      // for the caption buttons.
+      expect(controls.parentElement).not.toHaveClass("bg-sidebar");
+      expect(controls.parentElement).toHaveClass("w-(--sidebar-width-icon)");
 
-      fireEvent.click(
-        within(titlebar as HTMLElement).getByRole("button", { name: "Toggle Sidebar" }),
-      );
-      expect(controls.parentElement).toHaveClass("w-[8.25rem]");
+      fireEvent.click(within(container).getByTestId("sidebar-collapse-toggle"));
+      // Expanded, the strip follows the full sidebar width.
+      expect(controls.parentElement).toHaveClass("w-(--sidebar-width)");
       expect(controls.parentElement).not.toHaveClass("bg-sidebar");
       expect(controls.compareDocumentPosition(title!)).toBe(
         Node.DOCUMENT_POSITION_FOLLOWING,
       );
+      // The off-canvas trigger only exists in the narrow (sheet) layout.
+      expect(
+        within(titlebar as HTMLElement).queryByRole("button", { name: "Toggle Sidebar" }),
+      ).toBeNull();
     } finally {
       platform.mockRestore();
       userAgent.mockRestore();
+    }
+  });
+
+  it("opens the desktop sidebar collapsed and remembers the last choice", () => {
+    const first = render(<App />);
+    const sidebar = () => document.querySelector('[data-slot="sidebar"]');
+    expect(sidebar()).toHaveAttribute("data-state", "collapsed");
+
+    fireEvent.click(within(first.container).getByTestId("sidebar-collapse-toggle"));
+    expect(sidebar()).toHaveAttribute("data-state", "expanded");
+    expect(window.localStorage.getItem("ice-box.sidebar-open")).toBe("true");
+    first.unmount();
+
+    // Next launch: the expanded choice is restored.
+    const second = render(<App />);
+    expect(sidebar()).toHaveAttribute("data-state", "expanded");
+    fireEvent.click(within(second.container).getByTestId("sidebar-collapse-toggle"));
+    expect(window.localStorage.getItem("ice-box.sidebar-open")).toBe("false");
+    second.unmount();
+
+    render(<App />);
+    expect(sidebar()).toHaveAttribute("data-state", "collapsed");
+  });
+
+  it("holds the content pane's width while the window follows a collapse", async () => {
+    // The window resize trails the sidebar animation, so the pane is pinned
+    // to its width until the window has caught up; otherwise it would narrow
+    // and widen back during the animation.
+    const resolvers: Array<(target: number | null) => void> = [];
+    windowResize.fn = vi.fn(
+      () => new Promise<number | null>((resolve) => resolvers.push(resolve)),
+    );
+    const rect = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockReturnValue({ width: 652, height: 500, top: 0, left: 0, right: 652, bottom: 500, x: 0, y: 0, toJSON: () => ({}) } as DOMRect);
+    window.localStorage.setItem("ice-box.sidebar-open", "true");
+    try {
+      const { container } = render(<App />);
+      const view = within(container);
+      const content = view.getByTestId("app-content");
+
+      fireEvent.click(view.getByTestId("sidebar-collapse-toggle"));
+      // The window is animated along the sidebar's 200ms transition.
+      expect(windowResize.fn).toHaveBeenLastCalledWith(
+        -120,
+        { width: 600, height: 500 },
+        { durationMs: 200, startedAt: expect.any(Number) },
+      );
+      expect(content).toHaveAttribute("data-pinned", "true");
+      expect(content.style.width).toBe("652px");
+
+      // The window reaches its new width: the pin is released once the
+      // sidebar animation is over.
+      window.innerWidth = 1280 - 120;
+      await act(async () => resolvers[resolvers.length - 1](1280 - 120));
+      await waitFor(() => expect(content).not.toHaveAttribute("data-pinned"), {
+        timeout: 1500,
+      });
+      expect(content.style.width).toBe("");
+
+      // A maximized window keeps its size: the pane follows the sidebar.
+      fireEvent.click(view.getByTestId("sidebar-collapse-toggle"));
+      expect(content).toHaveAttribute("data-pinned", "true");
+      await act(async () => resolvers[resolvers.length - 1](null));
+      expect(content).not.toHaveAttribute("data-pinned");
+    } finally {
+      rect.mockRestore();
+      windowResize.fn = null;
+      window.localStorage.removeItem("ice-box.sidebar-open");
+    }
+  });
+
+  it("keeps the icon rail when collapsing leaves the window under 768px", () => {
+    // Collapsing shrinks the window by the sidebar delta; on macOS that takes
+    // the default 860px window to 740px. The rail must stay, not turn into
+    // an off-canvas sheet at the 768px phone breakpoint.
+    window.localStorage.setItem("ice-box.sidebar-open", "false");
+    window.innerWidth = 740;
+    try {
+      const { container } = render(<App />);
+      const sidebar = container.querySelector('[data-slot="sidebar"]');
+      expect(sidebar).not.toBeNull();
+      expect(sidebar).toHaveAttribute("data-collapsible", "icon");
+      expect(sidebar).not.toHaveAttribute("data-mobile");
+      expect(sidebar).not.toHaveClass("hidden");
+      expect(container.querySelector('[data-slot="sidebar-container"]')).not.toHaveClass(
+        "hidden",
+      );
+      expect(
+        within(container.querySelector("[data-titlebar]") as HTMLElement).queryByRole(
+          "button",
+          { name: "Toggle Sidebar" },
+        ),
+      ).toBeNull();
+    } finally {
+      window.localStorage.removeItem("ice-box.sidebar-open");
     }
   });
 
@@ -441,7 +575,8 @@ describe("App", () => {
     const { container } = render(<App />);
     const titlebar = container.querySelector("[data-titlebar]");
     expect(titlebar).not.toBeNull();
-    expect(titlebar!.querySelector("h2")).toHaveTextContent(t("app.nav.home"));
+    // The page title was removed: the selected sidebar item names the page.
+    expect(titlebar!.querySelector("h2")).toBeNull();
     const sidebar = container.querySelector('[data-slot="sidebar"]');
     expect(sidebar).not.toBeNull();
     expect(titlebar!.compareDocumentPosition(sidebar!)).toBe(
@@ -453,9 +588,77 @@ describe("App", () => {
     const { container } = render(<App />);
     const regions = container.querySelectorAll("[data-tauri-drag-region]");
     expect(regions.length).toBe(4);
-    expect(regions[1]).toHaveTextContent(t("app.nav.home"));
+    expect(regions[1]).toHaveAttribute("aria-label", t("app.nav.home"));
+    expect(regions[1]).toBeEmptyDOMElement();
     expect(regions[2]).toHaveTextContent("ice-box");
     expect(regions[3]).toHaveTextContent(APP_VERSION);
+  });
+
+  it("keeps accessible names on collapsed desktop navigation buttons", () => {
+    const { container } = render(<App />);
+    const sidebar = container.querySelector('[data-slot="sidebar"]');
+    expect(sidebar).toHaveAttribute("data-state", "collapsed");
+    for (const label of [
+      t("app.nav.home"),
+      t("app.nav.nodes"),
+      t("app.nav.rules"),
+      t("app.nav.subs"),
+      t("app.nav.connections"),
+      t("app.nav.mcp"),
+      t("app.nav.settings"),
+    ]) {
+      const button = within(container).getByRole("button", { name: label });
+      expect(button).toHaveAttribute("aria-label", label);
+    }
+  });
+
+  it("grows the desktop window at launch when an expanded sidebar was remembered", () => {
+    const resize = vi.fn().mockResolvedValue(1280 + 120);
+    windowResize.fn = resize;
+    window.localStorage.setItem("ice-box.sidebar-open", "true");
+    try {
+      render(<App />);
+      expect(resize).toHaveBeenCalledWith(120, { width: 720, height: 500 });
+    } finally {
+      window.localStorage.removeItem("ice-box.sidebar-open");
+    }
+  });
+
+  it("drags and maximizes from the content top strip, but ignores portaled modals and selectable text", async () => {
+    const cmd = vi.fn().mockResolvedValue(undefined);
+    windowCommand.fn = cmd;
+    const { container } = render(<App />);
+    const view = within(container);
+    const content = view.getByTestId("app-content");
+
+    // Plain background in the top 48px starts drag / toggles maximize.
+    fireEvent.mouseDown(content, { button: 0, clientY: 16 });
+    expect(cmd).toHaveBeenCalledWith("startDragging");
+    fireEvent.doubleClick(content, { button: 0, clientY: 16 });
+    expect(cmd).toHaveBeenCalledWith("toggleMaximize");
+    cmd.mockClear();
+
+    // Selectable text inside the top 48px must not hijack pointer drags.
+    const selectable = document.createElement("span");
+    selectable.setAttribute("data-selectable", "");
+    content.appendChild(selectable);
+    fireEvent.mouseDown(selectable, { button: 0, clientY: 16 });
+    fireEvent.doubleClick(selectable, { button: 0, clientY: 16 });
+    expect(cmd).not.toHaveBeenCalled();
+    selectable.remove();
+
+    // Opening a portaled dialog (LandingMapDialog) renders its overlay into
+    // document.body. Synthetic events bubble through the React tree into
+    // app-content, so clicks in the top 48px must not start a window drag.
+    fireEvent.click(view.getByTestId("home-landing-expand"));
+    const overlay = await waitFor(() => {
+      const el = document.querySelector('[data-slot="dialog-overlay"]');
+      expect(el).not.toBeNull();
+      return el as HTMLElement;
+    });
+    fireEvent.mouseDown(overlay, { button: 0, clientY: 12 });
+    fireEvent.doubleClick(overlay, { button: 0, clientY: 12 });
+    expect(cmd).not.toHaveBeenCalled();
   });
 
   it("keeps the nodes list mounted when switching away and back", async () => {
@@ -478,11 +681,13 @@ describe("App", () => {
       expect(view.getByText("proxy-1")).toBeInTheDocument();
     });
     expect(view.queryByText(t("nodes.emptyTitle"))).toBeNull();
-    const actions = container.querySelector("[data-titlebar] [data-titlebar-actions]");
+    // Page actions moved out of the title bar into a floating action area in
+    // the content, so every page can start at the window top.
+    expect(container.querySelector("[data-titlebar] [data-titlebar-actions]")).toBeNull();
+    const actions = container.querySelector("[data-page-toolbar]");
     expect(actions).not.toBeNull();
-    // The nodes pane portals into its own slot, inset like the page content.
     const nodesSlot = container.querySelector('[data-titlebar-slot="nodes"]');
-    expect(nodesSlot).toHaveClass("not-empty:pr-7");
+    expect(actions!.contains(nodesSlot)).toBe(true);
     expect(nodesSlot).not.toHaveAttribute("hidden");
     const batch = within(actions as HTMLElement).getByRole("button", {
       name: t("nodes.batchTest"),
@@ -558,6 +763,10 @@ describe("App", () => {
     });
     expect(checkAppUpdate).toHaveBeenCalledWith(true, true);
     expect(screen.queryByRole("alertdialog")).toBeNull();
+    // A badge on the logo's corner, out of flow, so the logo does not move.
+    const badge = screen.getByTestId("app-update-badge");
+    expect(badge).toHaveClass("absolute");
+    expect(badge.parentElement!.querySelector(".status-logo")).not.toBeNull();
     fireEvent.click(
       screen.getByRole("button", { name: t("app.updateAvailableAria", { version: "0.1.6" }) }),
     );
@@ -655,17 +864,33 @@ describe("App", () => {
     await waitFor(() => {
       expect(view.getByTestId("phone-tab-bar")).toBeInTheDocument();
     });
-    expect(view.getByTestId("app-main")).toHaveClass("pt-3");
+    const header = view.getByTestId("phone-header");
+    expect(header).toHaveClass("phone-header", "absolute", "top-0");
+    expect(header.querySelector("h2")).toBeNull();
+    const tabBar = view.getByTestId("phone-tab-bar");
+    expect(tabBar).toHaveClass("phone-tab-bar", "rounded-full");
+    expect(tabBar.style.getPropertyValue("--tab-index")).toBe("0");
+    expect(tabBar.style.getPropertyValue("--tab-count")).toBe("5");
+    expect(view.getByTestId("phone-tab-indicator")).toBeInTheDocument();
+    expect(view.getByTestId("app-main")).toHaveClass("pt-3", "pb-0");
     expect(view.queryByTestId("app-brand-row")).not.toBeInTheDocument();
     const home = view.getByRole("button", { name: t("app.nav.home") });
     expect(home).toHaveAttribute("aria-current", "page");
-    // Top-aligned 8px padding, not justify-center: a centered 16px glyph in
-    // this row sits at 10.5px and blurs off 2x.
-    expect(home).toHaveClass("py-2", "leading-4");
+    // Top-aligned 8px padding, not justify-center: a centered glyph in this
+    // row lands on a half-pixel and blurs off 2x.
+    expect(home).toHaveClass("py-2", "leading-[14px]");
     expect(home).not.toHaveClass("justify-center", "leading-tight");
-    expect(view.getByRole("button", { name: t("app.nav.apps") })).toBeInTheDocument();
+    const apps = view.getByRole("button", { name: t("app.nav.apps") });
+    expect(apps).toBeInTheDocument();
     expect(view.queryByRole("button", { name: t("app.nav.nodes") })).not.toBeInTheDocument();
     expect(view.getByTestId("nodes-panel")).toBeInTheDocument();
+    // On the phone Home screen the whole page scrolls as one surface rather
+    // than trapping the embedded node list in a nested scroll viewport.
+    expect(
+      view
+        .getByTestId("nodes-panel")
+        .querySelector('[data-slot="scroll-area-viewport"]'),
+    ).toBeNull();
     expect(view.queryByRole("button", { name: t("app.nav.connections") })).not.toBeInTheDocument();
     expect(view.queryByRole("button", { name: t("app.nav.mcp") })).not.toBeInTheDocument();
     expect(view.queryByTestId("connections-panel")).not.toBeInTheDocument();
@@ -675,6 +900,11 @@ describe("App", () => {
       expect(checkAppUpdate).toHaveBeenCalled();
     });
     expect(setTrayUpdateAvailable).not.toHaveBeenCalled();
+
+    // Switching tabs glides the floating selection indicator to the active slot.
+    fireEvent.click(apps);
+    expect(tabBar.style.getPropertyValue("--tab-index")).toBe("1");
+    expect(apps).toHaveAttribute("aria-current", "page");
   });
 
   it("opens the Apps page from the phone tab bar", async () => {

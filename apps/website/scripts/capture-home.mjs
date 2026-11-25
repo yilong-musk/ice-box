@@ -3,7 +3,7 @@
 /**
  * Capture the Live Demo Home view into docs/images/home.png (en) and
  * docs/images/home.zh-CN.png (zh) at the desktop app's default window size
- * (860x620), with simulated macOS window controls.
+ * (740x620, sidebar collapsed), with simulated macOS window controls.
  *
  * Usage:
  *   bash scripts/capture-demo-home.sh
@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { waitForAppFonts } from "./capture-fonts.mjs";
 
-const VIEWPORT = { width: 860, height: 620 };
+const VIEWPORT = { width: 740, height: 620 };
 const SCALE = 2;
 const PREVIEW_PORT = 4175;
 
@@ -149,7 +149,7 @@ async function verifyMockedHomeData(page) {
   const landingIp = (
     await page.getByTestId("home-outbound-ip").textContent({ timeout: 15_000 })
   )?.trim();
-  if (!landingIp || !/^\d{1,3}(?:\.\d{1,3}){3}$/.test(landingIp)) {
+  if (!landingIp || !/^(?:\S+\s+)?\d{1,3}(?:\.\d{1,3}){3}$/.test(landingIp)) {
     throw new Error(
       `Live Demo landing IP must show mocked IPv4 data, got ${JSON.stringify(landingIp)}`,
     );
@@ -160,12 +160,12 @@ async function verifyMockedHomeData(page) {
     throw new Error("Live Demo must show the MCP navigation entry");
   }
 
-  const mcpStatus = (
-    await page.getByTestId("home-health-mcp").textContent({ timeout: 15_000 })
+  const currentNode = (
+    await page.getByTestId("home-proxy-current-node").textContent({ timeout: 15_000 })
   )?.trim();
-  if (!mcpStatus || !/^(Running|运行中)$/.test(mcpStatus)) {
+  if (!currentNode || currentNode === "—") {
     throw new Error(
-      `Live Demo MCP service status must be running, got ${JSON.stringify(mcpStatus)}`,
+      `Live Demo proxy status card must show the selected node, got ${JSON.stringify(currentNode)}`,
     );
   }
 }

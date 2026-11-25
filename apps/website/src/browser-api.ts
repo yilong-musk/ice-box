@@ -28,6 +28,9 @@ import type {
 } from "../../../apps/desktop/src/api/contracts";
 import { formatQuota } from "../../../apps/desktop/src/lib/traffic";
 import { copyText } from "../../../apps/desktop/src/lib/clipboard";
+import { APP_VERSION } from "../../../apps/desktop/src/lib/appVersion";
+import { readLanguagePreference, resolveLanguage } from "../../../apps/desktop/src/lib/language";
+import type { UpdateProgressPayload } from "../../../apps/desktop/src/api/contracts";
 import {
   coreLogExportFilename,
   saveTextFile,
@@ -64,15 +67,54 @@ function isCaptureMode(): boolean {
 
 const CAPTURE_NOW = Date.UTC(2026, 0, 15, 12, 0, 0);
 const DEMO_LANDING_IP = "203.0.113.42";
+const DEMO_ORIGIN_IP = "198.51.100.7";
+
+/** Demo landing region: read from the selected node's name (flag emoji, ISO
+ * code, or a common place name) so switching nodes moves the map marker.
+ * Falls back to Hong Kong. */
+const DEMO_REGION_HINTS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/香港|hong\s*kong|\bHK\b/i, "HK"],
+  [/台湾|台灣|taiwan|\bTW\b/i, "TW"],
+  [/日本|东京|大阪|japan|tokyo|osaka|\bJP\b/i, "JP"],
+  [/新加坡|singapore|\bSG\b/i, "SG"],
+  [/韩国|首尔|korea|seoul|\bKR\b/i, "KR"],
+  [/美国|洛杉矶|硅谷|united\s*states|\bUSA?\b|los\s*angeles|seattle|new\s*york/i, "US"],
+  [/英国|伦敦|united\s*kingdom|london|\bUK\b|\bGB\b/i, "GB"],
+  [/德国|法兰克福|germany|frankfurt|\bDE\b/i, "DE"],
+  [/法国|巴黎|france|paris|\bFR\b/i, "FR"],
+  [/荷兰|netherlands|amsterdam|\bNL\b/i, "NL"],
+  [/加拿大|canada|\bCA\b/i, "CA"],
+  [/澳大利亚|悉尼|australia|sydney|\bAU\b/i, "AU"],
+  [/印度|india|\bIN\b/i, "IN"],
+  [/俄罗斯|russia|\bRU\b/i, "RU"],
+];
+
+function demoLandingCountry(name: string): string {
+  const flag = [...name].filter((ch) => {
+    const cp = ch.codePointAt(0) ?? 0;
+    return cp >= 0x1f1e6 && cp <= 0x1f1ff;
+  });
+  if (flag.length >= 2) {
+    return flag
+      .slice(0, 2)
+      .map((ch) => String.fromCharCode((ch.codePointAt(0) ?? 0) - 0x1f1e6 + 65))
+      .join("");
+  }
+  for (const [pattern, code] of DEMO_REGION_HINTS) {
+    if (pattern.test(name)) return code;
+  }
+  return "HK";
+}
 const TOKYO_NODE = "🇯🇵 Tokyo / edge-01";
 const SINGAPORE_NODE = "🇸🇬 Singapore / edge-02";
+const LOS_ANGELES_NODE = "🇺🇸 Los Angeles / edge-03";
 
 const settings: AppSettings = {
   mixed_listen: "127.0.0.1",
   mixed_port: 17890,
   clash_api_listen: "127.0.0.1",
   clash_api_port: 19090,
-  selected_tag: TOKYO_NODE,
+  selected_tag: LOS_ANGELES_NODE,
   auto_set_system_proxy: true,
   proxy_service_enabled: false,
   tray_display_mode: "icon_and_speed",
@@ -102,7 +144,7 @@ const settings: AppSettings = {
 const personalNodes: NodeInfo[] = [
   { tag: TOKYO_NODE, outbound_type: "vmess", group_now: null, group_all: null },
   { tag: SINGAPORE_NODE, outbound_type: "trojan", group_now: null, group_all: null },
-  { tag: "🇺🇸 Los Angeles / edge-03", outbound_type: "shadowsocks", group_now: null, group_all: null },
+  { tag: LOS_ANGELES_NODE, outbound_type: "shadowsocks", group_now: null, group_all: null },
   { tag: "🇩🇪 Frankfurt / edge-04", outbound_type: "hysteria2", group_now: null, group_all: null },
   { tag: "🇰🇷 Seoul / edge-05", outbound_type: "vless", group_now: null, group_all: null },
   { tag: "🇭🇰 Hong Kong / edge-06", outbound_type: "trojan", group_now: null, group_all: null },
@@ -175,14 +217,14 @@ const MB = 1024 * 1024;
  * total, so the ratios hold for the minutes someone looks at the demo.
  */
 const DEMO_CONNECTIONS: DemoConnection[] = [
-  { host: "api.github.com", port: "443", network: "tcp", chains: [TOKYO_NODE, "proxy"], rule: "domain_suffix=github.com => route(proxy)", process: "/usr/bin/git", ageSec: 12, upBytes: 0.6 * MB, downBytes: 18 * MB, up: 2_400, down: 60_000 },
-  { host: "rr4---sn-ogul7n7s.googlevideo.com", port: "443", network: "udp", chains: [TOKYO_NODE, "proxy"], rule: "rule_set=geosite-youtube => route(proxy)", process: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", ageSec: 187, upBytes: 1.2 * MB, downBytes: 48 * MB, up: 3_000, down: 160_000 },
-  { host: "chatgpt.com", port: "443", network: "tcp", chains: [TOKYO_NODE, "proxy"], rule: "rule_set=geosite-openai => route(proxy)", process: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", ageSec: 431, upBytes: 0.9 * MB, downBytes: 11 * MB, up: 900, down: 12_000 },
-  { host: "registry.npmjs.org", port: "443", network: "tcp", chains: [TOKYO_NODE, "proxy"], rule: "final", process: "/usr/local/bin/node", ageSec: 3, upBytes: 0.2 * MB, downBytes: 7 * MB, up: 1_100, down: 90_000 },
+  { host: "api.github.com", port: "443", network: "tcp", chains: [LOS_ANGELES_NODE, "proxy"], rule: "domain_suffix=github.com => route(proxy)", process: "/usr/bin/git", ageSec: 12, upBytes: 0.6 * MB, downBytes: 18 * MB, up: 2_400, down: 60_000 },
+  { host: "rr4---sn-ogul7n7s.googlevideo.com", port: "443", network: "udp", chains: [LOS_ANGELES_NODE, "proxy"], rule: "rule_set=geosite-youtube => route(proxy)", process: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", ageSec: 187, upBytes: 1.2 * MB, downBytes: 48 * MB, up: 3_000, down: 160_000 },
+  { host: "chatgpt.com", port: "443", network: "tcp", chains: [LOS_ANGELES_NODE, "proxy"], rule: "rule_set=geosite-openai => route(proxy)", process: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", ageSec: 431, upBytes: 0.9 * MB, downBytes: 11 * MB, up: 900, down: 12_000 },
+  { host: "registry.npmjs.org", port: "443", network: "tcp", chains: [LOS_ANGELES_NODE, "proxy"], rule: "final", process: "/usr/local/bin/node", ageSec: 3, upBytes: 0.2 * MB, downBytes: 7 * MB, up: 1_100, down: 90_000 },
   { host: "www.bilibili.com", port: "443", network: "tcp", chains: ["direct"], rule: "rule_set=geosite-cn => route(direct)", process: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", ageSec: 64, upBytes: 0.4 * MB, downBytes: 26 * MB, up: 600, down: 85_000 },
-  { host: "mtalk.google.com", port: "5228", network: "tcp", chains: [TOKYO_NODE, "proxy"], rule: "domain_suffix=google.com => route(proxy)", process: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", ageSec: 3_720, upBytes: 0.1 * MB, downBytes: 2.5 * MB, up: 0, down: 0 },
+  { host: "mtalk.google.com", port: "5228", network: "tcp", chains: [LOS_ANGELES_NODE, "proxy"], rule: "domain_suffix=google.com => route(proxy)", process: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", ageSec: 3_720, upBytes: 0.1 * MB, downBytes: 2.5 * MB, up: 0, down: 0 },
   { host: "", port: "123", network: "udp", chains: ["direct"], rule: "ip_is_private => route(direct)", process: "", ageSec: 28, upBytes: 0.05 * MB, downBytes: 1.8 * MB, up: 0, down: 0 },
-  { host: "slack.com", port: "443", network: "tcp", chains: [TOKYO_NODE, "proxy"], rule: "domain_suffix=slack.com => route(proxy)", process: "/Applications/Slack.app/Contents/MacOS/Slack", ageSec: 912, upBytes: 0.3 * MB, downBytes: 4 * MB, up: 300, down: 2_000 },
+  { host: "slack.com", port: "443", network: "tcp", chains: [LOS_ANGELES_NODE, "proxy"], rule: "domain_suffix=slack.com => route(proxy)", process: "/Applications/Slack.app/Contents/MacOS/Slack", ageSec: 912, upBytes: 0.3 * MB, downBytes: 4 * MB, up: 300, down: 2_000 },
 ];
 
 /** Milliseconds before a closed demo connection is dialled again. */
@@ -397,7 +439,7 @@ function activeNodes(): NodeInfo[] {
 }
 
 const ruleRows = [
-  ["domain", "github.com", TOKYO_NODE],
+  ["domain", "github.com", LOS_ANGELES_NODE],
   ["domain_suffix", "googleapis.com", SINGAPORE_NODE],
   ["geoip", "cn", "direct"],
   // route.final is not a rule, so the backend never lists it; end on a rule set.
@@ -445,6 +487,30 @@ function demoMcpStatus(): McpStatus {
 
 const delay = (ms = 80) =>
   isCaptureMode() ? Promise.resolve() : new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+
+/**
+ * The demo has no update feed. So visitors can see the update flow, a manual
+ * "Check for Updates" always finds the next minor version; from then on the
+ * background check reports the same version, so the sidebar arrow stays. The
+ * background check never finds one on its own, and nothing ever prompts.
+ * README captures never press the button, so they show no update.
+ */
+const demoUpdate = {
+  offered: false,
+  progressHandlers: new Set<(payload: UpdateProgressPayload) => void>(),
+};
+
+function demoNextVersion(): string {
+  const [major = 0, minor = 0] = APP_VERSION.split(".").map((part) => Number.parseInt(part, 10) || 0);
+  return `${major}.${minor + 1}.0`;
+}
+
+/** Shown under the update row once the simulated download finishes. */
+function demoInstallMessage(): string {
+  return resolveLanguage(readLanguagePreference()) === "zh"
+    ? "这是在线演示，不会真的安装更新。请前往下载页安装正式版。"
+    : "This is the Live Demo, so the update is not installed. Get the real app from the download section.";
+}
 
 function demoSingboxConfig(): string {
   return "{\n  \"outbounds\": [\n    { \"type\": \"selector\", \"tag\": \"proxy\", \"outbounds\": [\"direct\"] }\n  ],\n  \"route\": { \"final\": \"proxy\" }\n}";
@@ -501,6 +567,13 @@ export const api = {
           outbound_type: node.outbound_type,
           group_now: node.group_now,
           landing_ip: running ? DEMO_LANDING_IP : null,
+          landing_country: running
+            ? demoLandingCountry(node.group_now ?? node.tag)
+            : null,
+          // A fixed "measured" origin, so the demo's map never shows the
+          // "guessed" tag that only applies when the real direct probe fails.
+          origin_ip: running ? DEMO_ORIGIN_IP : null,
+          origin_country: running ? "CN" : null,
         };
       })(),
     };
@@ -527,14 +600,34 @@ export const api = {
     if (settings.prefer_ipv6) settings.ipv6 = true;
     if (!settings.ipv6) settings.prefer_ipv6 = false;
   },
-  async checkAppUpdate(): Promise<CheckAppUpdateResponse> {
-    await delay();
-    return { available: false, version: null, notes: null, skipped: false, should_prompt: false };
+  async checkAppUpdate(background = false): Promise<CheckAppUpdateResponse> {
+    // A visitor's "Check for Updates" always finds one (see demoUpdate).
+    await delay(background ? 80 : 700);
+    if (!background) demoUpdate.offered = true;
+    return demoUpdate.offered
+      ? { available: true, version: demoNextVersion(), notes: null, skipped: false, should_prompt: false }
+      : { available: false, version: null, notes: null, skipped: false, should_prompt: false };
   },
   async recordUpdatePrompt(): Promise<void> {},
   async recordAppUpdateCheck(): Promise<void> {},
   async skipAppUpdate(): Promise<void> {},
-  async installAppUpdate(): Promise<void> { await delay(); },
+  async installAppUpdate(): Promise<void> {
+    // Play the download, then explain why nothing installs: the real app
+    // would restart into the new version here.
+    const total = 18_400_000;
+    const steps = 20;
+    for (let step = 1; step <= steps; step++) {
+      await delay(90);
+      const payload: UpdateProgressPayload = {
+        phase: "progress",
+        downloaded: Math.round((total * step) / steps),
+        content_length: total,
+      };
+      for (const handler of demoUpdate.progressHandlers) handler(payload);
+    }
+    await delay(300);
+    throw { message: demoInstallMessage() };
+  },
   async openAppDownload(): Promise<void> {},
   async requestBatteryExemption(): Promise<void> {},
   async openNetworkSettings(): Promise<void> {},
@@ -548,8 +641,13 @@ export const api = {
     );
     return "saved";
   },
-  async listenAppUpdateProgress(): Promise<() => void> {
-    return () => {};
+  async listenAppUpdateProgress(
+    handler: (payload: UpdateProgressPayload) => void,
+  ): Promise<() => void> {
+    demoUpdate.progressHandlers.add(handler);
+    return () => {
+      demoUpdate.progressHandlers.delete(handler);
+    };
   },
   async setTrayLanguage(): Promise<void> {},
   async setTrayUpdateAvailable(): Promise<void> {},
@@ -653,7 +751,7 @@ export const api = {
     await delay(120);
     closeDemoConnections(() => true);
   },
-  async getRuntimeConfig(): Promise<string> { return JSON.stringify({ route: { final: TOKYO_NODE } }, null, 2); },
+  async getRuntimeConfig(): Promise<string> { return JSON.stringify({ route: { final: LOS_ANGELES_NODE } }, null, 2); },
   async revealDataDir(): Promise<void> {},
   async copyProxyCommand(): Promise<void> { await delay(); },
   async openProxyTerminal(): Promise<void> { await delay(); },
