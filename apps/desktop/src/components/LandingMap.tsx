@@ -405,6 +405,7 @@ function createEngine(
       .getPropertyValue("--primary")
       .trim();
     return {
+      dark,
       dot: resolveColor(ctx, getComputedStyle(canvas).color, dark ? "#f4f4f5" : "#18181b"),
       accent: resolveColor(ctx, primary, dark ? "#0a84ff" : "#007aff"),
     };
@@ -466,7 +467,9 @@ function createEngine(
       by[b][n] = y;
     }
 
-    const base = located ? 0.38 : state === "probing" ? 0.34 : 0.22;
+    const base = colors.dark
+      ? located ? 0.38 : state === "probing" ? 0.34 : 0.22
+      : located ? 0.46 : state === "probing" ? 0.4 : 0.28;
     ctx.fillStyle = colors.dot;
     for (let b = 0; b < BUCKETS; b++) {
       const zMid = (b + 0.5) / BUCKETS;
@@ -544,7 +547,10 @@ function createEngine(
     const flatR = Math.max(0.6, DOT_STEP * s * 0.3);
     const pad = Math.max(globeR, flatR) * 2;
     const located = state === "located" && target != null;
-    const base = located ? 0.38 : state === "probing" ? 0.34 : 0.22;
+    const base = colors.dark
+      ? located ? 0.38 : state === "probing" ? 0.34 : 0.22
+      : located ? 0.46 : state === "probing" ? 0.4 : 0.28;
+    const flatAlpha = colors.dark ? FLAT_ALPHA : 0.35;
     const cosT = target ? Math.cos(target[0] * DEG) : 1;
 
     for (const list of lv) list.length = 0;
@@ -585,7 +591,7 @@ function createEngine(
         // the map unrolls (no stray accent dots left beside the pin).
         const r = lerp(globeR, flatR, m);
         const accent = toLevel((z > 0 && !isExtra ? MAX_ALPHA : 0) * (1 - m));
-        const plain = toLevel(FLAT_ALPHA * m);
+        const plain = toLevel(flatAlpha * m);
         if (accent > 0) lv[LEVELS + accent].push(x, y, r);
         if (plain > 0) lv[plain].push(x, y, r);
         continue;
@@ -596,7 +602,7 @@ function createEngine(
       const limbFade = lerp(1, Math.min(1, Math.max(0, z) / 0.15), turn);
       const ga = z > 0 && !isExtra ? base * (0.45 + 0.55 * z) * limbFade : 0;
       const gr = z > 0 ? globeR * (0.7 + 0.3 * z) : globeR * 0.7;
-      const level = toLevel(lerp(ga, FLAT_ALPHA, m));
+      const level = toLevel(lerp(ga, flatAlpha, m));
       if (level <= 0) continue;
       lv[level].push(x, y, lerp(gr, flatR, m));
     }

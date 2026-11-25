@@ -402,7 +402,7 @@ function SidebarCollapseToggle({ className }: { className?: string }) {
         NAV_BUTTON_CLASS,
         // Quiet chrome: faint, small icon, no fill; it only firms up on
         // hover, like the sidebar toggle in macOS apps.
-        "size-10 justify-center px-0! text-sidebar-foreground/40 hover:bg-sidebar-hover! hover:text-sidebar-foreground/80 [&_svg]:size-4! [&_svg]:stroke-[1.75]",
+        "size-10 justify-center px-0! text-sidebar-foreground/55 hover:bg-sidebar-hover! hover:text-sidebar-foreground/85 dark:text-sidebar-foreground/40 dark:hover:text-sidebar-foreground/80 [&_svg]:size-4! [&_svg]:stroke-[1.75]",
         className,
       )}
       onClick={toggleSidebar}
@@ -722,7 +722,7 @@ function AppShell() {
               <h1 className="font-heading text-sm font-medium tracking-tight">
                 ice-box
               </h1>
-              <p className="mt-0.5 text-[11px] leading-none text-foreground/50 tabular-nums">
+              <p className="mt-0.5 text-[11px] leading-none text-muted-foreground dark:text-foreground/50 tabular-nums">
                 {APP_VERSION}
               </p>
             </div>
@@ -882,7 +882,7 @@ function AppShell() {
                   </h1>
                 </div>
                 <p
-                  className="text-[11px] leading-none text-sidebar-foreground/50 tabular-nums group-data-[collapsible=icon]:hidden"
+                  className="text-[11px] leading-none text-sidebar-foreground/68 dark:text-sidebar-foreground/50 tabular-nums group-data-[collapsible=icon]:hidden"
                   aria-label={t("app.versionAria", { version: APP_VERSION })}
                   data-tauri-drag-region
                 >

@@ -126,7 +126,7 @@ export function Mcp({ active = true }: { active?: boolean }) {
                 {t("mcp.service")}
                 <Badge
                   variant={running ? "secondary" : "outline"}
-                  className={running ? "text-ok" : undefined}
+                  className={running ? "bg-ok/12 text-ok dark:bg-ok/18" : undefined}
                 >
                   {running ? t("mcp.running") : t("mcp.stopped")}
                 </Badge>

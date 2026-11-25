@@ -70,46 +70,46 @@
     /* Apple HIG system palette (macOS light). Accent is systemBlue. */
     /* Layering (light): page < sidebar < card < popover, on a faintly cool
        neutral, so surfaces separate by tone rather than by borders alone. */
-    --background: oklch(0.965 0.004 270);
+    --background: oklch(0.96 0.004 270);
     --foreground: oklch(0.2 0.006 270);
-    --card: oklch(0.995 0.001 270);
+    --card: oklch(1 0 0);
     --card-foreground: oklch(0.2 0.006 270);
-    --popover: oklch(1 0 0 / 94%);
+    --popover: oklch(1 0 0 / 95%);
     --popover-foreground: oklch(0.2 0.004 286);
-    --primary: oklch(0.603 0.218 257);
+    --primary: oklch(0.542 0.212 257);
     --primary-foreground: oklch(1 0 0);
-    --secondary: oklch(0.2 0.004 286 / 6%);
+    --secondary: oklch(0.2 0.004 286 / 6.5%);
     --secondary-foreground: oklch(0.2 0.004 286);
-    --muted: oklch(0.2 0.004 286 / 5%);
-    --muted-foreground: oklch(0.2 0.004 286 / 55%);
-    --accent: oklch(0.2 0.004 286 / 6%);
+    --muted: oklch(0.2 0.004 286 / 5.5%);
+    --muted-foreground: oklch(0.2 0.006 270 / 66%);
+    --accent: oklch(0.2 0.004 286 / 6.5%);
     --accent-foreground: oklch(0.2 0.004 286);
-    --destructive: oklch(0.63 0.23 27);
-    --border: oklch(0.2 0.004 286 / 10%);
-    --input: oklch(0.2 0.004 286 / 14%);
-    --ring: oklch(0.603 0.218 257 / 60%);
-    --chart-1: oklch(0.603 0.218 257);
-    --chart-2: oklch(0.66 0.13 215);
-    --chart-3: oklch(0.79 0.17 70);
-    --chart-4: oklch(0.62 0.2 300);
-    --chart-5: oklch(0.2 0.004 286 / 35%);
+    --destructive: oklch(0.525 0.205 27);
+    --border: oklch(0.2 0.004 286 / 13%);
+    --input: oklch(0.2 0.004 286 / 18%);
+    --ring: oklch(0.542 0.212 257 / 60%);
+    --chart-1: oklch(0.542 0.212 257);
+    --chart-2: oklch(0.62 0.13 215);
+    --chart-3: oklch(0.75 0.17 70);
+    --chart-4: oklch(0.56 0.2 300);
+    --chart-5: oklch(0.2 0.004 286 / 42%);
     /* Green is kept for success / connected status only; "active" and
        "selected" states use the primary blue. */
-    --ok: oklch(0.63 0.14 158);
-    --warn: oklch(0.68 0.16 60);
-    --traffic-down: oklch(0.603 0.218 257);
-    --traffic-up: oklch(0.6 0.19 300);
+    --ok: oklch(0.495 0.145 156);
+    --warn: oklch(0.53 0.145 65);
+    --traffic-down: oklch(0.515 0.205 257);
+    --traffic-up: oklch(0.515 0.185 300);
     /* HIG-sized corners: controls 6-8px, cards ~10px, sheets ~14px. */
     --radius: 0.5rem;
-    --sidebar: oklch(0.935 0.005 270 / 84%);
+    --sidebar: oklch(0.932 0.005 270 / 88%);
     --sidebar-foreground: oklch(0.2 0.004 286);
-    --sidebar-primary: oklch(0.603 0.218 257);
+    --sidebar-primary: oklch(0.542 0.212 257);
     --sidebar-primary-foreground: oklch(1 0 0);
-    --sidebar-hover: oklch(0.2 0.004 286 / 5%);
-    --sidebar-accent: oklch(0.2 0.004 286 / 9%);
+    --sidebar-hover: oklch(0.2 0.004 286 / 6%);
+    --sidebar-accent: oklch(0.2 0.004 286 / 10%);
     --sidebar-accent-foreground: oklch(0.2 0.004 286);
-    --sidebar-border: oklch(0.2 0.004 286 / 8%);
-    --sidebar-ring: oklch(0.603 0.218 257 / 60%);
+    --sidebar-border: oklch(0.2 0.004 286 / 11%);
+    --sidebar-ring: oklch(0.542 0.212 257 / 60%);
 }
 
 .dark {
@@ -614,6 +614,10 @@ code,
 .landing-map-dialog,
 .landing-map-full {
   /* Warm amber for "you", against the primary blue for the exit. */
+  --landing-user: oklch(0.65 0.16 65);
+}
+.dark .landing-map-dialog,
+.dark .landing-map-full {
   --landing-user: oklch(0.78 0.15 70);
 }
 .landing-legend-user,

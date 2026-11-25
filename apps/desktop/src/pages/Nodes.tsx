@@ -129,7 +129,7 @@ function FavoriteButton({
         // Same right inset as the card's delay button below it, so the star and
         // the delay/test glyph line up on the card's right edge.
         "relative z-10 -mr-1.5 flex h-6 shrink-0 items-center justify-end rounded px-1.5 transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50",
-        favorite ? "text-warn" : "text-muted-foreground/70 hover:text-foreground",
+        favorite ? "text-warn" : "text-muted-foreground/80 hover:text-foreground dark:text-muted-foreground/70",
       )}
       disabled={pending}
       aria-pressed={favorite}
@@ -286,7 +286,7 @@ const NodeCard = memo(function NodeCard({
             onClick={() => onTestTag(tag)}
           >
             {delay === null ? (
-              <Gauge className="size-3.5 text-muted-foreground/70" aria-hidden="true" />
+              <Gauge className="size-3.5 text-muted-foreground/80 dark:text-muted-foreground/70" aria-hidden="true" />
             ) : (
               <DelayText delay={delay} />
             )}

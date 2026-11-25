@@ -64,7 +64,7 @@ export function ProxyModePicker({ variant, value, disabled, onChange, className 
           <ToggleGroupItem
             key={mode}
             value={mode}
-            className="h-9 min-w-0 flex-1 gap-1.5 rounded-lg text-muted-foreground hover:bg-transparent hover:text-foreground data-[state=on]:bg-background data-[state=on]:font-semibold data-[state=on]:text-foreground data-[state=on]:shadow-sm"
+            className="h-9 min-w-0 flex-1 gap-1.5 rounded-lg text-muted-foreground hover:bg-transparent hover:text-foreground data-[state=on]:bg-card data-[state=on]:font-semibold data-[state=on]:text-foreground data-[state=on]:shadow-sm dark:data-[state=on]:bg-background"
           >
             <Icon aria-hidden="true" />
             {t(labelKey)}
