@@ -276,10 +276,17 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Cache ~/.gradle/caches and ~/.gradle/wrapper to avoid repeated Maven
+      # Central downloads (and intermittent HTTP 429 rate limits).
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "17"
+          cache: gradle
+          cache-dependency-path: |
+            apps/mobile/**/*.gradle*
+            apps/mobile/**/gradle.properties
+            apps/mobile/**/gradle-wrapper.properties
 
       # Go builds libbox from a sing-box checkout that does not exist yet.
       # The default module cache looks for a repo go.mod and warns when it
@@ -354,9 +361,12 @@ jobs:
         if: steps.libbox.outputs.cache-hit != 'true'
         run: bash scripts/build-libbox.sh android arm64
 
+      # Disable the persistent Gradle daemon so no background process holds
+      # lock files when setup-java archives ~/.gradle/caches.
       - name: Build debug APK
         env:
           ICE_BOX_SKIP_LIBBOX: "1"
+          GRADLE_OPTS: "-Dorg.gradle.daemon=false"
         run: bash scripts/build-android-apk.sh debug arm64
 
       - name: Upload debug APK

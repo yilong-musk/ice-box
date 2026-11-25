@@ -489,10 +489,17 @@ jobs:
         with:
           ref: ${{ needs.preflight.outputs.sha }}
 
+      # Cache ~/.gradle/caches and ~/.gradle/wrapper to avoid repeated Maven
+      # Central downloads (and intermittent HTTP 429 rate limits).
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "17"
+          cache: gradle
+          cache-dependency-path: |
+            apps/mobile/**/*.gradle*
+            apps/mobile/**/gradle.properties
+            apps/mobile/**/gradle-wrapper.properties
 
       # Go builds libbox from a sing-box checkout that does not exist yet.
       # The default module cache looks for a repo go.mod and warns when it
@@ -549,12 +556,15 @@ jobs:
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/ice-box-release.jks"
           test -s "$RUNNER_TEMP/ice-box-release.jks"
 
+      # Disable the persistent Gradle daemon so no background process holds
+      # lock files when setup-java archives ~/.gradle/caches.
       - name: Build signed release APK
         env:
           ICE_BOX_ANDROID_KEYSTORE: ${{ runner.temp }}/ice-box-release.jks
           ICE_BOX_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ICE_BOX_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ICE_BOX_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          GRADLE_OPTS: "-Dorg.gradle.daemon=false"
         run: bash scripts/build-android-apk.sh release arm64
 
       - name: Name and verify the release APK
