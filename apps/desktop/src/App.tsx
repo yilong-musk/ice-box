@@ -108,17 +108,12 @@ const SettingsPage = memo(Settings);
 const McpPage = memo(Mcp);
 
 /**
- * Collapsed rail width. It must leave room for the system window buttons in
- * its top strip: the Windows caption buttons (3 × w-11 = 8.25rem) or the
- * macOS traffic lights (inset 14px, ~52px wide, so 5rem keeps the same
- * margin on the right). Elsewhere: a 48px button plus 8px on each side.
+ * Collapsed rail width, the same on every desktop. Its top strip holds the
+ * window buttons: the native macOS traffic lights (inset 14px, ~52px wide) or
+ * the Windows buttons drawn as the same lights (`WindowControls`), with the
+ * same margin on the right. A 48px nav button centres in it with room to spare.
  */
-const SIDEBAR_WIDTH_ICON = (() => {
-  const chrome = detectWindowChrome();
-  if (chrome === "windows-custom") return "9rem";
-  if (chrome === "macos-overlay") return "5.5rem";
-  return "4.5rem";
-})();
+const SIDEBAR_WIDTH_ICON = "5.5rem";
 
 const SIDEBAR_PROVIDER_STYLE = {
   "--sidebar-width": SIDEBAR_WIDTH,
@@ -128,6 +123,10 @@ const SIDEBAR_PROVIDER_STYLE = {
 /** Expanded minus collapsed sidebar width, in CSS px (1rem = 16px). */
 const SIDEBAR_WIDTH_DELTA_PX =
   (Number.parseFloat(SIDEBAR_WIDTH) - Number.parseFloat(SIDEBAR_WIDTH_ICON)) * 16;
+
+/** The sidebar, its gap and the caption strip animate width over this long
+ * (`duration-200` in sidebar.tsx and TitleBar). */
+const SIDEBAR_TRANSITION_MS = 200;
 
 /**
  * Window minimum size. 720 x 500 (tauri.conf.json) is for the expanded
@@ -139,6 +138,19 @@ let launchWindowSizeApplied = false;
 
 function windowMinSize(open: boolean): { width: number; height: number } {
   return { width: open ? 720 : 720 - SIDEBAR_WIDTH_DELTA_PX, height: 500 };
+}
+
+/**
+ * Below this window width the desktop sidebar turns into an off-canvas sheet.
+ * It is the collapsed minimum window width, so a desktop window never gets
+ * there by collapsing or by resizing within its minimum. Not the 768px
+ * default: collapsing shrinks the window by the sidebar delta, which on macOS
+ * (120px) takes the default 860px window to 740px and would hide the rail.
+ */
+const DESKTOP_SIDEBAR_BREAKPOINT_PX = windowMinSize(false).width;
+
+function isDesktopNarrow(): boolean {
+  return window.innerWidth < DESKTOP_SIDEBAR_BREAKPOINT_PX;
 }
 
 /**
@@ -311,9 +323,9 @@ function TitleBar({ label }: { label: string }) {
 
   return (
     <div className="flex h-12 shrink-0" data-titlebar>
-      {/* Caption buttons sit in this sidebar-width strip so the divider stays
-          aligned. With the sidebar closed the strip shrinks to the three
-          w-11 buttons (8.25rem), a concrete width so the transition runs. */}
+      {/* Window buttons sit in this sidebar-width strip so the divider stays
+          aligned. In the narrow (sheet) layout the strip shrinks to the
+          Windows lights (4.5rem), a concrete width so the transition runs. */}
       <div
         className={cn(
           "relative z-20 flex h-full shrink-0 overflow-hidden transition-[width] duration-200 ease-linear",
@@ -321,7 +333,7 @@ function TitleBar({ label }: { label: string }) {
             ? "w-(--sidebar-width)"
             : isMobile
               ? windows
-                ? "w-[8.25rem]"
+                ? "w-[4.5rem]"
                 : "w-0"
               : "w-(--sidebar-width-icon)",
         )}
@@ -337,9 +349,11 @@ function TitleBar({ label }: { label: string }) {
         />
       </div>
       <header className="flex min-w-0 flex-1 items-center">
-        <div className="flex h-full shrink-0 items-center px-2 md:hidden">
-          <SidebarTrigger />
-        </div>
+        {isMobile ? (
+          <div className="flex h-full shrink-0 items-center px-2">
+            <SidebarTrigger />
+          </div>
+        ) : null}
         {/* No page title: the selected sidebar item already names the page.
             The strip stays as the window drag region. */}
         <div
@@ -398,18 +412,56 @@ function SidebarCollapseToggle({ className }: { className?: string }) {
 function AppShell() {
   const [sidebarOpen, setSidebarOpen] = useState(readSidebarOpen);
   const sidebarOpenRef = useRef(sidebarOpen);
+  const contentRef = useRef<HTMLDivElement>(null);
+  // Content pane width held fixed while the sidebar animates (see below).
+  const [pinnedContentWidth, setPinnedContentWidth] = useState<number | null>(null);
+  const releasePinRef = useRef<() => void>(() => {});
+  useEffect(() => () => releasePinRef.current(), []);
   const onSidebarOpenChange = useCallback((next: boolean) => {
     // Collapsing or expanding changes the window width by the sidebar's
     // width difference, so the content pane on the right keeps its width.
     // (Not inside the state updater: StrictMode runs updaters twice.)
-    if (
-      sidebarOpenRef.current !== next &&
-      !window.matchMedia("(max-width: 767px)").matches
-    ) {
-      void resizeWindowWidthBy(
-        next ? SIDEBAR_WIDTH_DELTA_PX : -SIDEBAR_WIDTH_DELTA_PX,
-        windowMinSize(next),
-      );
+    if (sidebarOpenRef.current !== next && !isDesktopNarrow()) {
+      const delta = next ? SIDEBAR_WIDTH_DELTA_PX : -SIDEBAR_WIDTH_DELTA_PX;
+      const min = windowMinSize(next);
+      // The window changes width in one step while the sidebar animates its
+      // width over SIDEBAR_TRANSITION_MS, so a flexible content pane would
+      // stretch and shrink back (wider first on expand, narrower first on
+      // collapse). Hold the pane at its width until the sidebar has finished
+      // and the window has reached its new width: the pane slides instead.
+      releasePinRef.current();
+      let released = false;
+      let frame = 0;
+      let fallback = 0;
+      const release = () => {
+        if (released) return;
+        released = true;
+        cancelAnimationFrame(frame);
+        window.clearTimeout(fallback);
+        setPinnedContentWidth(null);
+      };
+      releasePinRef.current = release;
+      const width = contentRef.current?.getBoundingClientRect().width ?? 0;
+      if (width > 0) setPinnedContentWidth(width);
+      const started = performance.now();
+      const target = Math.max(min.width, window.innerWidth + delta);
+      void resizeWindowWidthBy(delta, min).then((resized) => {
+        // Maximized, fullscreen, or no window to resize: the pane absorbs
+        // the sidebar change after all, so let it follow the animation.
+        if (!resized) {
+          release();
+          return;
+        }
+        const settle = () => {
+          if (released) return;
+          const animated = performance.now() - started >= SIDEBAR_TRANSITION_MS;
+          if (animated && Math.abs(window.innerWidth - target) <= 1) release();
+          else frame = requestAnimationFrame(settle);
+        };
+        frame = requestAnimationFrame(settle);
+        // A window the system would not resize must not stay pinned.
+        fallback = window.setTimeout(release, 1000);
+      });
     }
     sidebarOpenRef.current = next;
     setSidebarOpen(next);
@@ -423,7 +475,7 @@ function AppShell() {
     if (launchWindowSizeApplied) return;
     launchWindowSizeApplied = true;
     const open = readSidebarOpen();
-    const shrink = !open && !window.matchMedia("(max-width: 767px)").matches;
+    const shrink = !open && !isDesktopNarrow();
     void resizeWindowWidthBy(shrink ? -SIDEBAR_WIDTH_DELTA_PX : 0, windowMinSize(open));
   }, []);
   const [tab, setTab] = useState<Tab>("home");
@@ -656,7 +708,7 @@ function AppShell() {
         >
           <header
             data-testid="phone-header"
-            className="phone-header absolute inset-x-0 top-0 z-30 flex items-center gap-2.5 px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-3"
+            className="phone-header absolute inset-x-0 top-0 z-30 flex items-center gap-2.5 px-4 pt-[max(0.75rem,var(--phone-status-inset))] pb-3"
           >
             <StatusLogo status={status} size={32} />
             <div className="min-w-0 flex-1">
@@ -732,9 +784,10 @@ function AppShell() {
       <SidebarProvider
         open={sidebarOpen}
         onOpenChange={onSidebarOpenChange}
+        mobileBreakpoint={phone ? undefined : DESKTOP_SIDEBAR_BREAKPOINT_PX}
         className={cn(
           "flex h-svh w-full flex-col overflow-hidden bg-background text-foreground",
-          phone && "pt-[env(safe-area-inset-top)]",
+          phone && "pt-[max(env(safe-area-inset-top),var(--ice-status-inset,0px))]",
         )}
         style={SIDEBAR_PROVIDER_STYLE}
         data-testid={phone ? "tablet-shell" : undefined}
@@ -774,7 +827,7 @@ function AppShell() {
             </SidebarContent>
             <SidebarFooter className="p-0 items-center justify-center">
               {/* Collapsed to the icon rail, only the status logo (full
-                  size, the rail is wide enough) and the update arrow stay. */}
+                  size, the rail is wide enough) and its update badge stay. */}
               <div className="flex w-full select-none flex-col items-center justify-center gap-1 px-4 py-2.5 group-data-[collapsible=icon]:px-0">
                 <div
                   className="relative flex w-full items-center justify-center gap-2.5 group-data-[collapsible=icon]:flex-col group-data-[collapsible=icon]:gap-1"
@@ -792,37 +845,42 @@ function AppShell() {
                     // little below the logo's box centre.
                     <SidebarCollapseToggle className="absolute top-1/2 -right-3 -mt-3 size-7! rounded-md group-data-[collapsible=icon]:static group-data-[collapsible=icon]:mt-0 group-data-[collapsible=icon]:size-7! group-data-[collapsible=icon]:rounded-md group-data-[collapsible=icon]:[&_svg:not(.nav-icon)]:size-4!" />
                   )}
-                  <div className="shrink-0">
+                  {/* The update arrow is a badge on the logo's bottom-right
+                      corner, positioned out of flow, so the logo stays put
+                      when an update turns up (expanded or collapsed). */}
+                  <div className="relative shrink-0">
                     <StatusLogo status={status} />
+                    {availableUpdate?.available && availableUpdate.version ? (
+                      <button
+                        type="button"
+                        // The switch art fills only the middle of its 48px
+                        // box; these offsets land the badge on the art's
+                        // bottom-right corner rather than below it.
+                        className="absolute -right-1.5 bottom-0.5 z-10 flex size-[18px] items-center justify-center rounded-full bg-sidebar text-ok outline-none hover:text-ok/80 focus-visible:ring-2 focus-visible:ring-ring"
+                        aria-label={t("app.updateAvailableAria", {
+                          version: availableUpdate.version,
+                        })}
+                        data-testid="app-update-badge"
+                        onClick={() => {
+                          selectTab("settings");
+                          setFocusUpdateNonce((n) => n + 1);
+                        }}
+                      >
+                        <ArrowUpCircle className="size-4" aria-hidden="true" />
+                      </button>
+                    ) : null}
                   </div>
                   <h1 className="font-heading text-sm font-medium tracking-tight group-data-[collapsible=icon]:hidden">
                     ice-box
                   </h1>
                 </div>
-                <div className="flex items-center justify-center gap-1">
-                  <p
-                    className="text-[11px] leading-none text-sidebar-foreground/50 tabular-nums group-data-[collapsible=icon]:hidden"
-                    aria-label={t("app.versionAria", { version: APP_VERSION })}
-                    data-tauri-drag-region
-                  >
-                    {APP_VERSION}
-                  </p>
-                  {availableUpdate?.available && availableUpdate.version ? (
-                    <button
-                      type="button"
-                      className="inline-flex size-4 shrink-0 items-center justify-center text-ok hover:text-ok/80"
-                      aria-label={t("app.updateAvailableAria", {
-                        version: availableUpdate.version,
-                      })}
-                      onClick={() => {
-                        selectTab("settings");
-                        setFocusUpdateNonce((n) => n + 1);
-                      }}
-                    >
-                      <ArrowUpCircle className="size-3.5" aria-hidden="true" />
-                    </button>
-                  ) : null}
-                </div>
+                <p
+                  className="text-[11px] leading-none text-sidebar-foreground/50 tabular-nums group-data-[collapsible=icon]:hidden"
+                  aria-label={t("app.versionAria", { version: APP_VERSION })}
+                  data-tauri-drag-region
+                >
+                  {APP_VERSION}
+                </p>
               </div>
             </SidebarFooter>
           </Sidebar>
@@ -839,6 +897,13 @@ function AppShell() {
             onMouseDown={phone ? undefined : onContentTitlebarMouseDown}
             onDoubleClick={phone ? undefined : onContentTitlebarDoubleClick}
             data-testid="app-content"
+            ref={contentRef}
+            data-pinned={pinnedContentWidth == null ? undefined : "true"}
+            style={
+              pinnedContentWidth == null
+                ? undefined
+                : { flex: "none", width: pinnedContentWidth }
+            }
           >
             {phone ? (
               <header className="flex shrink-0 items-center px-4 pt-3">

@@ -10,6 +10,20 @@ import {
 } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
+
+/** Lets a test stand in for the window resize; real (no-op) otherwise. */
+const windowResize = vi.hoisted(() => ({
+  fn: null as null | ((delta: number, min: { width: number; height: number }) => Promise<boolean>),
+}));
+
+vi.mock("@platform/windowChrome", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@platform/windowChrome")>();
+  return {
+    ...actual,
+    resizeWindowWidthBy: (delta: number, min: { width: number; height: number }) =>
+      windowResize.fn ? windowResize.fn(delta, min) : actual.resizeWindowWidthBy(delta, min),
+  };
+});
 import { APP_VERSION } from "./lib/appVersion";
 import { LANGUAGE_STORAGE_KEY, t, isMessageKey } from "./lib/i18n";
 import { clearNodesSnapshot } from "./lib/nodes";
@@ -427,9 +441,7 @@ describe("App", () => {
       expect(controls.parentElement).not.toHaveClass("bg-sidebar");
       expect(controls.parentElement).toHaveClass("w-(--sidebar-width)");
 
-      fireEvent.click(
-        within(titlebar as HTMLElement).getByRole("button", { name: "Toggle Sidebar" }),
-      );
+      fireEvent.click(within(container).getByTestId("sidebar-collapse-toggle"));
       // Collapsed to the icon rail, the strip follows the rail's width, which
       // leaves room for the caption buttons.
       expect(controls.parentElement).toHaveClass("w-(--sidebar-width-icon)");
@@ -437,9 +449,83 @@ describe("App", () => {
       expect(controls.compareDocumentPosition(title!)).toBe(
         Node.DOCUMENT_POSITION_FOLLOWING,
       );
+      // The off-canvas trigger only exists in the narrow (sheet) layout.
+      expect(
+        within(titlebar as HTMLElement).queryByRole("button", { name: "Toggle Sidebar" }),
+      ).toBeNull();
     } finally {
       platform.mockRestore();
       userAgent.mockRestore();
+    }
+  });
+
+  it("holds the content pane's width while the window follows a collapse", async () => {
+    // The window resizes in one step while the sidebar animates, so the pane
+    // is pinned to its width until the window has caught up; otherwise it
+    // would narrow and widen back during the animation.
+    const resolvers: Array<(resized: boolean) => void> = [];
+    windowResize.fn = vi.fn(
+      () => new Promise<boolean>((resolve) => resolvers.push(resolve)),
+    );
+    const rect = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockReturnValue({ width: 652, height: 500, top: 0, left: 0, right: 652, bottom: 500, x: 0, y: 0, toJSON: () => ({}) } as DOMRect);
+    window.localStorage.setItem("ice-box.sidebar-open", "true");
+    try {
+      const { container } = render(<App />);
+      const view = within(container);
+      const content = view.getByTestId("app-content");
+
+      fireEvent.click(view.getByTestId("sidebar-collapse-toggle"));
+      expect(windowResize.fn).toHaveBeenLastCalledWith(-120, { width: 600, height: 500 });
+      expect(content).toHaveAttribute("data-pinned", "true");
+      expect(content.style.width).toBe("652px");
+
+      // The window reaches its new width: the pin is released once the
+      // sidebar animation is over.
+      window.innerWidth = 1280 - 120;
+      await act(async () => resolvers[resolvers.length - 1](true));
+      await waitFor(() => expect(content).not.toHaveAttribute("data-pinned"), {
+        timeout: 1500,
+      });
+      expect(content.style.width).toBe("");
+
+      // A maximized window keeps its size: the pane follows the sidebar.
+      fireEvent.click(view.getByTestId("sidebar-collapse-toggle"));
+      expect(content).toHaveAttribute("data-pinned", "true");
+      await act(async () => resolvers[resolvers.length - 1](false));
+      expect(content).not.toHaveAttribute("data-pinned");
+    } finally {
+      rect.mockRestore();
+      windowResize.fn = null;
+      window.localStorage.removeItem("ice-box.sidebar-open");
+    }
+  });
+
+  it("keeps the icon rail when collapsing leaves the window under 768px", () => {
+    // Collapsing shrinks the window by the sidebar delta; on macOS that takes
+    // the default 860px window to 740px. The rail must stay, not turn into
+    // an off-canvas sheet at the 768px phone breakpoint.
+    window.localStorage.setItem("ice-box.sidebar-open", "false");
+    window.innerWidth = 740;
+    try {
+      const { container } = render(<App />);
+      const sidebar = container.querySelector('[data-slot="sidebar"]');
+      expect(sidebar).not.toBeNull();
+      expect(sidebar).toHaveAttribute("data-collapsible", "icon");
+      expect(sidebar).not.toHaveAttribute("data-mobile");
+      expect(sidebar).not.toHaveClass("hidden");
+      expect(container.querySelector('[data-slot="sidebar-container"]')).not.toHaveClass(
+        "hidden",
+      );
+      expect(
+        within(container.querySelector("[data-titlebar]") as HTMLElement).queryByRole(
+          "button",
+          { name: "Toggle Sidebar" },
+        ),
+      ).toBeNull();
+    } finally {
+      window.localStorage.removeItem("ice-box.sidebar-open");
     }
   });
 
@@ -568,6 +654,10 @@ describe("App", () => {
     });
     expect(checkAppUpdate).toHaveBeenCalledWith(true, true);
     expect(screen.queryByRole("alertdialog")).toBeNull();
+    // A badge on the logo's corner, out of flow, so the logo does not move.
+    const badge = screen.getByTestId("app-update-badge");
+    expect(badge).toHaveClass("absolute");
+    expect(badge.parentElement!.querySelector(".status-logo")).not.toBeNull();
     fireEvent.click(
       screen.getByRole("button", { name: t("app.updateAvailableAria", { version: "0.1.6" }) }),
     );

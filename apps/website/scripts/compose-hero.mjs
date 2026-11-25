@@ -3,7 +3,7 @@
 /**
  * Screenshot the landing-page showcase for the README product shot.
  *
- * The shot is the website itself: the pixel laptop, the pixel phone, and the
+ * The shot is the website itself: the app window, the phone frame, and the
  * page background, with the Live Demos loaded inside in capture mode so
  * traffic, clocks, and timestamps stay reproducible. It does not restage the
  * captures in a separate frame.

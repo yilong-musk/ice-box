@@ -271,7 +271,11 @@
    translucent top header and detached floating bottom tab bar. Content scrolls
    behind both bars while reserving clearance at the top and bottom edges. */
 .phone-shell {
-  --phone-header-height: calc(max(0.75rem, env(safe-area-inset-top, 0px)) + 2.75rem);
+  /* Top system inset. `--ice-status-inset` stands in where the host draws its
+     own status bar over the page but reports no safe area (the website phone
+     frame and the README capture); on a device `env()` wins. */
+  --phone-status-inset: max(env(safe-area-inset-top, 0px), var(--ice-status-inset, 0px));
+  --phone-header-height: calc(max(0.75rem, var(--phone-status-inset)) + 2.75rem);
   --phone-content-top: var(--phone-header-height);
   --phone-nav-inset: max(env(safe-area-inset-bottom, 0px), var(--ice-nav-inset, 0px));
   --phone-tab-bar-bottom: max(0.75rem, calc(var(--phone-nav-inset) + 0.25rem));

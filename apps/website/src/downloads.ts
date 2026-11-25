@@ -44,11 +44,19 @@ export function installerDownloadUrl(
   return `${RELEASE_BASE}/v${bare}/${installerFilename(bare, platform)}`;
 }
 
-/** The installer that matches this browser, when we ship one for it. */
-export function detectPlatform(userAgent: string): InstallerPlatform | null {
+/**
+ * The installer that matches this browser, when we ship one for it. The hero
+ * button downloads it directly, so a device we have no installer for must
+ * come back null. iPadOS Safari asks for desktop sites with a Mac user agent;
+ * a touch screen (`maxTouchPoints`) tells it apart from a Mac.
+ */
+export function detectPlatform(
+  userAgent: string,
+  maxTouchPoints = 0,
+): InstallerPlatform | null {
   if (/Android/i.test(userAgent)) return "android";
   if (/iPhone|iPad|iPod/i.test(userAgent)) return null;
   if (/Windows/i.test(userAgent)) return "windows";
-  if (/Macintosh|Mac OS X/i.test(userAgent)) return "macos";
+  if (/Macintosh|Mac OS X/i.test(userAgent)) return maxTouchPoints > 1 ? null : "macos";
   return null;
 }

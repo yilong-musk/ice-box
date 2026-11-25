@@ -28,12 +28,13 @@ export function isMacosHost(
  * Grow or shrink the window's width by `delta` CSS px, keeping its left edge,
  * and set its minimum size. A maximized or fullscreen window keeps its size
  * (only the minimum changes). The minimum is lowered before shrinking and
- * raised after growing, so it never blocks the resize.
+ * raised after growing, so it never blocks the resize. Resolves to whether
+ * the window size was changed.
  */
 export async function resizeWindowWidthBy(
   delta: number,
   min: { width: number; height: number },
-): Promise<void> {
+): Promise<boolean> {
   try {
     const { getCurrentWindow } = await import("@tauri-apps/api/window");
     const { LogicalSize } = await import("@tauri-apps/api/dpi");
@@ -42,7 +43,7 @@ export async function resizeWindowWidthBy(
     const fixed = (await current.isMaximized()) || (await current.isFullscreen());
     if (fixed || delta === 0) {
       await current.setMinSize(minSize);
-      return;
+      return false;
     }
     const scale = await current.scaleFactor();
     const inner = (await current.innerSize()).toLogical(scale);
@@ -54,8 +55,10 @@ export async function resizeWindowWidthBy(
       await current.setSize(next);
       await current.setMinSize(minSize);
     }
+    return true;
   } catch {
     // Browser preview and unit tests are not inside Tauri.
+    return false;
   }
 }
 

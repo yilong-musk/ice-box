@@ -28,6 +28,9 @@ import type {
 } from "../../../apps/desktop/src/api/contracts";
 import { formatQuota } from "../../../apps/desktop/src/lib/traffic";
 import { copyText } from "../../../apps/desktop/src/lib/clipboard";
+import { APP_VERSION } from "../../../apps/desktop/src/lib/appVersion";
+import { readLanguagePreference, resolveLanguage } from "../../../apps/desktop/src/lib/language";
+import type { UpdateProgressPayload } from "../../../apps/desktop/src/api/contracts";
 import {
   coreLogExportFilename,
   saveTextFile,
@@ -485,6 +488,30 @@ function demoMcpStatus(): McpStatus {
 const delay = (ms = 80) =>
   isCaptureMode() ? Promise.resolve() : new Promise<void>((resolve) => window.setTimeout(resolve, ms));
 
+/**
+ * The demo has no update feed. So visitors can see the update flow, a manual
+ * "Check for Updates" always finds the next minor version; from then on the
+ * background check reports the same version, so the sidebar arrow stays. The
+ * background check never finds one on its own, and nothing ever prompts.
+ * README captures never press the button, so they show no update.
+ */
+const demoUpdate = {
+  offered: false,
+  progressHandlers: new Set<(payload: UpdateProgressPayload) => void>(),
+};
+
+function demoNextVersion(): string {
+  const [major = 0, minor = 0] = APP_VERSION.split(".").map((part) => Number.parseInt(part, 10) || 0);
+  return `${major}.${minor + 1}.0`;
+}
+
+/** Shown under the update row once the simulated download finishes. */
+function demoInstallMessage(): string {
+  return resolveLanguage(readLanguagePreference()) === "zh"
+    ? "这是在线演示，不会真的安装更新。请前往下载页安装正式版。"
+    : "This is the Live Demo, so the update is not installed. Get the real app from the download section.";
+}
+
 function demoSingboxConfig(): string {
   return "{\n  \"outbounds\": [\n    { \"type\": \"selector\", \"tag\": \"proxy\", \"outbounds\": [\"direct\"] }\n  ],\n  \"route\": { \"final\": \"proxy\" }\n}";
 }
@@ -573,14 +600,34 @@ export const api = {
     if (settings.prefer_ipv6) settings.ipv6 = true;
     if (!settings.ipv6) settings.prefer_ipv6 = false;
   },
-  async checkAppUpdate(): Promise<CheckAppUpdateResponse> {
-    await delay();
-    return { available: false, version: null, notes: null, skipped: false, should_prompt: false };
+  async checkAppUpdate(background = false): Promise<CheckAppUpdateResponse> {
+    // A visitor's "Check for Updates" always finds one (see demoUpdate).
+    await delay(background ? 80 : 700);
+    if (!background) demoUpdate.offered = true;
+    return demoUpdate.offered
+      ? { available: true, version: demoNextVersion(), notes: null, skipped: false, should_prompt: false }
+      : { available: false, version: null, notes: null, skipped: false, should_prompt: false };
   },
   async recordUpdatePrompt(): Promise<void> {},
   async recordAppUpdateCheck(): Promise<void> {},
   async skipAppUpdate(): Promise<void> {},
-  async installAppUpdate(): Promise<void> { await delay(); },
+  async installAppUpdate(): Promise<void> {
+    // Play the download, then explain why nothing installs: the real app
+    // would restart into the new version here.
+    const total = 18_400_000;
+    const steps = 20;
+    for (let step = 1; step <= steps; step++) {
+      await delay(90);
+      const payload: UpdateProgressPayload = {
+        phase: "progress",
+        downloaded: Math.round((total * step) / steps),
+        content_length: total,
+      };
+      for (const handler of demoUpdate.progressHandlers) handler(payload);
+    }
+    await delay(300);
+    throw { message: demoInstallMessage() };
+  },
   async openAppDownload(): Promise<void> {},
   async requestBatteryExemption(): Promise<void> {},
   async openNetworkSettings(): Promise<void> {},
@@ -594,8 +641,13 @@ export const api = {
     );
     return "saved";
   },
-  async listenAppUpdateProgress(): Promise<() => void> {
-    return () => {};
+  async listenAppUpdateProgress(
+    handler: (payload: UpdateProgressPayload) => void,
+  ): Promise<() => void> {
+    demoUpdate.progressHandlers.add(handler);
+    return () => {
+      demoUpdate.progressHandlers.delete(handler);
+    };
   },
   async setTrayLanguage(): Promise<void> {},
   async setTrayUpdateAvailable(): Promise<void> {},

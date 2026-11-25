@@ -15,7 +15,10 @@ export function isMacosHost(): boolean {
 
 export async function runWindowCommand(_command: WindowCommand): Promise<void> {}
 
+/** The phone window is sized by the system; nothing is resized. */
 export async function resizeWindowWidthBy(
   _delta: number,
   _min: { width: number; height: number },
-): Promise<void> {}
+): Promise<boolean> {
+  return false;
+}
