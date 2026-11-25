@@ -305,7 +305,10 @@ export function Subscriptions({ active = true }: Props) {
             </div>
           ) : (() => {
             const subList = (
-              <ItemGroup aria-label={t("subs.listAria")} className="gap-3">
+              <ItemGroup
+                aria-label={t("subs.listAria")}
+                className={cn("gap-3", !phone && "pb-14")}
+              >
                 {items.map((s) => {
                   const warnings = s.parse_warnings ?? [];
                   const updatedAt = subscriptionUpdatedAt(s);
@@ -470,7 +473,7 @@ export function Subscriptions({ active = true }: Props) {
                             </ItemDescription>
                           ) : null}
                           {warnings.length > 0 ? (
-                            <ItemDescription className="text-warn">
+                            <ItemDescription className="text-warn" data-selectable="">
                               {warnings.map(formatUiMessage).join("；")}
                             </ItemDescription>
                           ) : null}

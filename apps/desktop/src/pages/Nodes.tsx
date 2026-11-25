@@ -522,6 +522,9 @@ const SectionBlock = memo(function SectionBlock({
 /** How long the floating batch button ignores clicks after switching between
  * "test" and "cancel". */
 const BATCH_TOGGLE_GUARD_MS = 400;
+/** Bottom scroll clearance on desktop so the last node card's right-edge
+ * controls can scroll clear of the floating batch-test button (matches pb-14). */
+const DESKTOP_FAB_CLEARANCE_PX = 56;
 
 export function Nodes({
   onNavigate,
@@ -694,7 +697,9 @@ export function Nodes({
     () => (listVisible ? sectionLayout(sections, columns) : EMPTY_LAYOUT),
     [listVisible, sections, columns],
   );
-  const viewportTop = Math.max(0, Math.min(viewport.top, layout.height - viewport.height));
+  const fabClearance = !compact && !embedded ? DESKTOP_FAB_CLEARANCE_PX : 0;
+  const contentHeight = layout.height + fabClearance;
+  const viewportTop = Math.max(0, Math.min(viewport.top, contentHeight - viewport.height));
   const updateViewport = useCallback(() => {
     if (scrollContainerRef) {
       const container = scrollContainerRef.current;
@@ -748,12 +753,12 @@ export function Nodes({
     const el = viewportRef.current;
     if (!el) return;
     const height = el.clientHeight || 600;
-    el.scrollTop = Math.max(0, Math.min(viewportStateRef.current.top, layout.height - height));
+    el.scrollTop = Math.max(0, Math.min(viewportStateRef.current.top, contentHeight - height));
     updateViewport();
     const observer = new ResizeObserver(updateViewport);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [listVisible, listReady, layout.height, scrollContainerRef, updateViewport]);
+  }, [listVisible, listReady, contentHeight, scrollContainerRef, updateViewport]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -1262,7 +1267,7 @@ export function Nodes({
       role="list"
       aria-label={t("nodes.listAria")}
       className="relative"
-      style={{ height: layout.height }}
+      style={{ height: contentHeight }}
     >
       {visible.map(({ section, index, top }) => (
         <div

@@ -166,4 +166,55 @@ describe("resizeWindowWidthBy", () => {
     // The superseded grow never raised the minimum.
     expect(fakeWindow.calls).not.toContain("min:720");
   });
+
+  it("keeps the original width on a rapid double toggle before innerSize resolves", async () => {
+    resetFakeWindow(740);
+    // Toggle expand then collapse synchronously, before the first call finishes
+    // its initial window queries.
+    const grow = resizeWindowWidthBy(
+      120,
+      { width: 720, height: 500 },
+      { durationMs: 200, startedAt: performance.now() },
+    );
+    const shrink = resizeWindowWidthBy(
+      -120,
+      { width: 600, height: 500 },
+      { durationMs: 200, startedAt: performance.now() },
+    );
+    await expect(grow).resolves.toBeNull();
+    await expect(shrink).resolves.toBeNull();
+    expect(fakeWindow.width).toBe(740);
+    expect(setSize).not.toHaveBeenCalled();
+    expect(fakeWindow.calls).toEqual(["min:600"]);
+
+    // Reverse direction (expanded -> collapse -> expand) also lands back on 860.
+    resetFakeWindow(860);
+    const collapse = resizeWindowWidthBy(
+      -120,
+      { width: 600, height: 500 },
+      { durationMs: 200, startedAt: performance.now() },
+    );
+    const expand = resizeWindowWidthBy(
+      120,
+      { width: 720, height: 500 },
+      { durationMs: 200, startedAt: performance.now() },
+    );
+    await expect(collapse).resolves.toBeNull();
+    await expect(expand).resolves.toBeNull();
+    expect(fakeWindow.width).toBe(860);
+    expect(setSize).not.toHaveBeenCalled();
+    expect(fakeWindow.calls).toEqual(["min:720"]);
+  });
+
+  it("applies the net delta after a rapid triple toggle before innerSize resolves", async () => {
+    resetFakeWindow(740);
+    const first = resizeWindowWidthBy(120, { width: 720, height: 500 });
+    const second = resizeWindowWidthBy(-120, { width: 600, height: 500 });
+    const third = resizeWindowWidthBy(120, { width: 720, height: 500 });
+    await expect(first).resolves.toBeNull();
+    await expect(second).resolves.toBeNull();
+    await expect(third).resolves.toBe(860);
+    expect(fakeWindow.width).toBe(860);
+    expect(fakeWindow.calls).toEqual(["size:860", "min:720"]);
+  });
 });

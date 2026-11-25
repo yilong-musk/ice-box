@@ -109,6 +109,30 @@ fn origin_lock() -> std::sync::MutexGuard<'static, OriginCache> {
         .unwrap_or_else(|err| err.into_inner())
 }
 
+fn origin_ttl(slot: &OriginCache) -> Duration {
+    if slot.consecutive_misses > 0 {
+        origin_retry_ttl(slot.consecutive_misses)
+    } else if slot.sample.is_some() {
+        ORIGIN_FRESH
+    } else {
+        origin_retry_ttl(0)
+    }
+}
+
+fn record_origin_result(slot: &mut OriginCache, sample: Option<ExitSample>, now: Instant) {
+    slot.inflight = false;
+    slot.fetched_at = Some(now);
+    if let Some(sample) = sample {
+        slot.consecutive_misses = 0;
+        slot.sample = Some(sample);
+    } else {
+        // Keep the last measured origin on a transient refresh failure so the
+        // landing map does not flash back to a local guess; `origin_ttl` still
+        // retries with backoff, and `clear()` drops the cache on stop/opt-out.
+        slot.consecutive_misses = slot.consecutive_misses.saturating_add(1);
+    }
+}
+
 /// The user's own public IP and country: the same trace, sent without the
 /// local proxy. In system-proxy mode the app's own requests do not use the
 /// system proxy; under TUN they are captured, but the reserved
@@ -119,11 +143,7 @@ fn origin_lock() -> std::sync::MutexGuard<'static, OriginCache> {
 pub(crate) fn observe_origin() -> Option<ExitSample> {
     let mut slot = origin_lock();
     let current = slot.sample.clone();
-    let ttl = if slot.sample.is_some() {
-        ORIGIN_FRESH
-    } else {
-        origin_retry_ttl(slot.consecutive_misses)
-    };
+    let ttl = origin_ttl(&slot);
     let fresh = slot.fetched_at.is_some_and(|at| at.elapsed() < ttl);
     if fresh || slot.inflight {
         return current;
@@ -139,14 +159,7 @@ pub(crate) fn observe_origin() -> Option<ExitSample> {
             if slot.generation != generation {
                 return;
             }
-            slot.inflight = false;
-            slot.fetched_at = Some(Instant::now());
-            if sample.is_some() {
-                slot.consecutive_misses = 0;
-            } else {
-                slot.consecutive_misses = slot.consecutive_misses.saturating_add(1);
-            }
-            slot.sample = sample;
+            record_origin_result(&mut slot, sample, Instant::now());
         });
     if spawned.is_err() {
         let mut slot = origin_lock();
@@ -333,5 +346,53 @@ mod tests {
         assert!(slot.fetched_at.is_none());
         assert!(!slot.inflight);
         assert_eq!(slot.consecutive_misses, 0);
+    }
+
+    #[test]
+    fn transient_origin_miss_retains_last_sample_and_backs_off() {
+        use super::{
+            origin_ttl, record_origin_result, ExitSample, OriginCache, ORIGIN_FRESH,
+            RETRY_AFTER_MISS,
+        };
+        use std::time::Instant;
+
+        let mut slot = OriginCache {
+            generation: 0,
+            fetched_at: None,
+            sample: None,
+            inflight: true,
+            consecutive_misses: 0,
+        };
+        let initial = ExitSample {
+            ip: "198.51.100.7".into(),
+            country: Some("CN".into()),
+        };
+        record_origin_result(&mut slot, Some(initial.clone()), Instant::now());
+        assert_eq!(slot.sample.as_ref(), Some(&initial));
+        assert_eq!(slot.consecutive_misses, 0);
+        assert_eq!(origin_ttl(&slot), ORIGIN_FRESH);
+
+        // Transient refresh failure keeps the previous sample while retrying with backoff.
+        slot.inflight = true;
+        record_origin_result(&mut slot, None, Instant::now());
+        assert!(!slot.inflight);
+        assert_eq!(slot.sample.as_ref(), Some(&initial));
+        assert_eq!(slot.consecutive_misses, 1);
+        assert_eq!(origin_ttl(&slot), RETRY_AFTER_MISS);
+
+        record_origin_result(&mut slot, None, Instant::now());
+        assert_eq!(slot.sample.as_ref(), Some(&initial));
+        assert_eq!(slot.consecutive_misses, 2);
+        assert_eq!(origin_ttl(&slot), RETRY_AFTER_MISS * 2);
+
+        // Next success updates the sample and resets backoff.
+        let refreshed = ExitSample {
+            ip: "198.51.100.9".into(),
+            country: Some("JP".into()),
+        };
+        record_origin_result(&mut slot, Some(refreshed.clone()), Instant::now());
+        assert_eq!(slot.sample.as_ref(), Some(&refreshed));
+        assert_eq!(slot.consecutive_misses, 0);
+        assert_eq!(origin_ttl(&slot), ORIGIN_FRESH);
     }
 }

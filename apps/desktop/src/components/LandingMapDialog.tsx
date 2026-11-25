@@ -12,9 +12,11 @@
  * centred on the meridian the globe was facing) carries the two markers —
  * the user's own region and the probed exit — and the arc between them.
  *
- * The user's region is a local guess (system time zone, then the UI
- * language's region tag); nothing leaves the machine to find it. A region
- * missing from the centroid table simply gets no marker.
+ * The user's region comes from the backend's direct Cloudflare origin probe
+ * (`originIp` / `originCountry`, gated by `probe_exit_ip`); when that is
+ * unavailable, it falls back to a local guess (system time zone, then the UI
+ * language's region tag) and marks it as guessed. A region missing from the
+ * centroid table simply gets no marker.
  */
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -86,8 +88,26 @@ export function guessUserCountry(): string | null {
         : [navigator.language]
       : [];
   for (const tag of languages) {
-    const region = tag?.split(/[-_]/)[1]?.toUpperCase();
-    if (region && region.length === 2 && landingMapCentroid(region)) return region;
+    if (!tag) continue;
+    let region: string | undefined;
+    try {
+      region = new Intl.Locale(tag).region?.toUpperCase();
+    } catch {
+      // Malformed or underscore-separated tag: scan subtags after language.
+    }
+    if (!region) {
+      const parts = tag.split(/[-_]/);
+      for (let i = 1; i < parts.length; i++) {
+        const part = parts[i];
+        // Stop before BCP-47 singleton extensions (e.g. `-u-ca-...`, `-x-...`).
+        if (part.length === 1) break;
+        if (/^[a-z]{2}$/i.test(part)) {
+          region = part.toUpperCase();
+          break;
+        }
+      }
+    }
+    if (region && landingMapCentroid(region)) return region;
   }
   return null;
 }
@@ -198,11 +218,13 @@ export function LandingMapDialog({
   const [prevOpen, setPrevOpen] = useState(false);
   const [lonC, setLonC] = useState(() => landingFlatCenter());
   const [sessionUserCode, setSessionUserCode] = useState<string | null>(null);
+  const [sessionUserInferred, setSessionUserInferred] = useState(false);
   if (open !== prevOpen) {
     setPrevOpen(open);
     if (open) {
       const nextUser = resolveUser();
       setSessionUserCode(nextUser);
+      setSessionUserInferred(nextUser != null && measuredOrigin == null);
       const u = landingMapCentroid(nextUser);
       const x = ip ? landingMapCentroid(country) : null;
       setLonC(
@@ -212,8 +234,9 @@ export function LandingMapDialog({
       );
     }
   }
-  if (open && measuredOrigin && sessionUserCode !== measuredOrigin) {
+  if (open && measuredOrigin && (sessionUserCode !== measuredOrigin || sessionUserInferred)) {
     setSessionUserCode(measuredOrigin);
+    setSessionUserInferred(false);
   }
   // Publish the chosen meridian before paint and before LandingMap's
   // useEffect reads it to begin unrolling, without mutating globals in render.
@@ -233,7 +256,7 @@ export function LandingMapDialog({
   }, [open]);
 
   const userCode = sessionUserCode;
-  const userInferred = userCode != null && measuredOrigin == null;
+  const userInferred = userCode != null && sessionUserInferred;
   const exitCode = country ? country.toUpperCase() : null;
   const userCentroid = landingMapCentroid(userCode);
   const exitCentroid = ip ? landingMapCentroid(exitCode) : null;
@@ -275,7 +298,7 @@ export function LandingMapDialog({
           ref={setContentRef}
           data-slot="dialog-content"
           data-testid="landing-map-dialog"
-          className="landing-map-dialog fixed left-1/2 top-1/2 z-50 grid max-h-[90vh] w-[calc(100%-2rem)] max-w-5xl gap-3 rounded-xl border border-border bg-background p-5 shadow-lg outline-none"
+          className="landing-map-dialog fixed left-1/2 top-1/2 z-50 grid max-h-[90vh] w-[calc(100%-2rem)] max-w-5xl grid-rows-[auto_minmax(0,1fr)_auto_auto] gap-3 rounded-xl border border-border bg-background p-5 shadow-lg outline-none"
         >
           <div data-lm-chrome className="flex items-start justify-between gap-3">
             <div className="grid gap-1">
@@ -303,7 +326,7 @@ export function LandingMapDialog({
           <div
             data-testid="landing-map-full"
             data-landing-slot
-            className="landing-map-full relative aspect-[360/142] w-full select-none overflow-hidden rounded-lg"
+            className="landing-map-full relative min-h-0 max-h-full aspect-[360/142] w-full select-none overflow-hidden rounded-lg"
           >
             <svg
               viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}

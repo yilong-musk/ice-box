@@ -155,6 +155,29 @@ describe("guessUserCountry", () => {
     }
   });
 
+  it("extracts regions from BCP-47 tags with script subtags and ignores extension subtags", () => {
+    const dtf = vi.spyOn(Intl, "DateTimeFormat").mockImplementation(
+      () =>
+        ({
+          resolvedOptions: () => ({ timeZone: "UTC" }),
+        }) as Intl.DateTimeFormat,
+    );
+    const langs = vi.spyOn(navigator, "languages", "get");
+    try {
+      langs.mockReturnValue(["zh-Hans-CN", "en-US"]);
+      expect(guessUserCountry()).toBe("CN");
+      langs.mockReturnValue(["zh-Hant-TW"]);
+      expect(guessUserCountry()).toBe("TW");
+      langs.mockReturnValue(["zh_Hans_HK"]);
+      expect(guessUserCountry()).toBe("HK");
+      langs.mockReturnValue(["en_u_ca_gregory"]);
+      expect(guessUserCountry()).toBeNull();
+    } finally {
+      langs.mockRestore();
+      dtf.mockRestore();
+    }
+  });
+
   it("returns null when neither timezone nor language yields a known region", () => {
     const dtf = vi.spyOn(Intl, "DateTimeFormat").mockImplementation(
       () =>
@@ -482,5 +505,61 @@ describe("LandingMapDialog", () => {
       />,
     );
     expect(screen.getByTestId("landing-map-exit")).toHaveAttribute("data-country", "DE");
+  });
+
+  it("constrains the map slot row inside the dialog height so footer chrome stays unclipped", () => {
+    render(
+      <LandingMapDialog
+        open
+        onOpenChange={() => {}}
+        country="US"
+        ip="203.0.113.42"
+        originCountry="CN"
+        originIp="198.51.100.7"
+      />,
+    );
+    const dialog = screen.getByTestId("landing-map-dialog");
+    const slot = screen.getByTestId("landing-map-full");
+    expect(dialog).toHaveClass("max-h-[90vh]", "grid-rows-[auto_minmax(0,1fr)_auto_auto]");
+    expect(slot).toHaveClass("min-h-0", "max-h-full");
+  });
+
+  it("drops the guessed suffix when a measured origin arrives for the same country while open", () => {
+    const dtf = vi.spyOn(Intl, "DateTimeFormat").mockImplementation(
+      () =>
+        ({
+          resolvedOptions: () => ({ timeZone: "Asia/Shanghai" }),
+        }) as Intl.DateTimeFormat,
+    );
+    try {
+      const { rerender } = render(
+        <LandingMapDialog
+          open
+          onOpenChange={() => {}}
+          country="JP"
+          ip="203.0.113.42"
+          originCountry={null}
+          originIp={null}
+        />,
+      );
+      expect(screen.getByTestId("landing-map-user-label").textContent).toContain(
+        t("home.landingMap.inferred"),
+      );
+      rerender(
+        <LandingMapDialog
+          open
+          onOpenChange={() => {}}
+          country="JP"
+          ip="203.0.113.42"
+          originCountry="CN"
+          originIp="198.51.100.7"
+        />,
+      );
+      expect(screen.getByTestId("landing-map-user-label").textContent).not.toContain(
+        t("home.landingMap.inferred"),
+      );
+    } finally {
+      dtf.mockRestore();
+    }
   });
 });
