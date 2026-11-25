@@ -216,8 +216,15 @@ export function LandingMapDialog({
     if (!open && contentRef.current) syncZoomOrigin(contentRef.current);
   }, [open]);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const userCode = useMemo(() => (open ? resolveUser() : null), [open, measuredOrigin]);
+  // Resolved while open and kept through the close animation, so the legend
+  // does not flip to "unknown" as the dialog shrinks away.
+  const lastUserCodeRef = useRef<string | null>(null);
+  const userCode = useMemo(() => {
+    if (!open) return lastUserCodeRef.current;
+    lastUserCodeRef.current = resolveUser();
+    return lastUserCodeRef.current;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, measuredOrigin]);
   const userInferred = userCode != null && measuredOrigin == null;
   const exitCode = country ? country.toUpperCase() : null;
   const userCentroid = landingMapCentroid(userCode);

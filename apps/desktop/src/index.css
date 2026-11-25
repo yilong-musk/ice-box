@@ -693,13 +693,15 @@ code,
   animation: lm-zoom-in 560ms var(--lm-ease) both;
 }
 .landing-map-dialog[data-state="closed"] {
-  animation: lm-close 200ms ease-out both;
+  animation: lm-zoom-out 480ms var(--lm-ease) both;
 }
 .landing-map-overlay[data-state="open"] {
   animation: lm-fade-in 420ms var(--lm-ease) both;
 }
+/* Gone a little before the canvas lands in the card, so the card is never
+   dimmed again under it. */
 .landing-map-overlay[data-state="closed"] {
-  animation: lm-fade-out 200ms ease-out both;
+  animation: lm-fade-out 400ms var(--lm-ease) both;
 }
 /* Title, legend and hint arrive after the map has mostly landed, and leave
    first on close, so the shrinking box carries only the map. */
@@ -708,6 +710,11 @@ code,
 }
 .landing-map-dialog[data-state="closed"] [data-lm-chrome] {
   animation: lm-fade-out 140ms ease-out both;
+}
+/* The canvas leaves the slot at once on close; the pins and arc drawn over
+   it go right away instead of floating over the empty frame. */
+.landing-map-dialog[data-state="closed"] .landing-map-full > svg {
+  animation: lm-fade-out 120ms ease-out both;
 }
 /* Then the story on the map: pins pop, the arc draws from you to the exit,
    and only then does it start flowing. */
@@ -754,15 +761,28 @@ code,
     clip-path: inset(0px 0px 0px 0px round 12px);
   }
 }
-/* Plain close: a short fade with a slight shrink, in place. The canvas stays
-   in the dialog and goes back to the card afterwards (COLLAPSE_MS). */
-@keyframes lm-close {
+/* Close: the reverse of lm-zoom-in. The frame shrinks back into the card's
+   map box on the same curve as the canvas (COLLAPSE_MS in LandingMap.tsx),
+   which flies on its own layer above it. The frame (background, border,
+   shadow) dissolves on the way, so it never lands on the card as a box. */
+@keyframes lm-zoom-out {
   from {
     transform: translate(-50%, -50%);
+    clip-path: inset(0px 0px 0px 0px round 12px);
     opacity: 1;
   }
+  /* The sheet curve front-loads the motion, so the frame is most of the way
+     to the card by 40% of the time; it is gone by then. */
+  10% {
+    opacity: 1;
+  }
+  38% {
+    opacity: 0;
+  }
   to {
-    transform: translate(-50%, -50%) scale(0.96);
+    transform: translate(-50%, -50%) translate(var(--lm-dx), var(--lm-dy)) scale(var(--lm-s));
+    clip-path: var(--lm-clip);
+    box-shadow: 0 0 0 0 transparent;
     opacity: 0;
   }
 }
