@@ -5,6 +5,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-25
+
+### Added
+
+- Home's landing probe card now draws a dotted globe centred on the probed
+  exit country. Expanding it flies the canvas into a flat world-map dialog
+  showing your own region, the probed exit, and an animated arc between them;
+  closing flies the map back into the card (reduced motion uses a short fade).
+- Direct origin probe alongside the exit probe, controlled by the same
+  **Probe public exit IP** setting: queries Cloudflare directly for your own
+  country on the landing map and falls back to a local guess (system time
+  zone, then UI language region) marked as guessed when unavailable.
+- Desktop sidebar can collapse to a 5.5 rem icon rail and expand back to the
+  full sidebar, remembered across launches. The desktop opens collapsed by
+  default (`740 × 620`, minimum `600 × 500`), and toggling animates the window
+  width in step with the sidebar so the content pane keeps its width.
+
+### Changed
+
+- Apple-style theme refresh across desktop, Android, and the website: layered
+  cool neutrals in light and dark mode with higher light-mode contrast,
+  rounded controls and rounded window corners on macOS and Windows 11, primary
+  blue for selections, switches, and the power button (green reserved for
+  connected/success states), distinct download/upload traffic colours, and
+  monochrome Lucide line navigation icons in place of the pixel glyphs.
+- Windows desktop window buttons are now drawn as macOS-style traffic lights
+  so they fit the collapsed sidebar rail, and the website Live Demo renders
+  the same window button component instead of decorative dots.
+- Android mobile chrome adopts a detached floating frosted-glass bottom tab
+  bar with a gliding active pill, a matching translucent frosted top header,
+  and unified whole-page scrolling across all five tabs.
+- Website landing page redesigned to match the new desktop and mobile visual
+  language, with updated Live Demos (including synced sidebar window resize
+  and an interactive update check preview) and refreshed README hero
+  screenshots.
+
 ### Fixed
 
 - On macOS the running app's Dock icon is the plain switch, the same artwork
@@ -17,6 +53,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   may have moved a tag to another server, so an old result no longer
   described that node, and a refresh is where results start over. Switching
   the active subscription clears them the same way.
+- Windows TUN bypass rules now include `ice-box.exe` and `sing-box.exe`
+  alongside the bare names so direct app requests (origin probe, subscription
+  fetches, and updater checks) always bypass TUN.
+- Desktop window dragging and double-click maximize work across the full top
+  48 px strip of the content area without interfering with interactive
+  controls, selectable text, or overlays.
+
+### Security
+
+- Updated `url` to 2.5.9 for RUSTSEC-2026-0592.
+- Updated `cookie` to 0.18.3 so private-cookie nonces come from the OS RNG.
 
 ## [0.3.7] - 2026-11-20
 
