@@ -574,8 +574,8 @@ main {
 .demo-window-lights {
   position: absolute;
   z-index: 3;
-  top: 10px;
-  left: 12px;
+  top: 8px;
+  left: 8px;
   /* The third lamp sits on the dark screen, not on the page paper. */
   --led: #5dff9a;
 }
