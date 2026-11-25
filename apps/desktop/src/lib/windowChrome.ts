@@ -24,41 +24,97 @@ export function isMacosHost(
   return detectWindowChrome(userAgent, platform) === "macos-overlay";
 }
 
+/** Timing of an animated window resize, matched to a CSS transition. */
+export interface WindowResizeAnimation {
+  /** Length of the (linear) animation in ms. */
+  durationMs: number;
+  /** `performance.now()` at which the matching CSS transition started. */
+  startedAt: number;
+}
+
+/** The resize in flight; a newer call cancels it and takes over. */
+let activeResize: { cancelled: boolean } | null = null;
+/** Logical width the in-flight resize is heading to, if it got that far. */
+let pendingTargetWidth: number | null = null;
+
+function nextFrame(): Promise<void> {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+}
+
 /**
  * Grow or shrink the window's width by `delta` CSS px, keeping its left edge,
  * and set its minimum size. A maximized or fullscreen window keeps its size
  * (only the minimum changes). The minimum is lowered before shrinking and
- * raised after growing, so it never blocks the resize. Resolves to whether
- * the window size was changed.
+ * raised after growing, so it never blocks the resize.
+ *
+ * With `animation`, the width is stepped once per frame along the same linear
+ * timeline as the CSS transition it accompanies, so the window edge moves with
+ * the content instead of jumping when the transition is over. Progress is
+ * measured from `startedAt`, so time spent querying the window is caught up
+ * on the first frame. A call made while another resize is still running
+ * cancels it and continues from the width that one was heading to, so a quick
+ * double toggle lands back on the original width.
+ *
+ * Resolves to the logical width the window was resized to, or `null` when its
+ * size was left alone (maximized, fullscreen, no delta, not inside Tauri, or
+ * superseded before it started resizing).
  */
 export async function resizeWindowWidthBy(
   delta: number,
   min: { width: number; height: number },
-): Promise<boolean> {
+  animation?: WindowResizeAnimation,
+): Promise<number | null> {
+  if (activeResize) activeResize.cancelled = true;
+  const run = { cancelled: false };
+  activeResize = run;
+  const finish = () => {
+    if (activeResize !== run) return;
+    activeResize = null;
+    pendingTargetWidth = null;
+  };
   try {
     const { getCurrentWindow } = await import("@tauri-apps/api/window");
     const { LogicalSize } = await import("@tauri-apps/api/dpi");
     const current = getCurrentWindow();
     const minSize = new LogicalSize(min.width, min.height);
-    const fixed = (await current.isMaximized()) || (await current.isFullscreen());
-    if (fixed || delta === 0) {
+    const [maximized, fullscreen] = await Promise.all([
+      current.isMaximized(),
+      current.isFullscreen(),
+    ]);
+    if (run.cancelled) return null;
+    if (maximized || fullscreen || delta === 0) {
       await current.setMinSize(minSize);
-      return false;
+      finish();
+      return null;
     }
     const scale = await current.scaleFactor();
     const inner = (await current.innerSize()).toLogical(scale);
-    const next = new LogicalSize(Math.max(min.width, inner.width + delta), inner.height);
-    if (delta < 0) {
-      await current.setMinSize(minSize);
-      await current.setSize(next);
-    } else {
-      await current.setSize(next);
-      await current.setMinSize(minSize);
+    if (run.cancelled) return null;
+    const from = inner.width;
+    const to = Math.max(min.width, (pendingTargetWidth ?? from) + delta);
+    pendingTargetWidth = to;
+    if (delta < 0) await current.setMinSize(minSize);
+    const duration = animation?.durationMs ?? 0;
+    const startedAt = animation?.startedAt ?? performance.now();
+    for (;;) {
+      if (run.cancelled) return to;
+      const progress =
+        duration > 0 ? Math.min(1, (performance.now() - startedAt) / duration) : 1;
+      const width = progress >= 1 ? to : Math.round(from + (to - from) * progress);
+      // Awaited, so at most one resize is queued and the window never lags
+      // behind a backlog of stale sizes.
+      await current.setSize(new LogicalSize(width, inner.height));
+      if (progress >= 1) break;
+      await nextFrame();
     }
-    return true;
+    if (run.cancelled) return to;
+    if (delta > 0) await current.setMinSize(minSize);
+    finish();
+    return to;
   } catch {
     // Browser preview and unit tests are not inside Tauri.
-    return false;
+    finish();
+    return null;
   }
 }
 

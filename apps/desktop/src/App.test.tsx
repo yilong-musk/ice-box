@@ -13,7 +13,13 @@ import App, { resetLaunchWindowSizeForTest } from "./App";
 
 /** Lets a test stand in for window chrome commands; real (no-op) otherwise. */
 const windowResize = vi.hoisted(() => ({
-  fn: null as null | ((delta: number, min: { width: number; height: number }) => Promise<boolean>),
+  fn: null as
+    | null
+    | ((
+        delta: number,
+        min: { width: number; height: number },
+        animation?: { durationMs: number; startedAt: number },
+      ) => Promise<number | null>),
 }));
 const windowCommand = vi.hoisted(() => ({
   fn: null as null | ((command: string) => Promise<void>),
@@ -23,8 +29,9 @@ vi.mock("@platform/windowChrome", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@platform/windowChrome")>();
   return {
     ...actual,
-    resizeWindowWidthBy: (delta: number, min: { width: number; height: number }) =>
-      windowResize.fn ? windowResize.fn(delta, min) : actual.resizeWindowWidthBy(delta, min),
+    resizeWindowWidthBy: (
+      ...args: Parameters<typeof actual.resizeWindowWidthBy>
+    ) => (windowResize.fn ? windowResize.fn(...args) : actual.resizeWindowWidthBy(...args)),
     runWindowCommand: (command: Parameters<typeof actual.runWindowCommand>[0]) =>
       windowCommand.fn ? windowCommand.fn(command) : actual.runWindowCommand(command),
   };
@@ -490,12 +497,12 @@ describe("App", () => {
   });
 
   it("holds the content pane's width while the window follows a collapse", async () => {
-    // The window resizes in one step while the sidebar animates, so the pane
-    // is pinned to its width until the window has caught up; otherwise it
-    // would narrow and widen back during the animation.
-    const resolvers: Array<(resized: boolean) => void> = [];
+    // The window resize trails the sidebar animation, so the pane is pinned
+    // to its width until the window has caught up; otherwise it would narrow
+    // and widen back during the animation.
+    const resolvers: Array<(target: number | null) => void> = [];
     windowResize.fn = vi.fn(
-      () => new Promise<boolean>((resolve) => resolvers.push(resolve)),
+      () => new Promise<number | null>((resolve) => resolvers.push(resolve)),
     );
     const rect = vi
       .spyOn(HTMLElement.prototype, "getBoundingClientRect")
@@ -507,14 +514,19 @@ describe("App", () => {
       const content = view.getByTestId("app-content");
 
       fireEvent.click(view.getByTestId("sidebar-collapse-toggle"));
-      expect(windowResize.fn).toHaveBeenLastCalledWith(-120, { width: 600, height: 500 });
+      // The window is animated along the sidebar's 200ms transition.
+      expect(windowResize.fn).toHaveBeenLastCalledWith(
+        -120,
+        { width: 600, height: 500 },
+        { durationMs: 200, startedAt: expect.any(Number) },
+      );
       expect(content).toHaveAttribute("data-pinned", "true");
       expect(content.style.width).toBe("652px");
 
       // The window reaches its new width: the pin is released once the
       // sidebar animation is over.
       window.innerWidth = 1280 - 120;
-      await act(async () => resolvers[resolvers.length - 1](true));
+      await act(async () => resolvers[resolvers.length - 1](1280 - 120));
       await waitFor(() => expect(content).not.toHaveAttribute("data-pinned"), {
         timeout: 1500,
       });
@@ -523,7 +535,7 @@ describe("App", () => {
       // A maximized window keeps its size: the pane follows the sidebar.
       fireEvent.click(view.getByTestId("sidebar-collapse-toggle"));
       expect(content).toHaveAttribute("data-pinned", "true");
-      await act(async () => resolvers[resolvers.length - 1](false));
+      await act(async () => resolvers[resolvers.length - 1](null));
       expect(content).not.toHaveAttribute("data-pinned");
     } finally {
       rect.mockRestore();
@@ -601,7 +613,7 @@ describe("App", () => {
   });
 
   it("grows the desktop window at launch when an expanded sidebar was remembered", () => {
-    const resize = vi.fn().mockResolvedValue(true);
+    const resize = vi.fn().mockResolvedValue(1280 + 120);
     windowResize.fn = resize;
     window.localStorage.setItem("ice-box.sidebar-open", "true");
     try {

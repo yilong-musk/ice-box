@@ -438,11 +438,11 @@ function AppShell() {
     if (sidebarOpenRef.current !== next && !isDesktopNarrow()) {
       const delta = next ? SIDEBAR_WIDTH_DELTA_PX : -SIDEBAR_WIDTH_DELTA_PX;
       const min = windowMinSize(next);
-      // The window changes width in one step while the sidebar animates its
-      // width over SIDEBAR_TRANSITION_MS, so a flexible content pane would
-      // stretch and shrink back (wider first on expand, narrower first on
-      // collapse). Hold the pane at its width until the sidebar has finished
-      // and the window has reached its new width: the pane slides instead.
+      // The window resize trails the sidebar by a frame or so (each step is
+      // an IPC round trip), so a flexible content pane would jitter
+      // (wider first on expand, narrower first on collapse). Hold the pane at
+      // its width until the sidebar has finished and the window has reached
+      // its new width: the pane slides instead.
       releasePinRef.current();
       let released = false;
       let frame = 0;
@@ -458,11 +458,15 @@ function AppShell() {
       const width = contentRef.current?.getBoundingClientRect().width ?? 0;
       if (width > 0) setPinnedContentWidth(width);
       const started = performance.now();
-      const target = Math.max(min.width, window.innerWidth + delta);
-      void resizeWindowWidthBy(delta, min).then((resized) => {
+      // The window width is stepped along the sidebar's own timeline, so its
+      // edge moves with the sidebar instead of jumping afterwards.
+      void resizeWindowWidthBy(delta, min, {
+        durationMs: SIDEBAR_TRANSITION_MS,
+        startedAt: started,
+      }).then((target) => {
         // Maximized, fullscreen, or no window to resize: the pane absorbs
         // the sidebar change after all, so let it follow the animation.
-        if (!resized) {
+        if (target == null) {
           release();
           return;
         }
