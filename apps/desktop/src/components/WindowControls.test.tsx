@@ -8,6 +8,7 @@ import type { WindowChrome } from "@platform/windowChrome";
 
 const runWindowCommand = vi.fn();
 let chrome: WindowChrome = "macos-overlay";
+let followFocus = true;
 
 const shellEvents = vi.hoisted(() => ({
   hidden: new Set<() => void>(),
@@ -19,6 +20,7 @@ vi.mock("@platform/windowChrome", async (importOriginal) => {
   return {
     ...actual,
     detectWindowChrome: () => chrome,
+    controlsFollowWindowFocus: () => followFocus,
     runWindowCommand: (...args: unknown[]) => runWindowCommand(...args),
   };
 });
@@ -58,6 +60,7 @@ function expectHovered(hovered: boolean) {
 describe("WindowControls", () => {
   afterEach(() => {
     chrome = "macos-overlay";
+    followFocus = true;
     runWindowCommand.mockReset();
     shellEvents.hidden.clear();
     shellEvents.shown.clear();
@@ -188,5 +191,18 @@ describe("WindowControls", () => {
     });
     expect(light()).toHaveClass("bg-foreground/15");
     expect(light()).not.toHaveClass("bg-[#ff5f57]");
+  });
+
+  it("keeps the lights coloured where the platform does not follow window focus", () => {
+    // The website's Live Demo: its iframe has focus only after a click into
+    // it, so the lights would sit grey while the visitor reads the page.
+    chrome = "windows-custom";
+    followFocus = false;
+    render(<WindowControls />);
+    const close = screen.getByRole("button", { name: t("window.close") });
+    act(() => {
+      fireEvent.blur(window);
+    });
+    expect(close.firstElementChild).toHaveClass("bg-[#ff5f57]");
   });
 });

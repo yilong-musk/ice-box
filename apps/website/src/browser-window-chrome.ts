@@ -6,8 +6,22 @@ export type { WindowChrome, WindowCommand } from "../../desktop/src/lib/windowCh
 /** Message the embedded desktop demo posts to the landing page, which draws the window frame. */
 export const DEMO_RESIZE_MESSAGE = "ice-box:demo-resize";
 
-export function detectWindowChrome(_userAgent?: string, _platform?: string): WindowChrome { return "plain"; }
+/** Inside the landing page's window frame (an iframe), not opened on its own. */
+const embedded = typeof window !== "undefined" && window.parent !== window;
+
+/**
+ * In the landing page's frame the demo is the app window, so it draws the
+ * window buttons the Windows build draws (WindowControls: macOS-style lights
+ * in the title bar). Same component, so the lights match the app exactly and
+ * scale with the demo. Opened on its own there is no window to control.
+ */
+export function detectWindowChrome(_userAgent?: string, _platform?: string): WindowChrome {
+  return embedded ? "windows-custom" : "plain";
+}
 export function isMacosHost(_userAgent?: string, _platform?: string): boolean { return false; }
+/** The demo's iframe has focus only after a click into it; greying the lights
+ * whenever the visitor is elsewhere on the page would make it look inactive. */
+export function controlsFollowWindowFocus(): boolean { return false; }
 export async function runWindowCommand(_command: WindowCommand): Promise<void> {}
 
 /**

@@ -153,7 +153,7 @@ root.innerHTML = `
 
     <section class="demo-section page-wrap" id="demo">
       <div class="showcase">
-        <div class="desk-window reveal"><div class="demo-screen">${windowLights.replace("window-lights", "window-lights demo-window-lights")}<iframe src="./demo.html" loading="lazy"></iframe></div></div>
+        <div class="desk-window reveal"><div class="demo-screen"><iframe src="./demo.html" loading="lazy"></iframe></div></div>
         <div class="phone-float reveal" id="android-demo">
           <div class="phone-demo-stage">
             <div class="phone-frame">

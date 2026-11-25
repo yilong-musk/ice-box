@@ -24,6 +24,12 @@ export function isMacosHost(
   return detectWindowChrome(userAgent, platform) === "macos-overlay";
 }
 
+/** Whether the drawn window buttons grey out while the window is not
+ * focused, as macOS does. The app's webview is the window, so yes. */
+export function controlsFollowWindowFocus(): boolean {
+  return true;
+}
+
 /** Timing of an animated window resize, matched to a CSS transition. */
 export interface WindowResizeAnimation {
   /** Length of the (linear) animation in ms. */

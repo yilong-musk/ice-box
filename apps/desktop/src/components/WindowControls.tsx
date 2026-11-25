@@ -2,7 +2,11 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { flushSync } from "react-dom";
-import { detectWindowChrome, runWindowCommand } from "@platform/windowChrome";
+import {
+  controlsFollowWindowFocus,
+  detectWindowChrome,
+  runWindowCommand,
+} from "@platform/windowChrome";
 import { api } from "@/api/client";
 import { t, useLanguagePreference } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -133,15 +137,18 @@ function TrafficLight({
 
 /**
  * Window buttons on Windows, drawn as macOS traffic lights (close, minimize,
- * zoom) at the same inset as the native lights on macOS (14px from the left,
- * centred in the 48px title bar), so the collapsed rail is the same width on
- * every desktop. macOS keeps its native lights and renders nothing here.
+ * zoom) 14px in from the window's top-left corner, about where the native
+ * lights sit on macOS, so the collapsed rail is the same width on every
+ * desktop. macOS keeps its native lights and renders nothing here. The
+ * website's Live Demo draws these too, so the two always match.
  */
 export function WindowControls() {
   useLanguagePreference();
   const windows = detectWindowChrome() === "windows-custom";
   const resumeEpoch = useCaptionResumeEpoch(windows);
-  const focused = useWindowFocused(windows);
+  const followFocus = windows && controlsFollowWindowFocus();
+  const windowFocused = useWindowFocused(followFocus);
+  const focused = !followFocus || windowFocused;
   const [hot, setHot] = useState(false);
   const [pointerEpoch, setPointerEpoch] = useState(resumeEpoch);
   if (!windows) return null;
@@ -156,7 +163,9 @@ export function WindowControls() {
 
   return (
     <div
-      className="flex h-full shrink-0 items-center pl-2.5"
+      // 14px from the top as from the left: the 20px hit target starts 10px
+      // down, so the 12px light sits 14px below the window's top edge.
+      className="flex h-full shrink-0 items-start pl-2.5 pt-2.5"
       data-testid="window-controls"
       data-hovered={hovered ? "true" : undefined}
     >

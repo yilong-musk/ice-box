@@ -444,7 +444,8 @@ main {
 }
 
 /* The app window, as macOS draws it: rounded corners, a hairline edge and a
-   deep soft shadow. The lights sit over the app's sidebar. Its width follows
+   deep soft shadow. The window buttons are the app's own (WindowControls,
+   drawn inside the demo's title bar as on Windows). Its width follows
    the app's own window width (`--demo-width`, set when the sidebar collapses
    or expands), at the slot's scale and with the left edge fixed. */
 .demo-screen {
@@ -489,13 +490,6 @@ main {
 
 .window-lights i:nth-child(3) {
   background: #28c840;
-}
-
-.demo-window-lights {
-  position: absolute;
-  z-index: 3;
-  top: 12px;
-  left: 14px;
 }
 
 .phone-float {
