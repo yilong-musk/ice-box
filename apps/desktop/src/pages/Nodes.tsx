@@ -1,6 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 import { ChevronRight, CircleCheck, Gauge, Star, X } from "lucide-react";
 import {
   api,
@@ -61,6 +70,8 @@ type Props = {
   active?: boolean;
   /** Render inside the phone Home page: no title-bar portal, inline actions. */
   embedded?: boolean;
+  /** External scroll container when the host page scrolls as one surface. */
+  scrollContainerRef?: RefObject<HTMLElement | null>;
 };
 
 /** HTML id-safe token derived from a possibly spaced group tag. */
@@ -512,10 +523,16 @@ const SectionBlock = memo(function SectionBlock({
  * "test" and "cancel". */
 const BATCH_TOGGLE_GUARD_MS = 400;
 
-export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
+export function Nodes({
+  onNavigate,
+  active = true,
+  embedded = false,
+  scrollContainerRef,
+}: Props) {
   // Row trimming follows the phone shell, not `embedded`: embedding is about
   // the card chrome, the narrow screen is what forces the compact row.
   const compact = isPhoneShell();
+  const externalScroll = scrollContainerRef != null;
   const { resolved: lang } = useLanguagePreference();
   const { nextGeneration, isStale } = useGenerationGuard();
   const runtime = useRuntimeStore();
@@ -597,6 +614,7 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
     () => {},
   );
   const viewportRef = useRef<HTMLDivElement>(null);
+  const listBoxRef = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState({ top: 0, height: 600, width: 0 });
   const viewportStateRef = useRef(viewport);
   viewportStateRef.current = viewport;
@@ -678,6 +696,25 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
   );
   const viewportTop = Math.max(0, Math.min(viewport.top, layout.height - viewport.height));
   const updateViewport = useCallback(() => {
+    if (scrollContainerRef) {
+      const container = scrollContainerRef.current;
+      const listBox = listBoxRef.current;
+      if (!container) return;
+      const top = listBox
+        ? container.getBoundingClientRect().top - listBox.getBoundingClientRect().top
+        : 0;
+      const next = {
+        top,
+        height: container.clientHeight || 600,
+        width: listBox?.clientWidth || container.clientWidth,
+      };
+      setViewport((prev) =>
+        prev.top === next.top && prev.height === next.height && prev.width === next.width
+          ? prev
+          : next,
+      );
+      return;
+    }
     const el = viewportRef.current;
     if (!el) return;
     const next = {
@@ -690,18 +727,33 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
         ? prev
         : next,
     );
-  }, []);
+  }, [scrollContainerRef]);
 
   useLayoutEffect(() => {
+    if (!listVisible) return;
+    if (scrollContainerRef) {
+      const container = scrollContainerRef.current;
+      if (!container) return;
+      updateViewport();
+      const onScroll = () => updateViewport();
+      container.addEventListener("scroll", onScroll, { passive: true });
+      const observer = new ResizeObserver(updateViewport);
+      observer.observe(container);
+      if (listBoxRef.current) observer.observe(listBoxRef.current);
+      return () => {
+        container.removeEventListener("scroll", onScroll);
+        observer.disconnect();
+      };
+    }
     const el = viewportRef.current;
-    if (!listVisible || !el) return;
+    if (!el) return;
     const height = el.clientHeight || 600;
     el.scrollTop = Math.max(0, Math.min(viewportStateRef.current.top, layout.height - height));
     updateViewport();
     const observer = new ResizeObserver(updateViewport);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [listVisible, listReady, layout.height, updateViewport]);
+  }, [listVisible, listReady, layout.height, scrollContainerRef, updateViewport]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -1204,11 +1256,65 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
     </>
   );
 
+  const nodeList = (
+    <div
+      ref={listBoxRef}
+      role="list"
+      aria-label={t("nodes.listAria")}
+      className="relative"
+      style={{ height: layout.height }}
+    >
+      {visible.map(({ section, index, top }) => (
+        <div
+          key={section.key}
+          role="listitem"
+          aria-posinset={index + 1}
+          aria-setsize={sections.length}
+          className="absolute inset-x-0"
+          style={{ top }}
+        >
+          <SectionBlock
+            section={section}
+            columns={columns}
+            cardRange={
+              section.collapsed
+                ? EMPTY_RANGE
+                : cardWindow(
+                    section.cards.length,
+                    columns,
+                    top + sectionCardsOffset(section),
+                    viewportTop,
+                    viewport.height,
+                  )
+            }
+            nodesByTag={nodesByTag}
+            running={running}
+            busy={busy}
+            favoritePending={favoritePending || selectionPending}
+            compact={compact}
+            headerDelay={
+              section.group
+                ? (delays[resolveExitTag(section.group.tag, nodesByTag)] ?? null)
+                : null
+            }
+            delays={section.collapsed ? EMPTY_DELAYS : delays}
+            lang={lang}
+            onToggleGroup={setGroupOpen}
+            onTestSection={onTestSection}
+            onTestTag={onTestTag}
+            onPick={handlePick}
+            onToggleFavorite={onToggleFavorite}
+          />
+        </div>
+      ))}
+    </div>
+  );
+
   return (
     <div
       className={cn(
         "nodes-panel flex min-h-0 flex-1 flex-col gap-3",
-        embedded && "h-full",
+        embedded && !externalScroll && "h-full",
       )}
       data-testid="nodes-panel"
     >
@@ -1245,7 +1351,12 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
         ) : null}
         {/* The card's own gap already spaces the list from the header bar,
             matching the side padding; no extra top padding here. */}
-        <CardContent className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <CardContent
+          className={cn(
+            "flex min-h-0 flex-1 flex-col",
+            !externalScroll && "overflow-hidden",
+          )}
+        >
           {!listReady ? (
             <p className="my-auto text-sm text-muted-foreground">
               {t("nodes.loading")}
@@ -1260,64 +1371,19 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
               onAction={() => onNavigate?.("subs")}
             />
           ) : listVisible ? (
-            <ScrollArea
-              viewportRef={viewportRef}
-              onViewportScroll={updateViewport}
-              type="scroll"
-              scrollHideDelay={600}
-              className="min-h-0 flex-1 overflow-hidden"
-            >
-              <div
-                role="list"
-                aria-label={t("nodes.listAria")}
-                className="relative"
-                style={{ height: layout.height }}
+            externalScroll ? (
+              nodeList
+            ) : (
+              <ScrollArea
+                viewportRef={viewportRef}
+                onViewportScroll={updateViewport}
+                type="scroll"
+                scrollHideDelay={600}
+                className="min-h-0 flex-1 overflow-hidden"
               >
-                {visible.map(({ section, index, top }) => (
-                  <div
-                    key={section.key}
-                    role="listitem"
-                    aria-posinset={index + 1}
-                    aria-setsize={sections.length}
-                    className="absolute inset-x-0"
-                    style={{ top }}
-                  >
-                    <SectionBlock
-                      section={section}
-                      columns={columns}
-                      cardRange={
-                        section.collapsed
-                          ? EMPTY_RANGE
-                          : cardWindow(
-                              section.cards.length,
-                              columns,
-                              top + sectionCardsOffset(section),
-                              viewportTop,
-                              viewport.height,
-                            )
-                      }
-                      nodesByTag={nodesByTag}
-                      running={running}
-                      busy={busy}
-                      favoritePending={favoritePending || selectionPending}
-                      compact={compact}
-                      headerDelay={
-                        section.group
-                          ? (delays[resolveExitTag(section.group.tag, nodesByTag)] ?? null)
-                          : null
-                      }
-                      delays={section.collapsed ? EMPTY_DELAYS : delays}
-                      lang={lang}
-                      onToggleGroup={setGroupOpen}
-                      onTestSection={onTestSection}
-                      onTestTag={onTestTag}
-                      onPick={handlePick}
-                      onToggleFavorite={onToggleFavorite}
-                    />
-                  </div>
-                ))}
-              </div>
-            </ScrollArea>
+                {nodeList}
+              </ScrollArea>
+            )
           ) : null}
         </CardContent>
       </Card>

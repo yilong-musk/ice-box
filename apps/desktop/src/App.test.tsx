@@ -665,17 +665,33 @@ describe("App", () => {
     await waitFor(() => {
       expect(view.getByTestId("phone-tab-bar")).toBeInTheDocument();
     });
-    expect(view.getByTestId("app-main")).toHaveClass("pt-3");
+    const header = view.getByTestId("phone-header");
+    expect(header).toHaveClass("phone-header", "absolute", "top-0");
+    expect(header.querySelector("h2")).toBeNull();
+    const tabBar = view.getByTestId("phone-tab-bar");
+    expect(tabBar).toHaveClass("phone-tab-bar", "rounded-full");
+    expect(tabBar.style.getPropertyValue("--tab-index")).toBe("0");
+    expect(tabBar.style.getPropertyValue("--tab-count")).toBe("5");
+    expect(view.getByTestId("phone-tab-indicator")).toBeInTheDocument();
+    expect(view.getByTestId("app-main")).toHaveClass("pt-3", "pb-0");
     expect(view.queryByTestId("app-brand-row")).not.toBeInTheDocument();
     const home = view.getByRole("button", { name: t("app.nav.home") });
     expect(home).toHaveAttribute("aria-current", "page");
-    // Top-aligned 8px padding, not justify-center: a centered 16px glyph in
-    // this row sits at 10.5px and blurs off 2x.
-    expect(home).toHaveClass("py-2", "leading-4");
+    // Top-aligned 8px padding, not justify-center: a centered glyph in this
+    // row lands on a half-pixel and blurs off 2x.
+    expect(home).toHaveClass("py-2", "leading-[14px]");
     expect(home).not.toHaveClass("justify-center", "leading-tight");
-    expect(view.getByRole("button", { name: t("app.nav.apps") })).toBeInTheDocument();
+    const apps = view.getByRole("button", { name: t("app.nav.apps") });
+    expect(apps).toBeInTheDocument();
     expect(view.queryByRole("button", { name: t("app.nav.nodes") })).not.toBeInTheDocument();
     expect(view.getByTestId("nodes-panel")).toBeInTheDocument();
+    // On the phone Home screen the whole page scrolls as one surface rather
+    // than trapping the embedded node list in a nested scroll viewport.
+    expect(
+      view
+        .getByTestId("nodes-panel")
+        .querySelector('[data-slot="scroll-area-viewport"]'),
+    ).toBeNull();
     expect(view.queryByRole("button", { name: t("app.nav.connections") })).not.toBeInTheDocument();
     expect(view.queryByRole("button", { name: t("app.nav.mcp") })).not.toBeInTheDocument();
     expect(view.queryByTestId("connections-panel")).not.toBeInTheDocument();
@@ -685,6 +701,11 @@ describe("App", () => {
       expect(checkAppUpdate).toHaveBeenCalled();
     });
     expect(setTrayUpdateAvailable).not.toHaveBeenCalled();
+
+    // Switching tabs glides the floating selection indicator to the active slot.
+    fireEvent.click(apps);
+    expect(tabBar.style.getPropertyValue("--tab-index")).toBe("1");
+    expect(apps).toHaveAttribute("aria-current", "page");
   });
 
   it("opens the Apps page from the phone tab bar", async () => {

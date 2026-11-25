@@ -223,7 +223,10 @@ export function Subscriptions({ active = true }: Props) {
 
   return (
     <div
-      className="subs-panel relative flex min-h-0 flex-1 flex-col gap-3"
+      className={cn(
+        "subs-panel relative flex min-h-0 flex-1 flex-col",
+        !phone && "gap-3",
+      )}
       data-testid="subs-panel"
     >
       {active ? (
@@ -245,6 +248,12 @@ export function Subscriptions({ active = true }: Props) {
           </Button>
         </TitlebarActions>
       ) : null}
+      <div
+        className={cn(
+          "flex min-h-0 flex-1 flex-col gap-3",
+          phone && "subs-panel-scroll no-scrollbar overflow-y-auto overscroll-contain",
+        )}
+      >
       {loadError && items.length > 0 ? (
         <div className="flex items-center gap-2">
           <ErrorAlert className="flex-1">{loadError}</ErrorAlert>
@@ -260,8 +269,19 @@ export function Subscriptions({ active = true }: Props) {
       ) : null}
       {warning && <WarnAlert className="shrink-0">{warning}</WarnAlert>}
 
-      <Card size="sm" className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <CardContent className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+      <Card
+        size="sm"
+        className={cn(
+          "flex flex-col overflow-hidden",
+          phone ? "flex-[1_0_auto]" : "min-h-0 flex-1",
+        )}
+      >
+        <CardContent
+          className={cn(
+            "relative flex flex-1 flex-col",
+            !phone && "min-h-0 overflow-hidden",
+          )}
+        >
           {items.length === 0 ? (
             <div className="my-auto flex flex-col items-start gap-2">
               <CardTitle>
@@ -283,12 +303,8 @@ export function Subscriptions({ active = true }: Props) {
                 </Button>
               ) : null}
             </div>
-          ) : (
-            <ScrollArea
-              type="scroll"
-              scrollHideDelay={600}
-              className="min-h-0 flex-1 overflow-hidden"
-            >
+          ) : (() => {
+            const subList = (
               <ItemGroup aria-label={t("subs.listAria")} className="gap-3">
                 {items.map((s) => {
                   const warnings = s.parse_warnings ?? [];
@@ -513,10 +529,22 @@ export function Subscriptions({ active = true }: Props) {
                   );
                 })}
               </ItemGroup>
-            </ScrollArea>
-          )}
+            );
+            return phone ? (
+              subList
+            ) : (
+              <ScrollArea
+                type="scroll"
+                scrollHideDelay={600}
+                className="min-h-0 flex-1 overflow-hidden"
+              >
+                {subList}
+              </ScrollArea>
+            );
+          })()}
         </CardContent>
       </Card>
+      </div>
       <CapsuleToast toast={toast} onDismiss={dismissToast} />
       <ImportSubscriptionDialog
         open={importOpen}

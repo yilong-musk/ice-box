@@ -170,6 +170,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   /** Wall time of the latest node-list snapshot. Compared with `sampled_at_ms`. */
   const snapWallRef = useRef(0);
   const homeActiveChainRef = useRef(Promise.resolve());
+  const homePanelRef = useRef<HTMLDivElement>(null);
 
   const noteStatus = useCallback((next: StatusResponse) => {
     statusRef.current = next;
@@ -737,6 +738,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
 
   return (
     <div
+      ref={homePanelRef}
       className={cn(
         "home-panel flex min-h-0 flex-1 flex-col gap-3",
         // The phone Home screen scrolls like the Android app, but a visible
@@ -1181,8 +1183,13 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
       </div>
 
       {phone ? (
-        <div className="flex h-[min(34rem,62svh)] min-h-0 shrink-0 flex-col">
-          <Nodes onNavigate={onNavigate} active={active} embedded />
+        <div className="flex flex-[1_0_auto] flex-col">
+          <Nodes
+            onNavigate={onNavigate}
+            active={active}
+            embedded
+            scrollContainerRef={homePanelRef}
+          />
         </div>
       ) : null}
 

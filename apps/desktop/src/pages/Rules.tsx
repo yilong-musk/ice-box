@@ -375,7 +375,15 @@ export function Rules({ onNavigate, active = true }: Props) {
       : t("rules.ruleSetsManage");
 
   return (
-    <div className="rules-panel flex min-h-0 flex-1 flex-col gap-3" data-testid="rules-panel">
+    <div
+      ref={phone ? listRef : undefined}
+      onScroll={phone ? onListScroll : undefined}
+      className={cn(
+        "rules-panel flex min-h-0 flex-1 flex-col gap-3",
+        phone && "no-scrollbar overflow-y-auto overscroll-contain",
+      )}
+      data-testid="rules-panel"
+    >
       {active ? (
         <TitlebarActions>{addCustomButton}</TitlebarActions>
       ) : null}
@@ -386,7 +394,13 @@ export function Rules({ onNavigate, active = true }: Props) {
         </WarnAlert>
       )}
 
-      <Card size="sm" className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <Card
+        size="sm"
+        className={cn(
+          "flex flex-col overflow-hidden",
+          phone ? "flex-[1_0_auto]" : "min-h-0 flex-1",
+        )}
+      >
         <CardHeader className="shrink-0">
           <CardAction
             className={cn(
@@ -442,7 +456,12 @@ export function Rules({ onNavigate, active = true }: Props) {
             ) : null}
           </CardAction>
         </CardHeader>
-        <CardContent className="relative flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
+        <CardContent
+          className={cn(
+            "relative flex flex-1 flex-col gap-3",
+            !phone && "min-h-0 overflow-hidden",
+          )}
+        >
           <div
             className="flex h-auto w-full min-w-0 shrink-0 flex-wrap items-start gap-2"
             data-testid="rules-filters"
@@ -510,15 +529,12 @@ export function Rules({ onNavigate, active = true }: Props) {
               actionLabel={t("home.goToSubs")}
               onAction={() => onNavigate?.("subs")}
             />
-          ) : (
-            <ScrollArea
-              type="scroll"
-              scrollHideDelay={600}
-              className="min-h-0 flex-1 overflow-hidden"
-              viewportRef={listRef}
-              onViewportScroll={onListScroll}
-            >
-              <ItemGroup aria-label={t("rules.listAria")} className="gap-0 pb-14">
+          ) : (() => {
+            const ruleList = (
+              <ItemGroup
+                aria-label={t("rules.listAria")}
+                className={cn("gap-0", !phone && "pb-14")}
+              >
                 {rows.map((row, index) => {
                   const summary = ruleMatchSummary(row);
                   const outbound = ruleOutbound(row);
@@ -659,18 +675,36 @@ export function Rules({ onNavigate, active = true }: Props) {
                   );
                 })}
               </ItemGroup>
-            </ScrollArea>
-          )}
+            );
+            return phone ? (
+              ruleList
+            ) : (
+              <ScrollArea
+                type="scroll"
+                scrollHideDelay={600}
+                className="min-h-0 flex-1 overflow-hidden"
+                viewportRef={listRef}
+                onViewportScroll={onListScroll}
+              >
+                {ruleList}
+              </ScrollArea>
+            );
+          })()}
           {/* A single page needs no pager. */}
           {showList && pages > 1 ? (
             <div
               data-testid="rules-pager"
-              data-visible={nearBottom ? "true" : "false"}
+              data-visible={phone ? "true" : nearBottom ? "true" : "false"}
               className={cn(
-                "absolute inset-x-0 bottom-0 z-10 flex items-center justify-center gap-3 border-t border-border bg-background/95 px-3 py-2 backdrop-blur-sm transition-opacity duration-200",
-                nearBottom
-                  ? "opacity-100"
-                  : "pointer-events-none opacity-0",
+                "flex items-center justify-center gap-3 border-t border-border",
+                phone
+                  ? "pt-3"
+                  : cn(
+                      "absolute inset-x-0 bottom-0 z-10 bg-background/95 px-3 py-2 backdrop-blur-sm transition-opacity duration-200",
+                      nearBottom
+                        ? "opacity-100"
+                        : "pointer-events-none opacity-0",
+                    ),
               )}
             >
               <Button

@@ -633,7 +633,7 @@ function AppShell() {
   );
 
   const recovery = status?.proxy_recovery_warning?.length ? (
-    <div className="px-4 pt-3">
+    <div className={cn("px-4 pt-3", phone && narrow && "phone-recovery")}>
       <ErrorAlert>
         {status.proxy_recovery_warning
           .map(formatUiMessage)
@@ -644,67 +644,84 @@ function AppShell() {
   ) : null;
 
   if (phone && narrow) {
+    const activeIndex = Math.max(
+      0,
+      navItems.findIndex((item) => item.id === tab),
+    );
     return (
       <TooltipProvider>
         <div
-          className="flex h-svh w-full flex-col overflow-hidden bg-background text-foreground"
+          className="phone-shell relative flex h-svh w-full flex-col overflow-hidden bg-background text-foreground"
           data-testid="phone-shell"
         >
-          <header className="flex shrink-0 items-center gap-2.5 border-b border-sidebar-border bg-sidebar px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-3">
+          <header
+            data-testid="phone-header"
+            className="phone-header absolute inset-x-0 top-0 z-30 flex items-center gap-2.5 px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-3"
+          >
             <StatusLogo status={status} size={32} />
             <div className="min-w-0 flex-1">
               <h1 className="font-heading text-sm font-medium tracking-tight">
                 ice-box
               </h1>
-              <p className="mt-0.5 text-[11px] leading-none text-sidebar-foreground/50 tabular-nums">
+              <p className="mt-0.5 text-[11px] leading-none text-foreground/50 tabular-nums">
                 {APP_VERSION}
               </p>
             </div>
-            <h2 className="text-sm font-medium">
-              {current ? t(current.labelKey) : ""}
-            </h2>
             <div data-titlebar-actions className="flex shrink-0 items-center">
               <TitlebarActionSlots
                 items={slotItems}
                 tab={tab}
-                padding="not-empty:pr-3"
+                padding=""
               />
             </div>
           </header>
           {recovery}
           <main
-            className="content-main content-fill min-h-0 flex-1 overflow-hidden px-4 pt-3 pb-2"
+            className="content-main content-fill min-h-0 flex-1 overflow-hidden px-4 pt-3 pb-0"
             data-testid="app-main"
           >
             {pages}
           </main>
-          <nav
-            data-testid="phone-tab-bar"
-            aria-label={t("app.nav.aria")}
-            className="phone-tab-bar grid shrink-0 grid-cols-5 border-t border-sidebar-border bg-sidebar"
-          >
-            {navItems.map(({ id, labelKey }) => (
-              <button
-                key={id}
-                type="button"
-                aria-label={t(labelKey)}
-                aria-current={tab === id ? "page" : undefined}
-                className={cn(
-                  // 8px padding, 16px glyph, 4px gap, 16px line.
-                  "flex min-h-14 min-w-0 flex-col items-center gap-1 px-1 py-2 text-xs leading-4",
-                  tab === id
-                    ? "font-medium text-primary"
-                    : "text-sidebar-foreground/70",
-                )}
-                onClick={() => selectTab(id)}
-              >
-                <NavIcon name={id} />
-                <span className="w-full text-center">
-                  {t(id === "subs" ? "app.nav.subsTab" : labelKey)}
-                </span>
-              </button>
-            ))}
-          </nav>
+          <div className="phone-tab-dock">
+            <nav
+              data-testid="phone-tab-bar"
+              aria-label={t("app.nav.aria")}
+              className="phone-tab-bar relative grid w-full max-w-[24rem] grid-cols-5 rounded-full p-1"
+              style={
+                {
+                  "--tab-count": navItems.length,
+                  "--tab-index": activeIndex,
+                } as CSSProperties
+              }
+            >
+              <span
+                className="phone-tab-indicator"
+                data-testid="phone-tab-indicator"
+                aria-hidden="true"
+              />
+              {navItems.map(({ id, labelKey }) => (
+                <button
+                  key={id}
+                  type="button"
+                  aria-label={t(labelKey)}
+                  aria-current={tab === id ? "page" : undefined}
+                  className={cn(
+                    // Top-aligned integer metrics: 8px padding, 20px glyph, 2px gap, 14px line (52px total).
+                    "phone-tab-item relative z-10 flex min-h-13 min-w-0 flex-col items-center gap-0.5 rounded-full px-1 py-2 text-[11px] leading-[14px] outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    tab === id
+                      ? "font-medium text-primary"
+                      : "text-foreground/65 hover:text-foreground/90",
+                  )}
+                  onClick={() => selectTab(id)}
+                >
+                  <NavIcon name={id} />
+                  <span className="w-full truncate text-center">
+                    {t(id === "subs" ? "app.nav.subsTab" : labelKey)}
+                  </span>
+                </button>
+              ))}
+            </nav>
+          </div>
         </div>
       </TooltipProvider>
     );

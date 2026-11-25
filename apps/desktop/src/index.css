@@ -249,7 +249,7 @@
 
 
 /* Navigation icons (components/NavIcon.tsx): rounded line glyphs stroked in
-   the button's text color. 16px in the phone tab bar, 20px beside a sidebar
+   the button's text color. 20px in the phone tab bar and beside a sidebar
    label, 24px on the collapsed rail. */
 .nav-icon {
   display: block;
@@ -257,6 +257,7 @@
   height: 16px;
   flex: none;
 }
+.phone-tab-bar .nav-icon,
 [data-sidebar="menu-button"] .nav-icon {
   width: 20px;
   height: 20px;
@@ -264,6 +265,178 @@
 [data-collapsible="icon"] [data-sidebar="menu-button"] .nav-icon {
   width: 24px;
   height: 24px;
+}
+
+/* Phone frosted glass chrome (iOS 26/27 / Apple Music Web glass material):
+   translucent top header and detached floating bottom tab bar. Content scrolls
+   behind both bars while reserving clearance at the top and bottom edges. */
+.phone-shell {
+  --phone-header-height: calc(max(0.75rem, env(safe-area-inset-top, 0px)) + 2.75rem);
+  --phone-content-top: var(--phone-header-height);
+  --phone-nav-inset: max(env(safe-area-inset-bottom, 0px), var(--ice-nav-inset, 0px));
+  --phone-tab-bar-bottom: max(0.75rem, calc(var(--phone-nav-inset) + 0.25rem));
+  --phone-tab-bar-height: 3.75rem;
+  --phone-tab-bar-clearance: calc(
+    var(--phone-tab-bar-bottom) + var(--phone-tab-bar-height) + 0.75rem
+  );
+  --glass-backdrop-filter: saturate(220%) blur(16px);
+  --glass-bg: #f5f5f78c;
+  --glass-shadow: #0000001a;
+  --glass-stroke: #000;
+  --glass-stroke-alpha: 0.05;
+  --glass-stroke-combined: #0000000d;
+}
+.dark .phone-shell {
+  --glass-bg: #26262899;
+  --glass-shadow: #0003;
+  --glass-stroke: #fff;
+  --glass-stroke-alpha: 0.2;
+  --glass-stroke-combined: #fff3;
+}
+.phone-shell:has(> .phone-recovery) {
+  --phone-content-top: 0px;
+}
+.phone-shell > .phone-recovery {
+  padding-top: calc(var(--phone-header-height) + 0.75rem);
+}
+/* Every phone page scrolls as one unified surface from behind the frosted top
+   header down behind the floating Liquid Glass bottom tab bar. */
+.phone-shell .home-panel,
+.phone-shell .apps-panel,
+.phone-shell .rules-panel,
+.phone-shell .settings-panel,
+.phone-shell .subs-panel-scroll {
+  margin-top: -0.75rem;
+  padding-top: calc(var(--phone-content-top) + 0.75rem);
+  padding-bottom: var(--phone-tab-bar-clearance);
+}
+.phone-shell [data-testid="capsule-toast"] {
+  bottom: var(--phone-tab-bar-clearance);
+}
+
+.phone-header {
+  isolation: isolate;
+}
+.phone-header::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: var(--glass-backdrop-filter);
+  backdrop-filter: var(--glass-backdrop-filter);
+  box-shadow: inset 0 -0.5px 0 var(--glass-stroke-combined);
+  pointer-events: none;
+}
+
+.phone-tab-dock {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  z-index: 30;
+  display: flex;
+  justify-content: center;
+  padding: 0 1rem var(--phone-tab-bar-bottom);
+  pointer-events: none;
+}
+
+.phone-tab-bar {
+  pointer-events: auto;
+  isolation: isolate;
+}
+.phone-tab-bar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: var(--glass-backdrop-filter);
+  backdrop-filter: var(--glass-backdrop-filter);
+  box-shadow: 0 10px 40px var(--glass-shadow);
+  pointer-events: none;
+}
+.phone-tab-bar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  border-radius: inherit;
+  box-shadow:
+    inset 0.5px 0.5px var(--glass-stroke),
+    inset 0.5px -0.5px var(--glass-stroke),
+    inset -0.5px 0.5px var(--glass-stroke),
+    inset -0.5px -0.5px var(--glass-stroke);
+  opacity: var(--glass-stroke-alpha);
+  pointer-events: none;
+}
+
+.phone-tab-indicator {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 4px;
+  z-index: 1;
+  width: calc((100% - 8px) / var(--tab-count, 5));
+  border-radius: 9999px;
+  pointer-events: none;
+  background: rgb(0 0 0 / 0.065);
+  box-shadow:
+    inset 0 0.5px 0 rgb(255 255 255 / 0.55),
+    0 1px 2px rgb(0 0 0 / 0.04);
+  transform: translateX(calc(var(--tab-index, 0) * 100%));
+  transition: transform 340ms cubic-bezier(0.32, 0.72, 0, 1);
+  will-change: transform;
+}
+.dark .phone-tab-indicator {
+  background: rgb(255 255 255 / 0.13);
+  box-shadow:
+    inset 0 0.5px 0 rgb(255 255 255 / 0.18),
+    0 1px 4px rgb(0 0 0 / 0.18);
+}
+
+.phone-tab-item {
+  transition: color 180ms ease, transform 160ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.phone-tab-item:active {
+  transform: scale(0.95);
+}
+.phone-tab-item[aria-current="page"] .nav-icon {
+  stroke-width: 2;
+}
+
+@media (prefers-contrast: more) {
+  .phone-shell {
+    --glass-bg: #f2f2f2;
+    --glass-stroke: #0d0d0d;
+    --glass-stroke-alpha: 1;
+    --glass-stroke-combined: #0d0d0d;
+  }
+  .dark .phone-shell {
+    --glass-bg: #0e0e0e;
+    --glass-stroke: #e7e7e7;
+    --glass-stroke-alpha: 1;
+    --glass-stroke-combined: #e7e7e7;
+  }
+  .phone-header::before,
+  .phone-tab-bar::before {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  .phone-tab-bar::after {
+    box-shadow: none;
+    border: 1px solid var(--glass-stroke);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .phone-tab-indicator,
+  .phone-tab-item {
+    transition: none;
+  }
+  .phone-tab-item:active {
+    transform: none;
+  }
 }
 
 /* Apple-style interaction defaults: arrow cursor on controls, selectable
