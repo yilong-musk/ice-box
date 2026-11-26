@@ -460,6 +460,7 @@ const zh = {
   // --- window controls ---
   "window.minimize": "最小化",
   "window.maximize": "最大化",
+  "window.restore": "还原",
   "window.close": "关闭",
 
   // --- TUN install dialog ---
@@ -1041,6 +1042,7 @@ const en: Record<MessageKey, string> = {
   // --- window controls ---
   "window.minimize": "Minimize",
   "window.maximize": "Maximize",
+  "window.restore": "Restore",
   "window.close": "Close",
 
   // --- TUN install dialog ---

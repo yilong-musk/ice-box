@@ -6,6 +6,7 @@ import {
   controlsFollowWindowFocus,
   detectWindowChrome,
   runWindowCommand,
+  subscribeWindowMaximized,
 } from "@platform/windowChrome";
 import { api } from "@/api/client";
 import { t, useLanguagePreference } from "@/lib/i18n";
@@ -75,6 +76,7 @@ function useWindowFocused(enabled: boolean): boolean {
 }
 
 type LightTone = "close" | "minimize" | "zoom";
+type LightGlyph = LightTone | "restore";
 
 /** macOS light colours, with the darker glyph ink each light uses. */
 const LIGHT_CLASS: Record<LightTone, string> = {
@@ -83,22 +85,46 @@ const LIGHT_CLASS: Record<LightTone, string> = {
   zoom: "bg-[#28c840] text-[#006500]",
 };
 
-/** Glyphs drawn on a 12px light, shown while the group is hovered. */
-const LIGHT_GLYPH: Record<LightTone, ReactNode> = {
+/** Two filled triangles, as the macOS green light draws its arrows. */
+function TriangleGlyph({ d }: { d: string }) {
+  return <path d={d} fill="currentColor" strokeWidth={0.5} strokeLinejoin="round" />;
+}
+
+/**
+ * Glyphs drawn on a 12px light, shown while the group is hovered. The zoom
+ * light uses the macOS full-screen pair in both states (triangles pointing
+ * out to maximize, pointing in to restore), on the same top-left to
+ * bottom-right diagonal; the plus is the Option-key zoom glyph on macOS and
+ * would mix two conventions.
+ */
+const LIGHT_GLYPH: Record<LightGlyph, ReactNode> = {
   close: <path d="M3.75 3.75l4.5 4.5M8.25 3.75l-4.5 4.5" />,
   minimize: <path d="M3.25 6h5.5" />,
-  zoom: <path d="M6 3.25v5.5M3.25 6h5.5" />,
+  zoom: <TriangleGlyph d="M3.25 3.25h4.25L3.25 7.5zM8.75 8.75H4.5l4.25-4.25z" />,
+  restore: <TriangleGlyph d="M5.4 2.65v2.75H2.65zM6.6 9.35V6.6h2.75z" />,
 };
+
+/** Whether the window is maximized, so the zoom light can offer to restore. */
+function useWindowMaximized(enabled: boolean): boolean {
+  const [maximized, setMaximized] = useState(false);
+  useEffect(() => {
+    if (!enabled) return;
+    return subscribeWindowMaximized(setMaximized);
+  }, [enabled]);
+  return maximized;
+}
 
 function TrafficLight({
   label,
   tone,
+  glyph = tone,
   showGlyph,
   dimmed,
   onCommand,
 }: {
   label: string;
   tone: LightTone;
+  glyph?: LightGlyph;
   showGlyph: boolean;
   dimmed: boolean;
   onCommand: (button: HTMLButtonElement) => void;
@@ -111,6 +137,7 @@ function TrafficLight({
       className="group/light flex size-5 items-center justify-center rounded-full outline-none"
       aria-label={label}
       data-tone={tone}
+      data-glyph={glyph}
       onClick={(event) => onCommand(event.currentTarget)}
     >
       <span
@@ -128,7 +155,7 @@ function TrafficLight({
           strokeLinecap="round"
           aria-hidden="true"
         >
-          {LIGHT_GLYPH[tone]}
+          {LIGHT_GLYPH[glyph]}
         </svg>
       </span>
     </button>
@@ -149,6 +176,7 @@ export function WindowControls() {
   const followFocus = windows && controlsFollowWindowFocus();
   const windowFocused = useWindowFocused(followFocus);
   const focused = !followFocus || windowFocused;
+  const maximized = useWindowMaximized(windows);
   const [hot, setHot] = useState(false);
   const [pointerEpoch, setPointerEpoch] = useState(resumeEpoch);
   if (!windows) return null;
@@ -195,8 +223,9 @@ export function WindowControls() {
           onCommand={() => void runWindowCommand("minimize")}
         />
         <TrafficLight
-          label={t("window.maximize")}
+          label={maximized ? t("window.restore") : t("window.maximize")}
           tone="zoom"
+          glyph={maximized ? "restore" : "zoom"}
           showGlyph={hovered}
           dimmed={!focused && !hovered}
           onCommand={() => void runWindowCommand("toggleMaximize")}
