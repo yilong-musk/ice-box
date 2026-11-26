@@ -385,7 +385,7 @@ pub struct ProfileCacheEntry {
 
 impl ProfileCacheEntry {
     /// Subscription rules, loaded from disk on the first Rules-page read and
-    /// shared until [`Self::clear_rule_page`].
+    /// shared until [`drop_rule_keyword_cache`].
     pub(crate) fn rule_page(&self, state: &AppState) -> Result<Arc<RulePage>, AppError> {
         let mut slot = self
             .rule_page
@@ -402,25 +402,35 @@ impl ProfileCacheEntry {
         *slot = Some(Arc::clone(&page));
         Ok(page)
     }
-
-    pub(crate) fn clear_rule_page(&self) {
-        let mut slot = self
-            .rule_page
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        *slot = None;
-    }
 }
 
 /// Drop the Rules-page copy of subscription rules, fingerprints, and the
 /// keyword index. Home and the tray do not need them.
+///
+/// A Rules-page read in flight holds the page slot while it parses the full
+/// profile from disk, so clearing may wait for that read to finish. The wait
+/// happens after `profile_cache` is unlocked: holding it would stall every
+/// other command that looks up the cached profile (status, nodes, the tray).
 pub(crate) fn drop_rule_keyword_cache(state: &AppState) {
-    let Ok(cache) = state.profile_cache.lock() else {
-        return;
+    let slot = {
+        let Ok(cache) = state.profile_cache.lock() else {
+            return;
+        };
+        match cache.as_ref() {
+            Some(entry) => Arc::clone(&entry.rule_page),
+            None => return,
+        }
     };
-    if let Some(entry) = cache.as_ref() {
-        entry.clear_rule_page();
-    }
+    *slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+}
+
+/// Test-only handle on the Rules-page slot, to hold it the way an in-flight
+/// rule read does.
+#[cfg(test)]
+pub(crate) fn rule_page_slot_for_test(
+    entry: &ProfileCacheEntry,
+) -> Arc<Mutex<Option<Arc<RulePage>>>> {
+    Arc::clone(&entry.rule_page)
 }
 
 /// Full profile from disk, including rules and DNS. Does not touch the

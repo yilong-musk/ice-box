@@ -986,6 +986,32 @@ fn resident_profile_omits_rules_until_the_rules_page_loads_them() {
 }
 
 #[test]
+fn releasing_rules_does_not_hold_the_profile_cache_while_a_read_is_in_flight() {
+    let state = temp_state_with_rules("release-in-flight", sample_rules());
+    rule_overview(&state).unwrap();
+    let entry = cached_profile(&state).unwrap().unwrap();
+    let slot = rule_page_slot_for_test(&entry);
+    // Hold the slot like a Rules-page read that is still parsing the profile.
+    let held = slot.lock().unwrap();
+    std::thread::scope(|scope| {
+        let release = scope.spawn(|| drop_rule_keyword_cache(&state));
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(
+            state.profile_cache.try_lock().is_ok(),
+            "other commands must still reach the cached profile while release waits"
+        );
+        assert!(
+            !release.is_finished(),
+            "release waits for the read in flight"
+        );
+        drop(held);
+        release.join().unwrap();
+    });
+    assert!(!subscription_rules_retained(&state));
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
 fn config_build_reloads_connection_fields_then_releases_them() {
     let state = temp_state_with_node("resident-build");
     let entry = cached_profile(&state).unwrap().unwrap();

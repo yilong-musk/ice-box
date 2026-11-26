@@ -66,7 +66,6 @@ import { RuntimeStoreProvider, useRuntimeStore } from "./lib/runtimeStore";
 import { PaneTabContext, PaneVisibleContext } from "./lib/paneVisibility";
 import {
   prefetchNodes,
-  prefetchRules,
   prefetchSubscriptions,
   schedulePagePrefetch,
 } from "./lib/pagePrefetch";
@@ -647,20 +646,16 @@ function AppShell() {
     });
   }, []);
 
-  const tabRef = useRef(tab);
-  tabRef.current = tab;
-  // Once launch has settled, read what Nodes, Subscriptions and Rules open
-  // on, then render those pages hidden, so their first visit shows content at
-  // once instead of an empty card. A page already visited reads for itself.
+  // Once launch has settled, read what Nodes and Subscriptions open on, then
+  // render Subscriptions and Rules hidden, so their first visit only flips
+  // visibility instead of mounting the page. Nodes is not mounted ahead: on
+  // the desktop it sits in a kept pane, which lays out the whole list even
+  // while hidden; its snapshot already lets the first visit show content.
   useEffect(() => {
-    const tabs: Tab[] = isPhoneShell() ? ["subs", "rules"] : ["nodes", "subs", "rules"];
+    const tabs: Tab[] = ["subs", "rules"];
     return schedulePagePrefetch({
       delayMs: PAGE_PREFETCH_DELAY_MS,
-      tasks: [
-        ...(tabs.includes("nodes") ? [prefetchNodes] : []),
-        prefetchSubscriptions,
-        () => prefetchRules(() => tabRef.current === "rules"),
-      ],
+      tasks: [...(isPhoneShell() ? [] : [prefetchNodes]), prefetchSubscriptions],
       onDone: () => {
         // A transition: the hidden pages render without holding up input.
         startTransition(() => {

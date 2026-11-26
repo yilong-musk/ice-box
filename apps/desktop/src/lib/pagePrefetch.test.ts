@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SubscriptionMeta } from "../api/client";
 import {
   clearNodesSnapshot,
   readNodesSnapshot,
   writeNodesSnapshot,
 } from "./nodes";
 import {
-  readRulesSnapshot,
   readSubscriptionsSnapshot,
-  writeRulesSnapshot,
+  writeSubscriptionsSnapshot,
 } from "./pageSnapshots";
 
 const api = vi.hoisted(() => ({
@@ -17,16 +17,12 @@ const api = vi.hoisted(() => ({
   getSettings: vi.fn(),
   getStatus: vi.fn(),
   listSubscriptions: vi.fn(),
-  getRuleOverview: vi.fn(),
-  listRules: vi.fn(),
-  releaseRuleSearch: vi.fn(),
 }));
 
 vi.mock("../api/client", () => ({ api }));
 
 import {
   prefetchNodes,
-  prefetchRules,
   prefetchSubscriptions,
   schedulePagePrefetch,
 } from "./pagePrefetch";
@@ -39,9 +35,6 @@ const node = (tag: string) => ({
   favorite: false,
   favorite_rank: null,
 });
-
-const overview = { total: 1, disabled: 0, custom: 0, rule_sets: 0, types: [] };
-const list = { total: 1, offset: 0, limit: 100, items: [] };
 
 afterEach(() => {
   clearNodesSnapshot();
@@ -88,44 +81,15 @@ describe("prefetchSubscriptions", () => {
     await prefetchSubscriptions();
     expect(readSubscriptionsSnapshot()).toEqual([{ id: "s1" }]);
   });
-});
 
-describe("prefetchRules", () => {
-  it("fills the rules snapshot and releases the backend copy", async () => {
-    api.getRuleOverview.mockResolvedValue(overview);
-    api.listRules.mockResolvedValue(list);
-    api.releaseRuleSearch.mockResolvedValue(undefined);
-
-    await prefetchRules(() => false);
-
-    expect(api.listRules).toHaveBeenCalledWith(
-      expect.objectContaining({ offset: 0, limit: 100, keyword: null }),
-    );
-    expect(readRulesSnapshot()).toEqual({ overview, list });
-    expect(api.releaseRuleSearch).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps the backend copy when the Rules page opened meanwhile", async () => {
-    api.getRuleOverview.mockResolvedValue(overview);
-    api.listRules.mockResolvedValue(list);
-
-    await prefetchRules(() => true);
-
-    expect(api.releaseRuleSearch).not.toHaveBeenCalled();
-  });
-
-  it("does not replace a snapshot the page wrote first", async () => {
-    const own = { overview: { ...overview, total: 7 }, list };
-    api.getRuleOverview.mockImplementation(async () => {
-      writeRulesSnapshot(own);
-      return overview;
+  it("does not replace a list the page read meanwhile", async () => {
+    const own = [{ id: "fresh" }] as unknown as SubscriptionMeta[];
+    api.listSubscriptions.mockImplementation(async () => {
+      writeSubscriptionsSnapshot(own);
+      return [{ id: "old" }];
     });
-    api.listRules.mockResolvedValue(list);
-    api.releaseRuleSearch.mockResolvedValue(undefined);
-
-    await prefetchRules(() => false);
-
-    expect(readRulesSnapshot()).toBe(own);
+    await prefetchSubscriptions();
+    expect(readSubscriptionsSnapshot()).toBe(own);
   });
 });
 

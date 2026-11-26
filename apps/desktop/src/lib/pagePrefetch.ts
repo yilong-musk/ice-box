@@ -1,11 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 /**
- * Warm the pages people open first (Nodes, Subscriptions, Rules) once the app
- * has settled after launch. Each page starts from a session snapshot when one
+ * Warm the pages people open first (Nodes, Subscriptions) once the app has
+ * settled after launch. Each page starts from a session snapshot when one
  * exists, so reading the data here ahead of the first visit lets that visit
  * show content at once instead of an empty card while its first reads are in
  * flight. The pages still refresh on their own when they open.
+ *
+ * Rules is not prefetched: its first read makes the backend parse the whole
+ * profile, which is not worth paying on every launch for a page that may not
+ * be opened. It shows a loading line until that read lands.
  */
 
 import { api } from "../api/client";
@@ -15,11 +19,9 @@ import {
   resolveSelectedTag,
   writeNodesSnapshot,
 } from "./nodes";
-import { defaultRulesRequest } from "./rules";
 import {
-  readRulesSnapshot,
   readSubscriptionsSnapshot,
-  writeRulesSnapshot,
+  subscriptionsSnapshotRevision,
   writeSubscriptionsSnapshot,
 } from "./pageSnapshots";
 
@@ -45,29 +47,10 @@ export async function prefetchNodes(): Promise<void> {
 /** Fill the subscription list the Subscriptions page mounts from. */
 export async function prefetchSubscriptions(): Promise<void> {
   if (readSubscriptionsSnapshot()) return;
+  const revision = subscriptionsSnapshotRevision();
   const items = await api.listSubscriptions();
   // The page may have read a newer list meanwhile.
-  if (!readSubscriptionsSnapshot()) writeSubscriptionsSnapshot(items);
-}
-
-/**
- * Fill the Rules overview and first page. Reading them makes the backend load
- * every subscription rule; that copy is meant to live only while the Rules
- * page is open, so it is released again unless the page opened meanwhile.
- */
-export async function prefetchRules(rulesOpen: () => boolean): Promise<void> {
-  if (readRulesSnapshot()) return;
-  try {
-    const [overview, list] = await Promise.all([
-      api.getRuleOverview(),
-      api.listRules(defaultRulesRequest()),
-    ]);
-    if (!readRulesSnapshot()) writeRulesSnapshot({ overview, list });
-  } finally {
-    if (!rulesOpen() && typeof api.releaseRuleSearch === "function") {
-      void api.releaseRuleSearch().catch(() => {});
-    }
-  }
+  if (subscriptionsSnapshotRevision() === revision) writeSubscriptionsSnapshot(items);
 }
 
 type IdleWindow = Window & {

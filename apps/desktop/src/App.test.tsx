@@ -292,10 +292,9 @@ describe("App", () => {
     });
   });
 
-  it("prepares Nodes, Subscriptions and Rules in the background after launch", async () => {
+  it("prepares Subscriptions and Rules in the background after launch", async () => {
     vi.useFakeTimers();
     const view = within(render(<App />).container);
-    expect(view.queryByTestId("nodes-panel")).toBeNull();
     expect(view.queryByTestId("subs-panel")).toBeNull();
     expect(view.queryByTestId("rules-panel")).toBeNull();
 
@@ -304,9 +303,10 @@ describe("App", () => {
     });
 
     // Rendered hidden, ahead of their first visit; Home stays on screen.
-    expect(view.getByTestId("nodes-panel")).toBeInTheDocument();
+    // Nodes only gets its snapshot read: its kept pane would lay it out.
     expect(view.getByTestId("subs-panel")).toBeInTheDocument();
     expect(view.getByTestId("rules-panel")).toBeInTheDocument();
+    expect(view.queryByTestId("nodes-panel")).toBeNull();
     expect(view.getByTestId("home-panel")).toBeVisible();
     expect(view.getByTestId("rules-panel")).not.toBeVisible();
   });
