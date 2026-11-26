@@ -56,7 +56,7 @@ for arg in "$@"; do
   --dry-run) dry_run=1 ;;
   --serial) serial=1 ;;
   -h | --help)
-    sed -n '3,41p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,42p' "$0" | sed 's/^# \{0,1\}//'
     exit 0
     ;;
   *)
@@ -88,7 +88,9 @@ add_unique() {
   local existing
   # Eval keeps this portable to bash 3.2 (macOS /bin/bash) without namerefs.
   eval "for existing in \${${array_name}[@]+\"\${${array_name}[@]}\"}; do
-    [[ \"\$existing\" == \"\$value\" ]] && return 0
+    if [[ \"\$existing\" == \"\$value\" ]]; then
+      return 0
+    fi
   done
   ${array_name}+=(\"\$value\")"
 }
@@ -204,8 +206,11 @@ shell_deps_available() {
 
 # Resolve changed Rust paths to affected non-shell workspace crates (including
 # transitive workspace reverse dependencies) using `cargo metadata`.
-# Populates `rust_crates` (empty when `rust_all=1` or only shells changed).
+# Populates `rust_crates` (empty when `rust_all=1` or only shells changed) and
+# `rust_has_lib` / `rust_has_bins` so binary-only crates do not pass `--lib`.
 rust_crates=()
+rust_has_lib=0
+rust_has_bins=0
 resolve_rust_crates() {
   if [[ "$run_rust" == 0 || "$rust_all" == 1 ]]; then
     return 0
@@ -221,18 +226,18 @@ resolve_rust_crates() {
 
   local resolved
   if ! resolved="$(
-    python3 - "$ROOT" "${rust_paths[@]}" <<'PY'
+    python3 - "${rust_paths[@]}" <<'PY'
 import json
 import subprocess
 import sys
 from pathlib import Path
 
-root = Path(sys.argv[1]).resolve()
-paths = [arg.strip() for arg in sys.argv[2:] if arg.strip()]
+paths = [arg.strip() for arg in sys.argv[1:] if arg.strip()]
 shells = {"ice-box", "ice-box-mobile"}
+lib_kinds = {"lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"}
 
 proc = subprocess.run(
-    ["cargo", "metadata", "--no-deps", "--format-version", "1", "--manifest-path", str(root / "Cargo.toml")],
+    ["cargo", "metadata", "--no-deps", "--format-version", "1"],
     capture_output=True,
     text=True,
 )
@@ -241,9 +246,11 @@ if proc.returncode != 0:
     sys.exit(0)
 
 meta = json.loads(proc.stdout)
+root = Path(meta["workspace_root"]).resolve()
 ws_ids = set(meta.get("workspace_members", []))
 pkgs = [p for p in meta.get("packages", []) if p["id"] in ws_ids]
-pkg_names = {p["name"] for p in pkgs}
+pkg_by_name = {p["name"]: p for p in pkgs}
+pkg_names = set(pkg_by_name)
 
 # Map relative manifest directory -> package name, longest prefix first.
 dir_to_pkg = []
@@ -287,21 +294,35 @@ while queue:
         queue.append(parent)
 
 for name in sorted(affected):
-    print(name)
+    targets = pkg_by_name[name].get("targets", [])
+    has_lib = 1 if any(
+        kind in lib_kinds for t in targets for kind in t.get("kind", [])
+    ) else 0
+    has_bin = 1 if any("bin" in t.get("kind", []) for t in targets) else 0
+    print(f"{name} {has_lib} {has_bin}")
 PY
   )"; then
     rust_all=1
     return 0
   fi
 
-  while IFS= read -r crate; do
+  local crate has_lib has_bin
+  while IFS=' ' read -r crate has_lib has_bin; do
     [[ -n "$crate" ]] || continue
     if [[ "$crate" == "ALL" ]]; then
       rust_all=1
       rust_crates=()
+      rust_has_lib=0
+      rust_has_bins=0
       return 0
     fi
     add_unique rust_crates "$crate"
+    if [[ "${has_lib:-0}" == 1 ]]; then
+      rust_has_lib=1
+    fi
+    if [[ "${has_bin:-0}" == 1 ]]; then
+      rust_has_bins=1
+    fi
   done <<<"$resolved"
 }
 
@@ -441,14 +462,24 @@ echo "gate-local: scope = $scope_label"
 LOG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ice-box-gate-local-XXXXXX")"
 ACTIVE_PIDS=()
 
+kill_tree() {
+  local pid="$1"
+  if command -v pkill >/dev/null 2>&1; then
+    pkill -TERM -P "$pid" 2>/dev/null || true
+  fi
+  kill "$pid" 2>/dev/null || true
+}
+
 cleanup() {
   local pid
   for pid in ${ACTIVE_PIDS[@]+"${ACTIVE_PIDS[@]}"}; do
-    kill "$pid" 2>/dev/null || true
+    kill_tree "$pid"
   done
   rm -rf "$LOG_DIR"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # Parallel task runner (bash 3.2 compatible).
 # Usage:
@@ -469,6 +500,19 @@ batch_reset() {
   BATCH_STARTS=()
 }
 
+finish_task() {
+  local rc=$?
+  local pid
+  for pid in ${ACTIVE_PIDS[@]+"${ACTIVE_PIDS[@]}"}; do
+    kill_tree "$pid"
+  done
+  local elapsed=$((SECONDS - _TASK_T0))
+  if [[ "$elapsed" -lt 0 ]]; then
+    elapsed=0
+  fi
+  printf '%s %s\n' "$rc" "$elapsed" >"$_TASK_RC_FILE" 2>/dev/null || true
+}
+
 batch_add() {
   local label="$1"
   shift
@@ -476,11 +520,20 @@ batch_add() {
 
   if [[ "$serial" == 1 ]]; then
     echo "== $label =="
+    # Run the task in a subshell with `set -euo pipefail` so multi-step
+    # functions abort on their first failing command even though the caller
+    # temporarily clears `-e` to capture the exit status.
     set +e
-    "$@"
+    (
+      set -euo pipefail
+      "$@"
+    )
     local rc=$?
     set -e
     local elapsed=$((SECONDS - start_s))
+    if [[ "$elapsed" -lt 0 ]]; then
+      elapsed=0
+    fi
     if [[ "$rc" -ne 0 ]]; then
       echo "gate-local: FAILED $label (${elapsed}s, exit $rc)" >&2
       return "$rc"
@@ -495,12 +548,14 @@ batch_add() {
   local rc_file="${stem}.rc"
 
   (
-    trap - EXIT
-    set +e
-    local t0="$SECONDS"
+    _TASK_T0="$SECONDS"
+    _TASK_RC_FILE="$rc_file"
+    ACTIVE_PIDS=()
+    trap finish_task EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    set -euo pipefail
     "$@" >"$log_file" 2>&1
-    local rc=$?
-    printf '%s %s\n' "$rc" "$((SECONDS - t0))" >"$rc_file"
   ) &
   local pid=$!
   BATCH_PIDS+=("$pid")
@@ -525,6 +580,9 @@ batch_wait() {
     if [[ -f "${BATCH_RCS[$i]}" ]]; then
       read -r rc elapsed <"${BATCH_RCS[$i]}" || true
     fi
+    if [[ "$elapsed" -lt 0 ]]; then
+      elapsed=0
+    fi
     if [[ "$rc" -eq 0 ]]; then
       echo "gate-local: ok ${BATCH_LABELS[$i]} (${elapsed}s)"
     else
@@ -538,6 +596,12 @@ batch_wait() {
   done
   ACTIVE_PIDS=()
   return "$failed"
+}
+
+run_in_dir() {
+  local dir="$1"
+  shift
+  (cd "$dir" && "$@")
 }
 
 run_rust_bucket() {
@@ -564,7 +628,7 @@ run_rust_bucket() {
   if [[ "$rust_all" == 1 ]]; then
     if [[ "$has_shells" == 1 && "${#shells[@]}" -eq 2 ]]; then
       echo "== cargo clippy (workspace) =="
-      cargo clippy --workspace --all-targets -- -D warnings
+      cargo clippy --workspace --all-targets -- -D warnings || return $?
     else
       local exclude_args=()
       local s
@@ -573,13 +637,17 @@ run_rust_bucket() {
         if [[ "$has_shells" == 1 ]]; then
           local chosen
           for chosen in "${shells[@]}"; do
-            [[ "$chosen" == "$s" ]] && keep=1
+            if [[ "$chosen" == "$s" ]]; then
+              keep=1
+            fi
           done
         fi
-        [[ "$keep" == 0 ]] && exclude_args+=(--exclude "$s")
+        if [[ "$keep" == 0 ]]; then
+          exclude_args+=(--exclude "$s")
+        fi
       done
       echo "== cargo clippy (workspace) =="
-      cargo clippy --workspace --all-targets ${exclude_args[@]+"${exclude_args[@]}"} -- -D warnings
+      cargo clippy --workspace --all-targets ${exclude_args[@]+"${exclude_args[@]}"} -- -D warnings || return $?
     fi
   else
     local clippy_pkgs=()
@@ -593,27 +661,36 @@ run_rust_bucket() {
       done
     fi
     echo "== cargo clippy (${clippy_pkgs[*]}) =="
-    cargo clippy "${clippy_pkgs[@]}" --all-targets -- -D warnings
+    cargo clippy "${clippy_pkgs[@]}" --all-targets -- -D warnings || return $?
   fi
 
   # 2. Non-shell Rust unit tests (lib + bins, e.g. ice-helper install tests).
   if [[ "$rust_all" == 1 ]]; then
     echo "== cargo test (non-shell lib + bins) =="
-    cargo test --workspace --lib --bins --exclude ice-box --exclude ice-box-mobile
+    cargo test --workspace --lib --bins --exclude ice-box --exclude ice-box-mobile || return $?
   elif [[ "${#rust_crates[@]}" -gt 0 ]]; then
     local pkg_args=()
     local c
     for c in "${rust_crates[@]}"; do
       pkg_args+=(-p "$c")
     done
-    echo "== cargo test (${rust_crates[*]} lib + bins) =="
-    cargo test "${pkg_args[@]}" --lib --bins
+    local target_args=()
+    if [[ "$rust_has_lib" == 1 ]]; then
+      target_args+=(--lib)
+    fi
+    if [[ "$rust_has_bins" == 1 ]]; then
+      target_args+=(--bins)
+    fi
+    if [[ "${#target_args[@]}" -gt 0 ]]; then
+      echo "== cargo test (${rust_crates[*]} ${target_args[*]}) =="
+      cargo test "${pkg_args[@]}" "${target_args[@]}" || return $?
+    fi
   fi
 
   # 3. Host-free TUN integration tests when ice-tun-sys is affected.
   if [[ "$run_tun_integration" == 1 ]]; then
     echo "== cargo test (ice-tun-sys integration) =="
-    cargo test -p ice-tun-sys --tests
+    cargo test -p ice-tun-sys --tests || return $?
   fi
 
   # 4. Tauri shell library tests when runnable.
@@ -624,12 +701,13 @@ run_rust_bucket() {
       shell_args+=(-p "$c")
     done
     echo "== cargo test (Tauri shells lib: ${shells[*]}) =="
-    cargo test "${shell_args[@]}" --lib
+    cargo test "${shell_args[@]}" --lib || return $?
   fi
 }
 
 run_mobile_demo_smoke() {
   (
+    set -euo pipefail
     cd "$ROOT/apps/website"
     npm run build
     # Reuse cached Playwright Chromium so local runs avoid a network manifest
@@ -644,31 +722,31 @@ run_mobile_demo_smoke() {
 run_frontend_bucket() {
   if [[ "$run_fe_typecheck" == 1 ]]; then
     batch_reset
-    batch_add "tsc (desktop)" bash -c "cd '$ROOT/apps/desktop' && npm run typecheck"
-    batch_add "tsc (website)" bash -c "cd '$ROOT/apps/website' && npm run typecheck"
-    batch_add "tsc (mobile)" bash -c "cd '$ROOT/apps/mobile' && npm run typecheck"
-    batch_wait
+    batch_add "tsc (desktop)" run_in_dir "$ROOT/apps/desktop" npm run typecheck
+    batch_add "tsc (website)" run_in_dir "$ROOT/apps/website" npm run typecheck
+    batch_add "tsc (mobile)" run_in_dir "$ROOT/apps/mobile" npm run typecheck
+    batch_wait || return $?
   fi
 
   batch_reset
   if [[ "$run_fe_vitest" == 1 ]]; then
-    batch_add "vitest (desktop)" bash -c "cd '$ROOT/apps/desktop' && npm test"
+    batch_add "vitest (desktop)" run_in_dir "$ROOT/apps/desktop" npm test
   elif [[ "$run_fe_arch_vitest" == 1 ]]; then
-    batch_add "vitest (architecture + version)" bash -c "cd '$ROOT/apps/desktop' && npx vitest run src/api/architecture.test.ts src/lib/appVersion.test.ts"
+    batch_add "vitest (architecture + version)" run_in_dir "$ROOT/apps/desktop" npx vitest run src/api/architecture.test.ts src/lib/appVersion.test.ts
   fi
   if [[ "$run_fe_website_test" == 1 ]]; then
-    batch_add "website installer links" bash -c "cd '$ROOT/apps/website' && npm test"
+    batch_add "website installer links" run_in_dir "$ROOT/apps/website" npm test
   fi
   if [[ "$run_fe_mobile_demo" == 1 ]]; then
     batch_add "website build + mobile demo smoke" run_mobile_demo_smoke
   fi
-  batch_wait
+  batch_wait || return $?
 }
 
 run_bash_syntax_checks() {
   local script
   for script in ${changed_scripts[@]+"${changed_scripts[@]}"}; do
-    bash -n "$script"
+    bash -n "$script" || return $?
   done
 }
 
@@ -724,4 +802,8 @@ if [[ "$run_fixtures" == 1 ]]; then
 fi
 batch_wait
 
-echo "gate-local: OK ($((SECONDS - gate_start))s)"
+gate_elapsed=$((SECONDS - gate_start))
+if [[ "$gate_elapsed" -lt 0 ]]; then
+  gate_elapsed=0
+fi
+echo "gate-local: OK (${gate_elapsed}s)"

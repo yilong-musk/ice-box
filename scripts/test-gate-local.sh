@@ -9,7 +9,7 @@ TMP="$(mktemp -d "${TMPDIR:-/tmp}/ice-box-gate-local-test-XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 
 fail() {
-  echo "test-gate-local: $*" >&2
+  printf 'test-gate-local: %b\n' "$*" >&2
   exit 1
 }
 
@@ -17,7 +17,7 @@ assert_contains() {
   local name="$1"
   local haystack="$2"
   local needle="$3"
-  if ! printf '%s\n' "$haystack" | grep -Fq "$needle"; then
+  if ! printf '%s\n' "$haystack" | grep -Fq -- "$needle"; then
     fail "$name: expected '$needle' in output:\n$haystack"
   fi
 }
@@ -26,7 +26,7 @@ assert_not_contains() {
   local name="$1"
   local haystack="$2"
   local needle="$3"
-  if printf '%s\n' "$haystack" | grep -Fq "$needle"; then
+  if printf '%s\n' "$haystack" | grep -Fq -- "$needle"; then
     fail "$name: unexpected '$needle' in output:\n$haystack"
   fi
 }
@@ -70,6 +70,12 @@ for manifest in sorted(src.glob("crates/*/Cargo.toml")) + [
         (src_dir / "main.rs").write_text("fn main() {}\n", encoding="utf-8")
     if (manifest.parent / "build.rs").exists():
         (target.parent / "build.rs").write_text("fn main() {}\n", encoding="utf-8")
+
+# Seed minimal Phase 0 scripts so execution tests can run without the full repo.
+for rel in ("scripts/check-toolchain-pins.sh", "scripts/check-doc-versions.sh"):
+    target = dst / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
 
 # Seed placeholder files for non-Rust buckets.
 for rel in (
@@ -203,5 +209,144 @@ assert_contains "self-edit" "$out" "(full)"
 assert_contains "self-edit" "$out" "rust(workspace)"
 assert_contains "self-edit" "$out" "fixtures"
 reset_worktree
+
+echo "== help output includes GATE_LOCAL_SERIAL =="
+help_out="$(cd "$REPO" && bash scripts/gate-local.sh --help)"
+assert_contains "help-env" "$help_out" "GATE_LOCAL_SERIAL"
+
+echo "== additional scope selections (bin-only crate, plugin, desktop src, CHANGELOG) =="
+printf '// edit\n' >>"$REPO/crates/ice-tun-launcher/src/main.rs"
+out="$(run_dry)"
+assert_contains "bin-only-scope" "$out" "rust(ice-tun-launcher)"
+assert_not_contains "bin-only-scope" "$out" "ice-config"
+reset_worktree
+
+printf '// edit\n' >>"$REPO/apps/mobile/plugins/tunnel/src/lib.rs"
+out="$(run_dry)"
+assert_contains "mobile-plugin" "$out" "rust(tauri-plugin-tunnel)"
+assert_contains "mobile-plugin" "$out" "shells(ice-box-mobile"
+reset_worktree
+
+printf '// edit\n' >>"$REPO/apps/desktop/src/pages/Home.tsx"
+out="$(run_dry)"
+assert_contains "desktop-src" "$out" "frontend(typecheck vitest website-test mobile-demo)"
+reset_worktree
+
+printf 'note\n' >>"$REPO/CHANGELOG.md"
+out="$(run_dry)"
+assert_contains "changelog-fixtures" "$out" "fixtures"
+assert_not_contains "changelog-fixtures" "$out" "rust("
+assert_not_contains "changelog-fixtures" "$out" "frontend("
+reset_worktree
+
+# Build shims for execution tests: delegates `cargo metadata` to the real cargo
+# binary while recording `cargo clippy` / `cargo test` / `npm` invocations and
+# allowing controlled failure injection.
+REAL_CARGO="$(command -v cargo)"
+FAKEBIN="$TMP/fakebin"
+mkdir -p "$FAKEBIN"
+cat >"$FAKEBIN/cargo" <<EOF
+#!/usr/bin/env bash
+if [[ "\${1:-}" == "metadata" ]]; then
+  exec "$REAL_CARGO" "\$@"
+fi
+if [[ -n "\${CARGO_LOG:-}" ]]; then
+  printf '%s\n' "\$*" >>"\$CARGO_LOG"
+fi
+case "\${1:-}" in
+fmt) exit 0 ;;
+clippy) exit "\${FAKE_CLIPPY_RC:-0}" ;;
+test) exit "\${FAKE_TEST_RC:-0}" ;;
+*) exit 0 ;;
+esac
+EOF
+chmod +x "$FAKEBIN/cargo"
+
+cat >"$FAKEBIN/npm" <<'EOF'
+#!/usr/bin/env bash
+if [[ -n "${NPM_LOG:-}" ]]; then
+  printf '%s\n' "$*" >>"$NPM_LOG"
+fi
+if [[ "${1:-}" == "run" && "${2:-}" == "typecheck" ]]; then
+  exit "${FAKE_TSC_RC:-0}"
+fi
+if [[ "${1:-}" == "test" ]]; then
+  exit "${FAKE_VITEST_RC:-0}"
+fi
+exit 0
+EOF
+chmod +x "$FAKEBIN/npm"
+
+run_exec() {
+  (cd "$REPO" && PATH="$FAKEBIN:$PATH" bash scripts/gate-local.sh "$@")
+}
+
+echo "== execution: binary-only crate omits --lib from cargo test =="
+CARGO_LOG="$TMP/bin-only.log"
+printf '// edit\n' >>"$REPO/crates/ice-tun-launcher/src/main.rs"
+CARGO_LOG="$CARGO_LOG" run_exec >/dev/null
+cargo_calls="$(cat "$CARGO_LOG")"
+assert_contains "bin-only-exec" "$cargo_calls" "test -p ice-tun-launcher --bins"
+assert_not_contains "bin-only-exec" "$cargo_calls" "--lib"
+reset_worktree
+
+echo "== execution: multi-crate + single-shell workspace exclusion under set -e =="
+CARGO_LOG="$TMP/multi-crate.log"
+printf '// edit\n' >>"$REPO/crates/ice-elevate/src/lib.rs"
+printf '// edit\n' >>"$REPO/crates/ice-spawn/src/lib.rs"
+CARGO_LOG="$CARGO_LOG" run_exec >/dev/null
+cargo_calls="$(cat "$CARGO_LOG")"
+assert_contains "multi-crate-exec" "$cargo_calls" "clippy -p ice-core -p ice-elevate"
+reset_worktree
+
+CARGO_LOG="$TMP/ws-one-shell.log"
+printf '\n' >>"$REPO/Cargo.toml"
+printf '// edit\n' >>"$REPO/apps/desktop/src-tauri/src/autostart.rs"
+CARGO_LOG="$CARGO_LOG" run_exec >/dev/null
+cargo_calls="$(cat "$CARGO_LOG")"
+assert_contains "ws-one-shell-exec" "$cargo_calls" "clippy --workspace --all-targets"
+reset_worktree
+
+echo "== execution: clippy failure is not swallowed by passing cargo test =="
+for mode in parallel serial; do
+  CARGO_LOG="$TMP/clippy-$mode.log"
+  : >"$CARGO_LOG"
+  printf '// edit\n' >>"$REPO/crates/ice-elevate/src/lib.rs"
+  args=()
+  [[ "$mode" == "serial" ]] && args=(--serial)
+  if CARGO_LOG="$CARGO_LOG" FAKE_CLIPPY_RC=101 FAKE_TEST_RC=0 run_exec ${args[@]+"${args[@]}"} >/dev/null 2>&1; then
+    fail "clippy-fail-$mode: expected non-zero exit when clippy fails"
+  fi
+  cargo_calls="$(cat "$CARGO_LOG")"
+  assert_not_contains "clippy-fail-$mode" "$cargo_calls" "test "
+  reset_worktree
+done
+
+echo "== execution: tsc failure is not swallowed by passing vitest =="
+for mode in parallel serial; do
+  NPM_LOG="$TMP/tsc-$mode.log"
+  : >"$NPM_LOG"
+  printf '// edit\n' >>"$REPO/apps/desktop/src/pages/Settings.test.tsx"
+  args=()
+  [[ "$mode" == "serial" ]] && args=(--serial)
+  if NPM_LOG="$NPM_LOG" FAKE_TSC_RC=2 FAKE_VITEST_RC=0 run_exec ${args[@]+"${args[@]}"} >/dev/null 2>&1; then
+    fail "tsc-fail-$mode: expected non-zero exit when typecheck fails"
+  fi
+  npm_calls="$(cat "$NPM_LOG")"
+  assert_not_contains "tsc-fail-$mode" "$npm_calls" "test"
+  reset_worktree
+done
+
+echo "== execution: bash -n failure on earlier script is not swallowed =="
+for mode in parallel serial; do
+  printf 'if then\n' >"$REPO/scripts/a-bad.sh"
+  printf '#!/usr/bin/env bash\necho ok\n' >"$REPO/scripts/z-good.sh"
+  args=()
+  [[ "$mode" == "serial" ]] && args=(--serial)
+  if run_exec ${args[@]+"${args[@]}"} >/dev/null 2>&1; then
+    fail "bash-n-fail-$mode: expected non-zero exit when first script has syntax error"
+  fi
+  reset_worktree
+done
 
 echo "test-gate-local: OK"
