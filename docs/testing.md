@@ -8,31 +8,41 @@ Run commands from the repository root. Development prerequisites are in the
 
 | Command | Coverage |
 |---------|----------|
-| `bash scripts/gate-local.sh` | Scoped to the files changed on the branch (see below). Formatting, the Rust toolchain pin check, and the documentation version check (`scripts/check-doc-versions.sh`: the sing-box version in both READMEs and `tun.md` against `third_party/sing-box/VERSION`) always; for Rust changes, clippy and Rust library tests excluding the desktop and mobile Tauri shells (`ice-box`, `ice-box-mobile`) plus TUN integration tests, and clippy plus library tests for a Tauri shell whose sources changed when GTK/WebKit are available; for frontend changes, desktop/website/mobile typechecks, website installer-link tests, the mobile Live Demo smoke test, and Vitest; for script changes, a `bash -n` syntax check of the changed scripts and the updater, toolchain-pin, documentation-version, changelog-release, CI-status, release-environment, release preflight, updater-signature, signing-key, release-asset, release-state, Android-keystore, Android version-code, and APK-signer fixtures. `--full` runs all of them |
+| `bash scripts/gate-local.sh` | Scoped to uncommitted changes vs `HEAD` (or the whole branch vs `main` when the working tree is clean; pass `--branch` to force full-branch scope, `--serial` for sequential live output, or `--full` for every check). Formatting, the Rust toolchain pin check, and the documentation version check (`scripts/check-doc-versions.sh`: the sing-box version in both READMEs and `tun.md` against `third_party/sing-box/VERSION`) always run; independent buckets run in parallel. For Rust changes, runs one combined `clippy` and unit tests (`--lib --bins`) for the changed crates and their transitive non-shell workspace dependents (plus `ice-tun-sys` integration tests when `ice-tun-sys` is affected, and changed Tauri shells when GTK/WebKit are available); for frontend changes, splits into parallel desktop/website/mobile typechecks, desktop Vitest, fast architecture/version Vitest for cross-app boundary inputs, website installer-link tests, and website build + mobile Live Demo smoke (skipping `playwright install` when Chromium is already cached); for script changes, runs `bash -n` on changed scripts and all fixture suites in parallel |
 | `bash scripts/gate.sh` | The same toolchain pin and documentation version checks; all-crate clippy; non-desktop Rust library/integration/doc tests plus desktop library tests; frontend checks, fixtures, the website production build and mobile Live Demo smoke, and the desktop production build |
 | `bash scripts/capture-docs.sh` | Not a gate: refreshes the desktop and Android Home captures and recomposes the README hero |
 
-The local gate compares `HEAD` with its merge base on `origin/main` (or
-`main`; override with `GATE_LOCAL_BASE`) and also counts staged, unstaged, and
-untracked files. Each path selects a bucket:
+When the working tree has staged, unstaged, or untracked changes, the local gate
+compares those uncommitted files against `HEAD` so follow-up commits on a large
+branch do not re-run unrelated buckets. When the working tree is clean — or when
+`--branch` or `GATE_LOCAL_BASE` is passed — it compares against the merge base
+with `origin/main` (or `main`). Each changed path selects fine-grained checks:
 
 | Changed paths | Checks |
 |---------------|--------|
-| `crates/`, `apps/*/src-tauri/`, `apps/mobile/plugins/`, `configs/`, `third_party/`, `spikes/`, `Cargo.*`, `rust-toolchain.toml`, `deny.toml`, `.cargo/` | Rust (plus the changed Tauri shell for `apps/*/src-tauri/` and `apps/mobile/plugins/`) |
-| Other files under `apps/desktop/`, `apps/mobile/`, `apps/website/`; root `package*.json` | Frontend (all three apps, since they share sources) |
-| `scripts/` | Script fixtures |
-| `*.md`, `docs/`, `.github/`, `.vscode/`, `LICENSE`, `NOTICE`, `.gitignore` | Formatting only |
+| `crates/` | Rust `clippy` + `--lib --bins` for the changed crates and their transitive non-shell workspace dependents (plus `ice-tun-sys` integration tests when affected) |
+| `apps/*/src-tauri/`, `apps/mobile/plugins/` | Changed Tauri shell (`ice-box` / `ice-box-mobile`, when GTK/WebKit are available) |
+| `configs/`, `third_party/`, `spikes/`, `Cargo.*`, `rust-toolchain.toml`, `deny.toml`, `.cargo/` | Full workspace Rust (non-shell) + `ice-tun-sys` integration tests |
+| `apps/desktop/src/**/*.test.{ts,tsx}`, `apps/desktop/src/test/` | Parallel typecheck (`desktop`, `website`, `mobile`) + desktop Vitest (skips website build and mobile demo smoke) |
+| Other `apps/desktop/` files | Parallel typecheck + desktop Vitest + website installer-link tests + website build & mobile demo smoke (for shared app sources) |
+| `apps/website/` | Parallel typecheck + website installer-link tests + website build & mobile demo smoke (skips full desktop Vitest) |
+| `apps/mobile/` (non-Rust) | Parallel typecheck + website build & mobile demo smoke |
+| Root `package*.json` | All frontend checks |
+| `scripts/` | `bash -n` on changed scripts + all script fixture suites in parallel |
+| `*.md`, `docs/`, `.github/`, `.vscode/`, `LICENSE`, `NOTICE`, `.gitignore` | Formatting, toolchain pins, and documentation versions only |
 
 Some files also feed another bucket's checks and select it as well:
 
 | Changed paths | Also runs |
 |---------------|-----------|
-| `apps/desktop/src-tauri/src/application/`, `crates/ice-app/Cargo.toml` | Vitest (the architecture-boundary tests read them) |
+| `apps/desktop/src-tauri/src/application/`, `crates/ice-app/Cargo.toml`, `apps/website/vite.config.ts`, `apps/website/src/browser-shell.ts`, `apps/website/mobile-demo.html`, `apps/website/src/main.js`, `apps/mobile/src/shell.ts` | Fast architecture & version Vitest (`architecture.test.ts`, `appVersion.test.ts`) unless full Vitest is already selected |
 | `CHANGELOG.md`, root `Cargo.toml`, `apps/{desktop,mobile}/package.json`, `apps/{desktop,mobile}/src-tauri/tauri.conf.json` | Script fixtures (release preflight checks the version sources and the changelog section) |
 
 Renames count both the old and the new path. Any other path, a change to
-`scripts/gate-local.sh` itself, or a missing merge base runs every check.
-`--dry-run` prints the selected scope without running it.
+`scripts/gate-local.sh` itself, or a missing merge base (in branch mode) runs
+every check. `--dry-run` prints the selected diff mode and scope without running
+anything, and `--serial` (`GATE_LOCAL_SERIAL=1`) runs tasks sequentially with
+live stdout. Scope selection is covered by `scripts/test-gate-local.sh`.
 
 The local gate builds the desktop and mobile Tauri shells only when their
 sources change, and skips them with a warning when the GTK/WebKit development

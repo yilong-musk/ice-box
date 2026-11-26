@@ -67,6 +67,9 @@ if [[ "$SCOPE" == all || "$SCOPE" == frontend ]]; then
   echo "== vitest =="
   (cd apps/desktop && npm test)
 
+  echo "== gate-local scope fixtures =="
+  bash "$ROOT/scripts/test-gate-local.sh"
+
   echo "== merge-updater-latest fixtures =="
   bash "$ROOT/scripts/test-merge-updater-latest.sh"
 
