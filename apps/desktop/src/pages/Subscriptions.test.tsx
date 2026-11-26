@@ -6,6 +6,10 @@ import { formatLocale, t } from "../lib/i18n";
 import { api } from "../api/client";
 import { clearNodesSnapshot } from "../lib/nodes";
 import {
+  readSubscriptionsSnapshot,
+  writeSubscriptionsSnapshot,
+} from "../lib/pageSnapshots";
+import {
   installTitlebarActionsSlot,
   removeTitlebarActionsSlot,
 } from "../test/titlebar";
@@ -92,6 +96,29 @@ describe("Subscriptions", () => {
   afterEach(() => {
     removeTitlebarActionsSlot();
     vi.unstubAllGlobals();
+  });
+
+  it("shows a loading line, not the empty state, before the first read lands", () => {
+    listSubscriptions.mockReturnValue(new Promise(() => {}));
+    const view = within(render(<Subscriptions />).container);
+    expect(view.getByText(t("subs.loading"))).toBeInTheDocument();
+    expect(view.queryByText(t("subs.emptyTitle"))).toBeNull();
+  });
+
+  it("opens on the last list read this session while it reads the current one", async () => {
+    writeSubscriptionsSnapshot([sampleMeta({ name: "cached-sub" })]);
+    listSubscriptions.mockReturnValue(new Promise(() => {}));
+    const view = within(render(<Subscriptions />).container);
+    expect(view.getByText("cached-sub")).toBeInTheDocument();
+    expect(view.queryByText(t("subs.loading"))).toBeNull();
+    await waitFor(() => expect(listSubscriptions).toHaveBeenCalledTimes(1));
+  });
+
+  it("keeps the list it read for the next mount", async () => {
+    listSubscriptions.mockResolvedValue([sampleMeta({ name: "fresh-sub" })]);
+    const view = within(render(<Subscriptions />).container);
+    await view.findByText("fresh-sub");
+    expect(readSubscriptionsSnapshot()?.map((s) => s.name)).toEqual(["fresh-sub"]);
   });
 
   it("hides subscription auto-update on the phone", async () => {

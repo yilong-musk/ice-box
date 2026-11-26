@@ -46,8 +46,10 @@ import {
   pageCount,
   ruleMatchSummary,
   ruleOutbound,
+  RULES_PAGE_SIZE,
   ruleTypeLabel,
 } from "../lib/rules";
+import { readRulesSnapshot, writeRulesSnapshot } from "../lib/pageSnapshots";
 
 const MAX_KEYWORD_DEBOUNCE_MS = 300;
 /** Distance from the list bottom within which the pager stays visible. */
@@ -84,11 +86,17 @@ export function Rules({ onNavigate, active = true }: Props) {
   useLanguagePreference();
   const phone = isPhoneShell();
   const { nextGeneration, isStale } = useGenerationGuard();
-  const [overview, setOverview] = useState<RuleOverview>(EMPTY_OVERVIEW);
-  const [rows, setRows] = useState<RuleRow[]>([]);
-  const [total, setTotal] = useState(0);
+  const [overview, setOverview] = useState<RuleOverview>(
+    () => readRulesSnapshot()?.overview ?? EMPTY_OVERVIEW,
+  );
+  const [rows, setRows] = useState<RuleRow[]>(
+    () => readRulesSnapshot()?.list.items ?? [],
+  );
+  const [total, setTotal] = useState(() => readRulesSnapshot()?.list.total ?? 0);
+  // Until the first read lands, no rows means "not loaded yet", not "no rules".
+  const [loaded, setLoaded] = useState(() => readRulesSnapshot() !== undefined);
   const [offset, setOffset] = useState(0);
-  const [limit] = useState(100);
+  const [limit] = useState(RULES_PAGE_SIZE);
   const [filters, setFilters] = useState<Filters>({
     keyword: "",
     type: "",
@@ -154,26 +162,43 @@ export function Rules({ onNavigate, active = true }: Props) {
       setOverview(ov);
       setRows(list.items);
       setTotal(list.total);
+      setLoaded(true);
       if (list.offset >= list.total && list.total > 0 && list.offset > 0) {
         setOffset(Math.max(0, list.total - list.limit));
         return;
       }
+      // The unfiltered first page is what the page opens on next time.
+      if (
+        !req.keyword &&
+        !req.type &&
+        req.disabled === "all" &&
+        req.custom == null &&
+        req.offset === 0
+      ) {
+        writeRulesSnapshot({ overview: ov, list });
+      }
       setError(null);
     } catch (e) {
       if (overviewRequestRef.current === overviewRequest) overviewRequestRef.current = null;
-      if (!isStale(gen)) setError(formatInvokeError(e));
+      if (!isStale(gen)) {
+        setError(formatInvokeError(e));
+        setLoaded(true);
+      }
     }
   }, [debouncedKeyword, filters.type, filters.status, filters.custom, offset, limit, isStale, nextGeneration]);
 
   useEffect(() => {
     overviewRequestRef.current = null;
-    if (!active) {
+    if (!active) return;
+    return () => {
+      // Leaving the page (or hiding its pane, which tears this effect down)
+      // drops reads in flight and the backend's copy of every subscription
+      // rule. The rows on screen stay, so the next visit shows them at once
+      // and refreshes them in place.
       nextGeneration();
-      setRows([]);
-      setOverview(EMPTY_OVERVIEW);
-      setTotal(0);
+      overviewRequestRef.current = null;
       if (typeof api.releaseRuleSearch === "function") void api.releaseRuleSearch();
-    }
+    };
   }, [active, nextGeneration]);
 
   useEffect(() => {
@@ -520,7 +545,11 @@ export function Rules({ onNavigate, active = true }: Props) {
             </ToggleGroup>
           </div>
 
-          {!showList ? (
+          {!showList && !loaded ? (
+            <p className="my-auto text-sm text-muted-foreground">
+              {t("rules.loading")}
+            </p>
+          ) : !showList ? (
             <EmptyState
               framed={false}
               className="my-auto"

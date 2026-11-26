@@ -3,6 +3,7 @@
 import {
   Activity,
   memo,
+  startTransition,
   useCallback,
   useDeferredValue,
   useEffect,
@@ -63,6 +64,17 @@ import { useThemePreference } from "./lib/theme";
 import { startBackgroundAppUpdateCheck } from "./lib/appUpdateCheck";
 import { RuntimeStoreProvider, useRuntimeStore } from "./lib/runtimeStore";
 import { PaneTabContext, PaneVisibleContext } from "./lib/paneVisibility";
+import {
+  prefetchNodes,
+  prefetchRules,
+  prefetchSubscriptions,
+  schedulePagePrefetch,
+} from "./lib/pagePrefetch";
+
+/** How long after launch the page prefetch waits before it looks for idle
+ * time: past the first frames, the launch proxy restore and the first status
+ * reads. */
+const PAGE_PREFETCH_DELAY_MS = 2_000;
 
 type Tab =
   | "home"
@@ -632,6 +644,32 @@ function AppShell() {
       const next = new Set(prev);
       next.add(id);
       return next;
+    });
+  }, []);
+
+  const tabRef = useRef(tab);
+  tabRef.current = tab;
+  // Once launch has settled, read what Nodes, Subscriptions and Rules open
+  // on, then render those pages hidden, so their first visit shows content at
+  // once instead of an empty card. A page already visited reads for itself.
+  useEffect(() => {
+    const tabs: Tab[] = isPhoneShell() ? ["subs", "rules"] : ["nodes", "subs", "rules"];
+    return schedulePagePrefetch({
+      delayMs: PAGE_PREFETCH_DELAY_MS,
+      tasks: [
+        ...(tabs.includes("nodes") ? [prefetchNodes] : []),
+        prefetchSubscriptions,
+        () => prefetchRules(() => tabRef.current === "rules"),
+      ],
+      onDone: () => {
+        // A transition: the hidden pages render without holding up input.
+        startTransition(() => {
+          setVisited((prev) => {
+            if (tabs.every((id) => prev.has(id))) return prev;
+            return new Set([...prev, ...tabs]);
+          });
+        });
+      },
     });
   }, []);
 

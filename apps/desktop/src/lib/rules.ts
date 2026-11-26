@@ -1,7 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import type { RuleRow } from "../api/client";
+import type { ListRulesRequest, RuleRow } from "../api/client";
 import { t, type MessageKey } from "./i18n";
+
+/** Rows per page of the Rules list. */
+export const RULES_PAGE_SIZE = 100;
+
+/** The first page of the Rules list with no filter: what the page opens on. */
+export function defaultRulesRequest(): ListRulesRequest {
+  return {
+    keyword: null,
+    type: null,
+    disabled: "all",
+    custom: null,
+    offset: 0,
+    limit: RULES_PAGE_SIZE,
+  };
+}
 
 export const RULE_TYPE_LABEL_KEYS: Record<string, MessageKey> = {
   domain: "ruleType.domain",

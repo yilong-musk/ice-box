@@ -27,6 +27,11 @@ import {
 } from "../lib/subscriptionAutoUpdate";
 import { TONE_WASH } from "../lib/tone";
 import { clearNodesSnapshot } from "../lib/nodes";
+import {
+  clearRulesSnapshot,
+  readSubscriptionsSnapshot,
+  writeSubscriptionsSnapshot,
+} from "../lib/pageSnapshots";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { CapsuleToast, useCapsuleToast } from "../components/CapsuleToast";
 import { TitlebarActions } from "../components/TitlebarActions";
@@ -94,7 +99,12 @@ export function Subscriptions({ active = true }: Props) {
   const dateLocale = formatLocale(lang);
   const phone = isPhoneShell();
   const { nextGeneration, isStale } = useGenerationGuard();
-  const [items, setItems] = useState<SubscriptionMeta[]>([]);
+  const [items, setItems] = useState<SubscriptionMeta[]>(
+    () => readSubscriptionsSnapshot() ?? [],
+  );
+  // Until the first read lands, an empty list means "not loaded yet", not
+  // "no subscriptions".
+  const [loaded, setLoaded] = useState(() => readSubscriptionsSnapshot() !== undefined);
   const [importOpen, setImportOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -118,19 +128,23 @@ export function Subscriptions({ active = true }: Props) {
       const next = await api.listSubscriptions();
       if (isStale(gen)) return true;
       const nextActive = activeSubscriptionId(next);
-      // Drop the node snapshot only when the live profile moved. A mode or
-      // service toggle also lands on `app://state-changed`.
+      // Drop the node and rule snapshots only when the live profile moved. A
+      // mode or service toggle also lands on `app://state-changed`.
       if (activeIdRef.current !== null && activeIdRef.current !== nextActive) {
         clearNodesSnapshot();
+        clearRulesSnapshot();
       }
       activeIdRef.current = nextActive;
+      writeSubscriptionsSnapshot(next);
       setItems(next);
+      setLoaded(true);
       setLoadError(null);
       return true;
     } catch (e) {
       if (!isStale(gen)) {
         const message = formatInvokeError(e);
         setLoadError(message);
+        setLoaded(true);
         if (notifyError) showToast(formatInvokeErrorTitle(e));
       }
       return false;
@@ -178,6 +192,7 @@ export function Subscriptions({ active = true }: Props) {
     } = options;
     // Subscription changes can replace the node list while the Nodes tab stays mounted.
     clearNodesSnapshot();
+    clearRulesSnapshot();
     nextGeneration();
     setBusy(true);
     if (rowUpdatingId) setUpdatingId(rowUpdatingId);
@@ -282,7 +297,11 @@ export function Subscriptions({ active = true }: Props) {
             !phone && "min-h-0 overflow-hidden",
           )}
         >
-          {items.length === 0 ? (
+          {items.length === 0 && !loaded ? (
+            <p className="my-auto text-sm text-muted-foreground">
+              {t("subs.loading")}
+            </p>
+          ) : items.length === 0 ? (
             <div className="my-auto flex flex-col items-start gap-2">
               <CardTitle>
                 {loadError ? t("subs.loadFailedTitle") : t("subs.emptyTitle")}

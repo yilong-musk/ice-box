@@ -5,6 +5,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Nodes, Subscriptions and Rules open with their content instead of an empty
+  card, including the first visit after launch: once launch has settled, the
+  app reads what those pages open on and renders them hidden in the
+  background. Before the first read lands, Subscriptions and Rules show a
+  loading line instead of their "no subscriptions" / "no rules" empty states,
+  and Rules keeps its rows when you leave it while the backend still drops its
+  copy of the subscription rules.
+
 ## [0.4.0] - 2026-11-25
 
 ### Added
