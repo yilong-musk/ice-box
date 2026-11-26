@@ -164,4 +164,19 @@ fi
 printf '%s\n' "$err" | grep -Fq "does not exist" ||
   fail "tauri-conf-missing-path: unexpected error: $err"
 
+echo "== desktop package-lock.json version sync =="
+printf '{"version": "../package.json"}\n' >"$FIXTURE/apps/desktop/src-tauri/tauri.conf.json"
+printf '{"name": "ice-box", "version": "%s", "packages": {"": {"name": "ice-box", "version": "%s"}}}\n' \
+  "$VERSION" "$VERSION" >"$FIXTURE/apps/desktop/package-lock.json"
+if ! err="$("$FIXTURE/scripts/release-preflight.sh" "$TAG" 2>&1)"; then
+  fail "package-lock-match: expected success: $err"
+fi
+printf '{"name": "ice-box", "version": "0.0.1", "packages": {"": {"name": "ice-box", "version": "%s"}}}\n' \
+  "$VERSION" >"$FIXTURE/apps/desktop/package-lock.json"
+if err="$("$FIXTURE/scripts/release-preflight.sh" "$TAG" 2>&1)"; then
+  fail "package-lock-mismatch: expected failure"
+fi
+printf '%s\n' "$err" | grep -Fq "apps/desktop/package-lock.json" ||
+  fail "package-lock-mismatch: unexpected error: $err"
+
 echo "test-release-preflight: OK"

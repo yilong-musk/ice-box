@@ -520,15 +520,56 @@ pub async fn install_app_update(app: AppHandle) -> Result<(), AppError> {
     }
 
     // Windows: `install` exits the process after launching NSIS (which restarts
-    // the app). macOS replaces the bundle in-place and needs an explicit relaunch.
+    // the app). macOS / Linux AppImage replace the bundle/AppImage in-place and
+    // need an explicit relaunch.
     #[cfg(not(windows))]
     {
-        app.restart();
+        if let Some(mcp) = app.try_state::<crate::mcp::McpService>() {
+            mcp.shutdown();
+        }
+        if let Some(state) = app.try_state::<AppState>() {
+            state.workers.shutdown(StdDuration::from_millis(500));
+            // Drop the lock fd before spawning the replacement binary so it
+            // cannot see `InstanceLock::Secondary` and exit immediately.
+            state.release_instance_lock();
+        }
+        let restart_env = restart_env_without_autostart(app.env());
+        let restart_handle = app.clone();
+        let fallback_env = restart_env.clone();
+        if app
+            .run_on_main_thread(move || {
+                restart_handle.cleanup_before_exit();
+                tauri::process::restart(&restart_env);
+            })
+            .is_ok()
+        {
+            loop {
+                std::thread::sleep(StdDuration::MAX);
+            }
+        }
+        app.cleanup_before_exit();
+        tauri::process::restart(&fallback_env);
     }
     #[cfg(windows)]
     {
         Ok(())
     }
+}
+
+/// Remove `--autostart` from the relaunch arguments so a user-initiated update
+/// from a login-item session opens the window instead of staying hidden in the
+/// tray. Preserves `argv[0]`.
+#[cfg(any(not(windows), test))]
+fn restart_env_without_autostart(mut env: tauri::Env) -> tauri::Env {
+    let autostart = std::ffi::OsStr::new(crate::autostart::AUTOSTART_FLAG);
+    let mut iter = env.args_os.into_iter();
+    let mut filtered = Vec::new();
+    if let Some(program) = iter.next() {
+        filtered.push(program);
+    }
+    filtered.extend(iter.filter(|arg| arg.as_os_str() != autostart));
+    env.args_os = filtered;
+    env
 }
 
 /// Open the GitHub Release page for the latest (or cached available) version
@@ -885,6 +926,26 @@ mod tests {
         assert_eq!(
             release_download_url(None),
             "https://github.com/yilong-musk/ice-box/releases/latest"
+        );
+    }
+
+    #[test]
+    fn restart_env_strips_autostart_flag_while_preserving_other_args() {
+        use std::ffi::OsString;
+
+        let mut env = tauri::Env::default();
+        env.args_os = vec![
+            OsString::from("/opt/ice-box.AppImage"),
+            OsString::from(crate::autostart::AUTOSTART_FLAG),
+            OsString::from("--other"),
+        ];
+        let cleaned = restart_env_without_autostart(env);
+        assert_eq!(
+            cleaned.args_os,
+            vec![
+                OsString::from("/opt/ice-box.AppImage"),
+                OsString::from("--other"),
+            ]
         );
     }
 }

@@ -10,6 +10,11 @@ use std::time::Duration;
 use tauri::{AppHandle, Manager, Runtime};
 
 const FOCUS_FILE: &str = "instance.focus";
+/// Retry budget for transient lock handoff (e.g. an exiting instance during an
+/// in-app update restart). Kept short so a genuine second launch still focuses
+/// the running window almost immediately.
+const LOCK_RETRY_ATTEMPTS: usize = 5;
+const LOCK_RETRY_DELAY: Duration = Duration::from_millis(50);
 
 pub enum InstanceLock {
     Primary(std::fs::File),
@@ -25,6 +30,20 @@ pub fn acquire_or_request_focus(
     paths: &AppPaths,
     request_focus: bool,
 ) -> Result<InstanceLock, String> {
+    acquire_or_request_focus_with_retries(
+        paths,
+        request_focus,
+        LOCK_RETRY_ATTEMPTS,
+        LOCK_RETRY_DELAY,
+    )
+}
+
+fn acquire_or_request_focus_with_retries(
+    paths: &AppPaths,
+    request_focus: bool,
+    attempts: usize,
+    delay: Duration,
+) -> Result<InstanceLock, String> {
     use fs2::FileExt;
 
     paths
@@ -34,13 +53,22 @@ pub fn acquire_or_request_focus(
     let file = OpenOptions::new()
         .create(true)
         .write(true)
-        .truncate(true)
+        .truncate(false)
         .open(&lock_path)
         .map_err(|e| format!("open instance lock: {e}"))?;
 
-    // The in-app UAC relaunch was removed with the scheduled-task elevation
-    // (plan B): every instance takes the lock or requests focus immediately.
-    if file.try_lock_exclusive().is_err() {
+    let attempts = attempts.max(1);
+    let mut locked = false;
+    for attempt in 0..attempts {
+        if file.try_lock_exclusive().is_ok() {
+            locked = true;
+            break;
+        }
+        if attempt + 1 < attempts {
+            std::thread::sleep(delay);
+        }
+    }
+    if !locked {
         if request_focus {
             write_focus_request(paths.root());
         }
@@ -99,6 +127,79 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         write_focus_request(&dir);
         assert!(dir.join(FOCUS_FILE).is_file());
-        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn secondary_instance_writes_focus_only_when_requested() {
+        let dir = std::env::temp_dir().join(format!(
+            "ice-box-lock-secondary-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let paths = AppPaths::new(&dir);
+        let primary =
+            match acquire_or_request_focus_with_retries(&paths, true, 1, Duration::from_millis(1))
+                .unwrap()
+            {
+                InstanceLock::Primary(file) => file,
+                InstanceLock::Secondary => panic!("first instance must acquire lock"),
+            };
+
+        assert!(matches!(
+            acquire_or_request_focus_with_retries(&paths, false, 1, Duration::from_millis(1))
+                .unwrap(),
+            InstanceLock::Secondary
+        ));
+        assert!(!dir.join(FOCUS_FILE).exists());
+
+        assert!(matches!(
+            acquire_or_request_focus_with_retries(&paths, true, 1, Duration::from_millis(1))
+                .unwrap(),
+            InstanceLock::Secondary
+        ));
+        assert!(dir.join(FOCUS_FILE).is_file());
+
+        drop(primary);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn acquires_lock_when_exiting_primary_releases_during_retry_window() {
+        let dir = std::env::temp_dir().join(format!(
+            "ice-box-lock-handoff-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let paths = AppPaths::new(&dir);
+        let primary =
+            match acquire_or_request_focus_with_retries(&paths, true, 1, Duration::from_millis(1))
+                .unwrap()
+            {
+                InstanceLock::Primary(file) => file,
+                InstanceLock::Secondary => panic!("first instance must acquire lock"),
+            };
+
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(30));
+            drop(primary);
+        });
+
+        let outcome =
+            acquire_or_request_focus_with_retries(&paths, true, 10, Duration::from_millis(15))
+                .unwrap();
+        releaser.join().unwrap();
+        assert!(
+            matches!(outcome, InstanceLock::Primary(_)),
+            "restarting instance must acquire the lock once the exiting instance releases it"
+        );
+        assert!(!dir.join(FOCUS_FILE).exists());
+
+        drop(outcome);
+        let _ = fs::remove_dir_all(dir);
     }
 }

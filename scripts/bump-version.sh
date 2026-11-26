@@ -39,6 +39,7 @@ fi
 
 CARGO_TOML="Cargo.toml"
 PACKAGE_JSON="apps/desktop/package.json"
+PACKAGE_LOCK="apps/desktop/package-lock.json"
 TAURI_CONF="apps/desktop/src-tauri/tauri.conf.json"
 MOBILE_PACKAGE_JSON="apps/mobile/package.json"
 MOBILE_TAURI_CONF="apps/mobile/src-tauri/tauri.conf.json"
@@ -68,7 +69,7 @@ done
 # re-run starts from the same state instead of finding CHANGELOG.md already
 # rolled or the version sources half-bumped.
 TOUCHED=(
-  CHANGELOG.md Cargo.toml Cargo.lock "$PACKAGE_JSON" "$MOBILE_PACKAGE_JSON"
+  CHANGELOG.md Cargo.toml Cargo.lock "$PACKAGE_JSON" "$PACKAGE_LOCK" "$MOBILE_PACKAGE_JSON"
   "$MOBILE_TAURI_CONF" "$ANDROID_PROPERTIES"
 )
 BACKUP="$(mktemp -d "${TMPDIR:-/tmp}/ice-box-bump-XXXXXX")"
@@ -106,6 +107,37 @@ bump_key "$CARGO_TOML" 'version = '
 bump_key "$PACKAGE_JSON" '  "version": '
 bump_key "$MOBILE_PACKAGE_JSON" '  "version": '
 
+# Keep apps/desktop/package-lock.json's root and packages[""] versions aligned
+# with package.json without reformatting the rest of the lockfile.
+python3 - "$PACKAGE_LOCK" "$NEW_VERSION" <<'PY'
+import json, pathlib, re, sys
+
+path, new_version = pathlib.Path(sys.argv[1]), sys.argv[2]
+text = path.read_text(encoding="utf-8")
+text, root_count = re.subn(
+    r'^(  "version": )"[^"]*"',
+    rf'\g<1>"{new_version}"',
+    text,
+    count=1,
+    flags=re.MULTILINE,
+)
+text, pkg_count = re.subn(
+    r'^(    "": \{\n      "name": "[^"]*",\n      "version": )"[^"]*"',
+    rf'\g<1>"{new_version}"',
+    text,
+    count=1,
+    flags=re.MULTILINE,
+)
+if root_count != 1 or pkg_count != 1:
+    raise SystemExit(
+        f"failed to update root/package versions in {path} (root={root_count}, pkg={pkg_count})"
+    )
+parsed = json.loads(text)
+if parsed.get("version") != new_version or (parsed.get("packages") or {}).get("", {}).get("version") != new_version:
+    raise SystemExit(f"post-update verification failed for {path}")
+path.write_text(text, encoding="utf-8")
+PY
+
 # Same integer Tauri writes when bundle.android.versionCode is unset:
 # major * 1000000 + minor * 1000 + patch. A pre-release suffix does not
 # change it, so do not publish a pre-release and a final build of the same triple.
@@ -137,6 +169,7 @@ EOF
 echo "bumped to $NEW_VERSION (Android versionCode $ANDROID_VERSION_CODE):"
 grep -n '^version' "$CARGO_TOML"
 grep -n '"version"' "$PACKAGE_JSON"
+head -n 12 "$PACKAGE_LOCK" | grep -n '"version"'
 grep -n '"version"' "$MOBILE_PACKAGE_JSON"
 grep -n 'versionCode' "$MOBILE_TAURI_CONF"
 grep -n 'tauri.android' "$ANDROID_PROPERTIES"

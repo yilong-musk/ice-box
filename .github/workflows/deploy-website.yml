@@ -33,7 +33,17 @@ concurrency:
 
 jobs:
   build:
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    # Skip Release preflight and rehearsal runs: they never publish a release,
+    # and once the current version is already published they would otherwise
+    # trigger redundant website rebuilds.
+    if: >-
+      ${{
+        github.event_name != 'workflow_run' || (
+          github.event.workflow_run.conclusion == 'success' &&
+          !startsWith(github.event.workflow_run.display_title, 'Release (preflight)') &&
+          !startsWith(github.event.workflow_run.display_title, 'Release (rehearse)')
+        )
+      }}
     runs-on: ubuntu-latest
     outputs:
       skip: ${{ steps.release.outputs.skip }}

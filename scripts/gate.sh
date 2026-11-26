@@ -115,6 +115,9 @@ if [[ "$SCOPE" == all || "$SCOPE" == frontend ]]; then
   echo "== glibc floor fixtures =="
   bash "$ROOT/scripts/test-check-glibc-floor.sh"
 
+  echo "== linux bundle verifier fixtures =="
+  bash "$ROOT/scripts/test-verify-linux-bundles.sh"
+
   echo "== vite build =="
   (cd apps/desktop && npm run build)
   # Documentation screenshots are refreshed separately by

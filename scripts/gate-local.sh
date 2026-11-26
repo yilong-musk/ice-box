@@ -125,8 +125,9 @@ classify() {
   esac
   case "$path" in
   # Release preflight fixtures read the real repo version sources and changelog.
-  CHANGELOG.md | Cargo.toml | apps/desktop/package.json | apps/mobile/package.json | \
-    apps/desktop/src-tauri/tauri.conf.json | apps/mobile/src-tauri/tauri.conf.json)
+  CHANGELOG.md | Cargo.toml | apps/desktop/package.json | apps/desktop/package-lock.json | \
+    apps/mobile/package.json | apps/desktop/src-tauri/tauri.conf.json | \
+    apps/mobile/src-tauri/tauri.conf.json)
     run_fixtures=1
     ;;
   esac
@@ -773,7 +774,8 @@ run_fixtures_bucket() {
     scripts/test-verify-android-keystore.sh \
     scripts/test-android-version-code.sh \
     scripts/test-verify-android-apk.sh \
-    scripts/test-check-glibc-floor.sh; do
+    scripts/test-check-glibc-floor.sh \
+    scripts/test-verify-linux-bundles.sh; do
     if [[ -f "$ROOT/$fixture" ]]; then
       batch_add "$(basename "$fixture" .sh)" bash "$ROOT/$fixture"
     fi

@@ -76,11 +76,15 @@ fi
 case "$ICE_PLATFORM_ALIAS" in
   mac-arm64 | mac-x64 | linux-x64 | linux-arm64)
     HELPER_DEST="$DEST_DIR/ice-helper"
-    if cargo build --release -p ice-helper --manifest-path "$ROOT/Cargo.toml" >/dev/null 2>&1; then
+    helper_log="$(mktemp "${TMPDIR:-/tmp}/ice-helper-build-XXXXXX.log")"
+    if cargo build --release -p ice-helper --manifest-path "$ROOT/Cargo.toml" >"$helper_log" 2>&1; then
+      rm -f "$helper_log"
       cp "$ROOT/target/release/ice-helper" "$HELPER_DEST"
       chmod +x "$HELPER_DEST"
       echo "Prepared helper resource $HELPER_DEST (privileged helper daemon)"
     else
+      cat "$helper_log" >&2
+      rm -f "$helper_log"
       echo "error: cargo build -p ice-helper failed; run it manually before the release build" >&2
       exit 1
     fi
