@@ -118,6 +118,8 @@ cp "$ROOT/scripts/release-notes.sh" "$ROOT/scripts/android-version-code.sh" \
   "$ROOT/scripts/version-lib.sh" "$FIXTURE/scripts/"
 printf 'version = "%s"\n' "$VERSION" >"$FIXTURE/Cargo.toml"
 printf '{"version": "%s"}\n' "$VERSION" >"$FIXTURE/apps/desktop/package.json"
+printf '{"name": "ice-box", "version": "%s", "packages": {"": {"name": "ice-box", "version": "%s"}}}\n' \
+  "$VERSION" "$VERSION" >"$FIXTURE/apps/desktop/package-lock.json"
 printf '{"version": "../package.json"}\n' >"$FIXTURE/apps/desktop/src-tauri/tauri.conf.json"
 printf '{"version": "%s"}\n' "$VERSION" >"$FIXTURE/apps/mobile/package.json"
 CODE="$(bash "$ROOT/scripts/android-version-code.sh" "$VERSION")"
@@ -178,5 +180,18 @@ if err="$("$FIXTURE/scripts/release-preflight.sh" "$TAG" 2>&1)"; then
 fi
 printf '%s\n' "$err" | grep -Fq "apps/desktop/package-lock.json" ||
   fail "package-lock-mismatch: unexpected error: $err"
+printf '{"name": "ice-box", "version": "%s", "packages": {"": {"name": "ice-box", "version": "0.0.1"}}}\n' \
+  "$VERSION" >"$FIXTURE/apps/desktop/package-lock.json"
+if err="$("$FIXTURE/scripts/release-preflight.sh" "$TAG" 2>&1)"; then
+  fail "package-lock-root-pkg-mismatch: expected failure"
+fi
+printf '%s\n' "$err" | grep -Fq 'apps/desktop/package-lock.json packages[""]' ||
+  fail "package-lock-root-pkg-mismatch: unexpected error: $err"
+rm -f "$FIXTURE/apps/desktop/package-lock.json"
+if err="$("$FIXTURE/scripts/release-preflight.sh" "$TAG" 2>&1)"; then
+  fail "package-lock-missing: expected failure"
+fi
+printf '%s\n' "$err" | grep -Fq "apps/desktop/package-lock.json" ||
+  fail "package-lock-missing: unexpected error: $err"
 
 echo "test-release-preflight: OK"

@@ -63,9 +63,10 @@ skip it.
 
 CI runs the `.github/actions/gate-linux` action (full gate) and
 `GATE_SCOPE=rust` on macOS/Windows; packaging jobs build separately (Linux
-packaging jobs also verify the `.deb` payload paths and the glibc 2.35 floor
-via `scripts/check-glibc-floor.sh`, covered by
-`scripts/test-check-glibc-floor.sh` in the fixture suite). The release
+packaging jobs also verify both `.deb` and extracted `.AppImage` payloads and
+the glibc 2.35 floor via `scripts/verify-linux-bundles.sh` and
+`scripts/check-glibc-floor.sh`, covered by `scripts/test-verify-linux-bundles.sh`
+and `scripts/test-check-glibc-floor.sh` in the fixture suite). The release
 workflow does not re-run the gate: its preflight requires those CI checks to
 have passed on the release commit (`scripts/verify-ci-status.sh`), runs
 `scripts/release-preflight.sh` before any build, and runs

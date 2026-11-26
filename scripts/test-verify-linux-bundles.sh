@@ -82,7 +82,8 @@ populate_tree() {
 
 # make_fixture <dir> <ver> <deb_arch> <appimage_arch> [options...]
 # Options via env:
-#   OMIT_DEB_FILE, OMIT_APPIMAGE_FILE, OMIT_APPRUN, WITH_SIG
+#   OMIT_DEB_FILE, EMPTY_DEB_FILE, OMIT_APPIMAGE_FILE, EMPTY_APPIMAGE_FILE,
+#   OMIT_APPRUN, WITH_SIG
 make_fixture() {
   local dir="$1"
   local ver="$2"
@@ -101,8 +102,14 @@ make_fixture() {
   if [[ -n "${OMIT_DEB_FILE:-}" ]]; then
     rm -f "$deb_src/$OMIT_DEB_FILE"
   fi
+  if [[ -n "${EMPTY_DEB_FILE:-}" ]]; then
+    : >"$deb_src/$EMPTY_DEB_FILE"
+  fi
   if [[ -n "${OMIT_APPIMAGE_FILE:-}" ]]; then
     rm -f "$app_src/$OMIT_APPIMAGE_FILE"
+  fi
+  if [[ -n "${EMPTY_APPIMAGE_FILE:-}" ]]; then
+    : >"$app_src/$EMPTY_APPIMAGE_FILE"
   fi
 
   (cd "$deb_src" && tar -czf "$dir/bundle/deb/ice-box_${ver}_${deb_arch}.deb" .)
@@ -204,18 +211,39 @@ expect_fail "missing-deb-geosite" "missing /usr/lib/ice-box/geoip/geosite-cn.srs
   --appimage-arch amd64
 
 OMIT_APPIMAGE_FILE="usr/lib/ice-box/ice-helper" make_fixture "$TMP/missing-appimage-helper" 0.4.1 amd64 amd64
-expect_fail "missing-appimage-helper" "missing /usr/lib/ice-box/ice-helper in AppImage" \
+expect_fail "missing-appimage-helper" "missing or empty /usr/lib/ice-box/ice-helper in AppImage" \
   --bundle-dir "$TMP/missing-appimage-helper/bundle" \
   --version 0.4.1 \
   --deb-arch amd64 \
   --appimage-arch amd64
 
 OMIT_APPIMAGE_FILE="usr/lib/ice-box/geoip/geosite-cn.srs" make_fixture "$TMP/missing-appimage-geosite" 0.4.1 amd64 amd64
-expect_fail "missing-appimage-geosite" "missing /usr/lib/ice-box/geoip/geosite-cn.srs in AppImage" \
+expect_fail "missing-appimage-geosite" "missing or empty /usr/lib/ice-box/geoip/geosite-cn.srs in AppImage" \
   --bundle-dir "$TMP/missing-appimage-geosite/bundle" \
   --version 0.4.1 \
   --deb-arch amd64 \
   --appimage-arch amd64
+
+EMPTY_DEB_FILE="usr/lib/ice-box/geoip/geosite-cn.srs" make_fixture "$TMP/empty-deb-geosite" 0.4.1 amd64 amd64
+expect_fail "empty-deb-geosite" "missing or empty /usr/lib/ice-box/geoip/geosite-cn.srs in extracted .deb" \
+  --bundle-dir "$TMP/empty-deb-geosite/bundle" \
+  --version 0.4.1 \
+  --deb-arch amd64 \
+  --appimage-arch amd64
+
+EMPTY_APPIMAGE_FILE="usr/lib/ice-box/geoip/geosite-cn.srs" make_fixture "$TMP/empty-appimage-geosite" 0.4.1 amd64 amd64
+expect_fail "empty-appimage-geosite" "missing or empty /usr/lib/ice-box/geoip/geosite-cn.srs in AppImage" \
+  --bundle-dir "$TMP/empty-appimage-geosite/bundle" \
+  --version 0.4.1 \
+  --deb-arch amd64 \
+  --appimage-arch amd64
+
+set +e
+err="$(run_verify --version 2>&1)"
+rc=$?
+set -e
+[[ "$rc" -eq 2 ]] || fail "missing-opt-value: expected exit 2, got $rc"
+printf '%s\n' "$err" | grep -Fq "requires a value" || fail "missing-opt-value: unexpected error: $err"
 
 OMIT_APPRUN=1 make_fixture "$TMP/missing-apprun" 0.4.1 amd64 amd64
 expect_fail "missing-apprun" "missing executable AppRun" \

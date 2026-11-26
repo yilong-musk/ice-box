@@ -77,6 +77,7 @@ case "$ICE_PLATFORM_ALIAS" in
   mac-arm64 | mac-x64 | linux-x64 | linux-arm64)
     HELPER_DEST="$DEST_DIR/ice-helper"
     helper_log="$(mktemp "${TMPDIR:-/tmp}/ice-helper-build-XXXXXX.log")"
+    trap 'rm -f "$helper_log"' EXIT
     if cargo build --release -p ice-helper --manifest-path "$ROOT/Cargo.toml" >"$helper_log" 2>&1; then
       rm -f "$helper_log"
       cp "$ROOT/target/release/ice-helper" "$HELPER_DEST"

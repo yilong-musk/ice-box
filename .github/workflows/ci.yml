@@ -106,26 +106,12 @@ jobs:
       - name: Build app bundles (tauri build, deb + AppImage)
         env:
           APPIMAGE_EXTRACT_AND_RUN: "1"
-          APPIMAGE_CACHE_HIT: ${{ steps.appimage-cache.outputs.cache-hit }}
-        run: |
-          log="$RUNNER_TEMP/tauri-build.log"
-          for attempt in 1 2 3; do
-            set +e
-            npm run build:linux 2>&1 | tee "$log"
-            status=${PIPESTATUS[0]}
-            set -e
-            if [ "$status" -eq 0 ]; then
-              exit 0
-            fi
-            if [ "$APPIMAGE_CACHE_HIT" = "true" ] || ! grep -qiE 'status code:? 5[0-9]{2}|http status:? 5[0-9]{2}|error sending request|connection (reset|refused|closed)|operation timed out' "$log"; then
-              exit "$status"
-            fi
-            if [ "$attempt" -lt 3 ]; then
-              echo "::warning::AppImage toolset download failed (attempt $attempt/3); retrying in 30s"
-              sleep 30
-            fi
-          done
-          exit 1
+        run: >-
+          bash ../../scripts/retry-tauri-build.sh
+          --label "AppImage toolset"
+          --cache-hit "${{ steps.appimage-cache.outputs.cache-hit || 'false' }}"
+          --clear-cache-dir "$HOME/.cache/tauri"
+          -- npm run build:linux
         working-directory: apps/desktop
 
       - name: Verify Linux bundle payloads and glibc floor
@@ -315,27 +301,12 @@ jobs:
       # config error, fails on the first attempt. The Rust build is
       # incremental, so a retry only redoes the bundling.
       - name: Build app bundle (tauri build, NSIS)
-        env:
-          NSIS_CACHE_HIT: ${{ steps.nsis-cache.outputs.cache-hit }}
-        run: |
-          log="$RUNNER_TEMP/tauri-build.log"
-          for attempt in 1 2 3; do
-            set +e
-            npm run build:win 2>&1 | tee "$log"
-            status=${PIPESTATUS[0]}
-            set -e
-            if [ "$status" -eq 0 ]; then
-              exit 0
-            fi
-            if [ "$NSIS_CACHE_HIT" = "true" ] || ! grep -qiE 'status code:? 5[0-9]{2}|http status:? 5[0-9]{2}|error sending request|connection (reset|refused|closed)|operation timed out' "$log"; then
-              exit "$status"
-            fi
-            if [ "$attempt" -lt 3 ]; then
-              echo "::warning::NSIS toolset download failed (attempt $attempt/3); retrying in 30s"
-              sleep 30
-            fi
-          done
-          exit 1
+        run: >-
+          bash ../../scripts/retry-tauri-build.sh
+          --label "NSIS toolset"
+          --cache-hit "${{ steps.nsis-cache.outputs.cache-hit || 'false' }}"
+          --clear-cache-dir "$HOME/AppData/Local/tauri"
+          -- npm run build:win
         working-directory: apps/desktop
 
       - name: Verify Windows NSIS payload (sing-box, libcronet, launcher)

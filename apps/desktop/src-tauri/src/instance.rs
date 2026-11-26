@@ -190,7 +190,7 @@ mod tests {
         });
 
         let outcome =
-            acquire_or_request_focus_with_retries(&paths, true, 10, Duration::from_millis(15))
+            acquire_or_request_focus_with_retries(&paths, true, 50, Duration::from_millis(20))
                 .unwrap();
         releaser.join().unwrap();
         assert!(

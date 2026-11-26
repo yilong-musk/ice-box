@@ -118,6 +118,9 @@ if [[ "$SCOPE" == all || "$SCOPE" == frontend ]]; then
   echo "== linux bundle verifier fixtures =="
   bash "$ROOT/scripts/test-verify-linux-bundles.sh"
 
+  echo "== tauri build retry fixtures =="
+  bash "$ROOT/scripts/test-retry-tauri-build.sh"
+
   echo "== vite build =="
   (cd apps/desktop && npm run build)
   # Documentation screenshots are refreshed separately by

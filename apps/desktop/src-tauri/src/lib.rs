@@ -601,8 +601,11 @@ pub fn run() {
                         .shutdown(std::time::Duration::from_millis(500));
                     state.release_instance_lock();
                 }
-                // The updater already ran graceful_stop; let NSIS / the
-                // bundle replace take over instead of prevent_exit.
+                // Safeguard if an external quit event arrives while an update
+                // is installing (non-Windows normally restarts directly via
+                // `tauri::process::restart` and Windows `tauri-plugin-updater`
+                // exits via `std::process::exit(0)`). The updater already ran
+                // `graceful_stop`; let the exit proceed instead of `prevent_exit`.
                 return;
             }
             // Cmd+Q / OS logout / app.exit() path: run the same cleanup as tray

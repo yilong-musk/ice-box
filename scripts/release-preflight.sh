@@ -161,12 +161,10 @@ match = re.search(r'^version = "([^"]+)"', cargo, re.MULTILINE)
 compare("Cargo.toml", match.group(1) if match else None)
 
 compare("apps/desktop/package.json", read_json("apps/desktop/package.json").get("version"))
-desktop_lock_path = root / "apps/desktop/package-lock.json"
-if desktop_lock_path.is_file():
-    desktop_lock = read_json("apps/desktop/package-lock.json")
-    compare("apps/desktop/package-lock.json", desktop_lock.get("version"))
-    root_pkg = (desktop_lock.get("packages") or {}).get("") or {}
-    compare('apps/desktop/package-lock.json packages[""]', root_pkg.get("version"))
+desktop_lock = read_json("apps/desktop/package-lock.json")
+compare("apps/desktop/package-lock.json", desktop_lock.get("version"))
+root_pkg = (desktop_lock.get("packages") or {}).get("") or {}
+compare('apps/desktop/package-lock.json packages[""]', root_pkg.get("version"))
 compare("apps/mobile/package.json", read_json("apps/mobile/package.json").get("version"))
 
 

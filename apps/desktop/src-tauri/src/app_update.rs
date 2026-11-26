@@ -519,9 +519,11 @@ pub async fn install_app_update(app: AppHandle) -> Result<(), AppError> {
         return Err(map_updater_err(ERR_UPDATE_INSTALL_FAILED, err));
     }
 
-    // Windows: `install` exits the process after launching NSIS (which restarts
-    // the app). macOS / Linux AppImage replace the bundle/AppImage in-place and
-    // need an explicit relaunch.
+    // Windows: `install` runs `on_before_exit`, launches NSIS (forwarding its
+    // internal `current_exe_args` via `/ARGS`), and exits directly via
+    // `std::process::exit(0)`. macOS / Linux AppImage replace the
+    // bundle/AppImage in-place and need an explicit relaunch, where we release
+    // `instance.lock` first and strip `--autostart` from the relaunch args.
     #[cfg(not(windows))]
     {
         if let Some(mcp) = app.try_state::<crate::mcp::McpService>() {
@@ -556,9 +558,10 @@ pub async fn install_app_update(app: AppHandle) -> Result<(), AppError> {
     }
 }
 
-/// Remove `--autostart` from the relaunch arguments so a user-initiated update
-/// from a login-item session opens the window instead of staying hidden in the
-/// tray. Preserves `argv[0]`.
+/// Remove `--autostart` from non-Windows relaunch arguments so a user-initiated
+/// update from a macOS / Linux login-item session opens the window instead of
+/// staying hidden in the tray. Preserves `argv[0]`. (On Windows,
+/// `tauri-plugin-updater` forwards its internal `current_exe_args` to NSIS.)
 #[cfg(any(not(windows), test))]
 fn restart_env_without_autostart(mut env: tauri::Env) -> tauri::Env {
     let autostart = std::ffi::OsStr::new(crate::autostart::AUTOSTART_FLAG);

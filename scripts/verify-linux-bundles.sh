@@ -35,22 +35,35 @@ usage: scripts/verify-linux-bundles.sh \
 EOF
 }
 
+require_value() {
+  local flag="$1" argc="$2" value="${3:-}"
+  if ((argc < 2)) || [[ -z "$value" ]]; then
+    echo "verify-linux-bundles: $flag requires a value" >&2
+    usage
+    exit 2
+  fi
+}
+
 while (($# > 0)); do
   case "$1" in
   --bundle-dir)
-    BUNDLE_DIR="${2:-}"
+    require_value "$1" "$#" "${2:-}"
+    BUNDLE_DIR="$2"
     shift 2
     ;;
   --version)
-    VERSION="${2:-}"
+    require_value "$1" "$#" "${2:-}"
+    VERSION="$2"
     shift 2
     ;;
   --deb-arch)
-    DEB_ARCH="${2:-}"
+    require_value "$1" "$#" "${2:-}"
+    DEB_ARCH="$2"
     shift 2
     ;;
   --appimage-arch)
-    APPIMAGE_ARCH="${2:-}"
+    require_value "$1" "$#" "${2:-}"
+    APPIMAGE_ARCH="$2"
     shift 2
     ;;
   --require-sig)
@@ -58,11 +71,13 @@ while (($# > 0)); do
     shift
     ;;
   --glibc-max)
-    GLIBC_MAX="${2:-}"
+    require_value "$1" "$#" "${2:-}"
+    GLIBC_MAX="$2"
     shift 2
     ;;
   --glibc-script)
-    GLIBC_SCRIPT="${2:-}"
+    require_value "$1" "$#" "${2:-}"
+    GLIBC_SCRIPT="$2"
     shift 2
     ;;
   -h | --help)
@@ -138,6 +153,12 @@ trap 'rm -rf "$WORK"' EXIT
 deb_extract="$WORK/deb"
 mkdir -p "$deb_extract"
 dpkg-deb -x "${debs[0]}" "$deb_extract"
+for rel in "${REQUIRED_FILES[@]}"; do
+  if [[ ! -f "$deb_extract/$rel" || ! -s "$deb_extract/$rel" ]]; then
+    echo "verify-linux-bundles: missing or empty /${rel} in extracted .deb (${debs[0]})" >&2
+    exit 1
+  fi
+done
 for rel in "${REQUIRED_BINS[@]}"; do
   if [[ ! -x "$deb_extract/$rel" ]]; then
     echo "verify-linux-bundles: missing or non-executable /${rel} in extracted .deb (${debs[0]})" >&2
@@ -209,13 +230,13 @@ if [[ ! -d "$appimage_root" ]]; then
   echo "verify-linux-bundles: AppImage extraction did not produce squashfs-root ($appimage_path)" >&2
   exit 1
 fi
-if [[ ! -x "$appimage_root/AppRun" ]]; then
+if [[ ! -f "$appimage_root/AppRun" || ! -x "$appimage_root/AppRun" ]]; then
   echo "verify-linux-bundles: missing executable AppRun in AppImage ($appimage_path)" >&2
   exit 1
 fi
 for rel in "${REQUIRED_FILES[@]}"; do
-  if [[ ! -s "$appimage_root/$rel" ]]; then
-    echo "verify-linux-bundles: missing /${rel} in AppImage payload ($appimage_path)" >&2
+  if [[ ! -f "$appimage_root/$rel" || ! -s "$appimage_root/$rel" ]]; then
+    echo "verify-linux-bundles: missing or empty /${rel} in AppImage payload ($appimage_path)" >&2
     exit 1
   fi
 done
