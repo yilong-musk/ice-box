@@ -6,6 +6,7 @@ import {
   controlsFollowWindowFocus,
   detectWindowChrome,
   runWindowCommand,
+  subscribeWindowMaximized,
 } from "@platform/windowChrome";
 import { api } from "@/api/client";
 import { t, useLanguagePreference } from "@/lib/i18n";
@@ -75,6 +76,7 @@ function useWindowFocused(enabled: boolean): boolean {
 }
 
 type LightTone = "close" | "minimize" | "zoom";
+type LightGlyph = LightTone | "restore";
 
 /** macOS light colours, with the darker glyph ink each light uses. */
 const LIGHT_CLASS: Record<LightTone, string> = {
@@ -84,21 +86,43 @@ const LIGHT_CLASS: Record<LightTone, string> = {
 };
 
 /** Glyphs drawn on a 12px light, shown while the group is hovered. */
-const LIGHT_GLYPH: Record<LightTone, ReactNode> = {
+const LIGHT_GLYPH: Record<LightGlyph, ReactNode> = {
   close: <path d="M3.75 3.75l4.5 4.5M8.25 3.75l-4.5 4.5" />,
   minimize: <path d="M3.25 6h5.5" />,
   zoom: <path d="M6 3.25v5.5M3.25 6h5.5" />,
+  // A maximized window: two triangles pointing in, as the macOS green light
+  // shows to leave full screen.
+  restore: (
+    <path
+      d="M6.6 2.9v2.5h2.5zM5.4 9.1V6.6H2.9z"
+      fill="currentColor"
+      strokeWidth={0.5}
+      strokeLinejoin="round"
+    />
+  ),
 };
+
+/** Whether the window is maximized, so the zoom light can offer to restore. */
+function useWindowMaximized(enabled: boolean): boolean {
+  const [maximized, setMaximized] = useState(false);
+  useEffect(() => {
+    if (!enabled) return;
+    return subscribeWindowMaximized(setMaximized);
+  }, [enabled]);
+  return maximized;
+}
 
 function TrafficLight({
   label,
   tone,
+  glyph = tone,
   showGlyph,
   dimmed,
   onCommand,
 }: {
   label: string;
   tone: LightTone;
+  glyph?: LightGlyph;
   showGlyph: boolean;
   dimmed: boolean;
   onCommand: (button: HTMLButtonElement) => void;
@@ -111,6 +135,7 @@ function TrafficLight({
       className="group/light flex size-5 items-center justify-center rounded-full outline-none"
       aria-label={label}
       data-tone={tone}
+      data-glyph={glyph}
       onClick={(event) => onCommand(event.currentTarget)}
     >
       <span
@@ -128,7 +153,7 @@ function TrafficLight({
           strokeLinecap="round"
           aria-hidden="true"
         >
-          {LIGHT_GLYPH[tone]}
+          {LIGHT_GLYPH[glyph]}
         </svg>
       </span>
     </button>
@@ -149,6 +174,7 @@ export function WindowControls() {
   const followFocus = windows && controlsFollowWindowFocus();
   const windowFocused = useWindowFocused(followFocus);
   const focused = !followFocus || windowFocused;
+  const maximized = useWindowMaximized(windows);
   const [hot, setHot] = useState(false);
   const [pointerEpoch, setPointerEpoch] = useState(resumeEpoch);
   if (!windows) return null;
@@ -195,8 +221,9 @@ export function WindowControls() {
           onCommand={() => void runWindowCommand("minimize")}
         />
         <TrafficLight
-          label={t("window.maximize")}
+          label={maximized ? t("window.restore") : t("window.maximize")}
           tone="zoom"
+          glyph={maximized ? "restore" : "zoom"}
           showGlyph={hovered}
           dimmed={!focused && !hovered}
           onCommand={() => void runWindowCommand("toggleMaximize")}

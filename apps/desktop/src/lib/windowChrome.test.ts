@@ -7,6 +7,7 @@ import {
   isMacosHost,
   resizeWindowWidthBy,
   runWindowCommand,
+  subscribeWindowMaximized,
 } from "./windowChrome";
 
 const minimize = vi.fn().mockResolvedValue(undefined);
@@ -28,6 +29,13 @@ const setSize = vi.fn(async (size: LogicalSize) => {
 const setMinSize = vi.fn(async (size: LogicalSize) => {
   fakeWindow.calls.push(`min:${size.width}`);
 });
+const resizedHandlers = new Set<() => void>();
+const onResized = vi.fn(async (handler: () => void) => {
+  resizedHandlers.add(handler);
+  return () => {
+    resizedHandlers.delete(handler);
+  };
+});
 
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({
@@ -40,6 +48,7 @@ vi.mock("@tauri-apps/api/window", () => ({
     innerSize: async () => new PhysicalSize(fakeWindow.width, fakeWindow.height),
     setSize,
     setMinSize,
+    onResized,
   }),
 }));
 
@@ -104,6 +113,28 @@ describe("runWindowCommand", () => {
     expect(minimize).toHaveBeenCalledTimes(1);
     expect(toggleMaximize).toHaveBeenCalledTimes(1);
     expect(close).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("subscribeWindowMaximized", () => {
+  it("reports the start state and each change on resize, then stops", async () => {
+    resetFakeWindow(720);
+    const seen: boolean[] = [];
+    const unsubscribe = subscribeWindowMaximized((maximized) => seen.push(maximized));
+    await vi.waitFor(() => expect(seen).toEqual([false]));
+
+    fakeWindow.maximized = true;
+    for (const handler of resizedHandlers) handler();
+    await vi.waitFor(() => expect(seen).toEqual([false, true]));
+
+    // A resize that keeps the state (dragging an edge) reports nothing.
+    for (const handler of resizedHandlers) handler();
+    fakeWindow.maximized = false;
+    for (const handler of resizedHandlers) handler();
+    await vi.waitFor(() => expect(seen).toEqual([false, true, false]));
+
+    unsubscribe();
+    expect(resizedHandlers.size).toBe(0);
   });
 });
 

@@ -20,6 +20,11 @@ export function controlsFollowWindowFocus(): boolean {
 
 export async function runWindowCommand(_command: WindowCommand): Promise<void> {}
 
+/** The phone window has no maximized state to report. */
+export function subscribeWindowMaximized(_onChange: (maximized: boolean) => void): () => void {
+  return () => {};
+}
+
 /** The phone window is sized by the system; nothing is resized. */
 export async function resizeWindowWidthBy(
   _delta: number,

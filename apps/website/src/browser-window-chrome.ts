@@ -23,6 +23,10 @@ export function isMacosHost(_userAgent?: string, _platform?: string): boolean { 
  * whenever the visitor is elsewhere on the page would make it look inactive. */
 export function controlsFollowWindowFocus(): boolean { return false; }
 export async function runWindowCommand(_command: WindowCommand): Promise<void> {}
+/** The demo's frame is never maximized, so the zoom light keeps its plus. */
+export function subscribeWindowMaximized(_onChange: (maximized: boolean) => void): () => void {
+  return () => {};
+}
 
 /**
  * Expected iframe width while the host frame's 200ms CSS width transition is

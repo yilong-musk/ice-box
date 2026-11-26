@@ -154,6 +154,53 @@ export async function resizeWindowWidthBy(
   }
 }
 
+/**
+ * Report whether the window is maximized: once at start, then whenever it is
+ * resized (the zoom light, a title-bar double-click, Win+Up, snapping and
+ * restoring all resize it). Only changes are reported. Returns an unsubscribe
+ * function; outside Tauri nothing is reported.
+ */
+export function subscribeWindowMaximized(
+  onChange: (maximized: boolean) => void,
+): () => void {
+  let disposed = false;
+  let unlisten: (() => void) | null = null;
+  void (async () => {
+    try {
+      const { getCurrentWindow } = await loadTauriApis();
+      const current = getCurrentWindow();
+      let last: boolean | null = null;
+      // Only the newest query may report, so a burst of resize events while
+      // dragging an edge cannot land out of order.
+      let latest = 0;
+      const refresh = async () => {
+        const query = ++latest;
+        try {
+          const maximized = await current.isMaximized();
+          if (disposed || query !== latest || maximized === last) return;
+          last = maximized;
+          onChange(maximized);
+        } catch {
+          // The window is going away; keep the last known state.
+        }
+      };
+      const off = await current.onResized(() => void refresh());
+      if (disposed) {
+        off();
+        return;
+      }
+      unlisten = off;
+      await refresh();
+    } catch {
+      // Browser preview and unit tests are not inside Tauri.
+    }
+  })();
+  return () => {
+    disposed = true;
+    unlisten?.();
+  };
+}
+
 export async function runWindowCommand(command: WindowCommand): Promise<void> {
   try {
     const { getCurrentWindow } = await loadTauriApis();
