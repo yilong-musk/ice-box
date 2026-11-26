@@ -825,33 +825,90 @@ impl CoreCoordinator for SudoCoreCoordinator {
     }
     fn set_dns(&mut self, service: &str, servers: &[String]) -> Result<(), TunError> {
         crate::helper_protocol::validate_set_dns(service, servers)?;
-        self.check_permission()?;
-        let mut args = vec!["-n", "networksetup", "-setdnsservers", service];
-        if servers.is_empty() {
-            // `networksetup` treats the literal "Empty" as "no DNS servers".
-            args.push("Empty");
-        } else {
-            for server in servers {
-                args.push(server);
+        #[cfg(target_os = "linux")]
+        {
+            if service == crate::linux::LINUX_RESOLV_CONF_SERVICE {
+                return Err(TunError::new(
+                    ErrorCode::TunNotSupported,
+                    "static /etc/resolv.conf DNS management is not supported in dev-sudo mode; install the privileged ice-helper service instead",
+                ));
+            }
+            self.check_permission()?;
+            if servers.is_empty() {
+                if !Path::new(&format!("/sys/class/net/{service}")).exists() {
+                    let _ = run_sudo_resolvectl(&["flush-caches"]);
+                    return Ok(());
+                }
+                run_sudo_resolvectl(&["revert", service])?;
+                let _ = run_sudo_resolvectl(&["flush-caches"]);
+                return Ok(());
+            }
+            let mut dns_args = vec!["dns", service];
+            dns_args.extend(servers.iter().map(String::as_str));
+            run_sudo_resolvectl(&dns_args)?;
+            run_sudo_resolvectl(&["domain", service, "~."])?;
+            let _ = run_sudo_resolvectl(&["default-route", service, "true"]);
+            let _ = run_sudo_resolvectl(&["flush-caches"]);
+            Ok(())
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            self.check_permission()?;
+            let mut args = vec!["-n", "networksetup", "-setdnsservers", service];
+            if servers.is_empty() {
+                // `networksetup` treats the literal "Empty" as "no DNS servers".
+                args.push("Empty");
+            } else {
+                for server in servers {
+                    args.push(server);
+                }
+            }
+            let status = Command::new("sudo")
+                .args(&args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+            match status {
+                Ok(status) if status.success() => Ok(()),
+                Ok(_) => Err(TunError::new(
+                    ErrorCode::TunApplyFailed,
+                    format!("sudo networksetup -setdnsservers {service} failed (exit {status:?})"),
+                )),
+                Err(err) => Err(TunError::new(
+                    ErrorCode::TunApplyFailed,
+                    format!("run sudo networksetup -setdnsservers {service}: {err}"),
+                )),
             }
         }
-        let status = Command::new("sudo")
-            .args(&args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        match status {
-            Ok(status) if status.success() => Ok(()),
-            Ok(_) => Err(TunError::new(
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn run_sudo_resolvectl(args: &[&str]) -> Result<(), TunError> {
+    let output = Command::new("sudo")
+        .arg("-n")
+        .arg("resolvectl")
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|err| {
+            TunError::new(
                 ErrorCode::TunApplyFailed,
-                format!("sudo networksetup -setdnsservers {service} failed (exit {status:?})"),
-            )),
-            Err(err) => Err(TunError::new(
-                ErrorCode::TunApplyFailed,
-                format!("run sudo networksetup -setdnsservers {service}: {err}"),
-            )),
-        }
+                format!("run sudo -n resolvectl {args:?}: {err}"),
+            )
+        })?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(TunError::new(
+            ErrorCode::TunApplyFailed,
+            format!(
+                "sudo -n resolvectl {args:?} failed (exit {:?}): {}",
+                output.status.code(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        ))
     }
 }
 
@@ -1985,6 +2042,27 @@ mod tests {
         );
         assert!(coordinator.stop().is_ok());
         assert_eq!(coordinator.pid, None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn sudo_coordinator_set_dns_rejects_static_resolv_conf_on_linux() {
+        let mut coordinator = SudoCoreCoordinator::new(
+            PathBuf::from("/nonexistent/sing-box"),
+            PathBuf::from("/nonexistent/log"),
+        );
+        let err = coordinator
+            .set_dns(
+                crate::linux::LINUX_RESOLV_CONF_SERVICE,
+                &["223.5.5.5".into()],
+            )
+            .expect_err("static resolv.conf is not supported in dev-sudo mode");
+        assert_eq!(err.code, ErrorCode::TunNotSupported);
+
+        let err = coordinator
+            .set_dns("icebox0; rm -rf /", &["223.5.5.5".into()])
+            .expect_err("invalid service name must fail validation");
+        assert_eq!(err.code, ErrorCode::TunInvalidArgument);
     }
 
     #[test]

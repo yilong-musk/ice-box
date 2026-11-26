@@ -470,13 +470,13 @@ impl CaptureController {
                     UiMessage::raw(r)
                 }
             }),
-            // Windows hides TUN controls while the backend is unsupported
-            // (e.g. no bundled binary → deferred coordinator →
-            // tun.permission_required). Deriving from the backend capability
-            // (not a bare `cfg!(windows)`) keeps the two in lockstep: the
-            // controls reappear automatically when the capability turns
-            // supported.
-            tun_ui_hidden: cfg!(target_os = "windows") && !capability.supported,
+            // Windows and Linux hide TUN controls while the backend is
+            // unsupported (e.g. missing bundled binary or unsupported host).
+            // Deriving from the backend capability (not a bare platform flag)
+            // keeps the two in lockstep: controls reappear automatically once
+            // the capability turns supported.
+            tun_ui_hidden: cfg!(any(target_os = "windows", target_os = "linux"))
+                && !capability.supported,
         }
     }
 }

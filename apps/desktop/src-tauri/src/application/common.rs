@@ -240,10 +240,14 @@ pub struct StatusResponse {
     /// the install-before-enable guide when this is false, and offers the
     /// one-time task setup instead.
     pub helper_supported: bool,
-    /// Whether this platform can register an OS login item at all (macOS and
-    /// Windows). The Settings page hides the Startup card when it cannot, so
-    /// the switch never offers an action that can only fail.
+    /// Whether this platform can register an OS login item at all (macOS,
+    /// Windows, and Linux). The Settings page hides the Startup card when it
+    /// cannot, so the switch never offers an action that can only fail.
     pub launch_at_login_supported: bool,
+    /// Whether in-place update installation is supported on this build
+    /// (macOS, Windows, and Linux AppImage). Linux `.deb` installs check the
+    /// update feed and open the release download page in the browser instead.
+    pub in_app_update_supported: bool,
     /// Menu-bar readout in Settings. macOS only; the frontend must not infer
     /// this from the user agent.
     pub tray_display_supported: bool,
@@ -1117,8 +1121,9 @@ pub(crate) fn collect_status(state: &AppState) -> Result<StatusResponse, AppErro
         tun_ui_hidden: capture.tun_ui_hidden,
         tun_ipv6_disabled: cfg!(target_os = "windows"),
         helper_installed: probes.helper_installed,
-        helper_supported: cfg!(target_os = "macos"),
+        helper_supported: cfg!(any(target_os = "macos", target_os = "linux")),
         launch_at_login_supported: crate::autostart::SUPPORTED,
+        in_app_update_supported: crate::app_update::in_app_update_supported(),
         tray_display_supported: cfg!(target_os = "macos"),
         helper_stale: probes.helper_stale,
         tun_elevation_ready: probes.tun_elevation_ready,

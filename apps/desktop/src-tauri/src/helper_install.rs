@@ -29,7 +29,7 @@ use ice_config::{AppError, ErrorCode};
 use ice_elevate::{ElevateError, ElevateOutcome};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::sync::OnceLock;
 use tauri::Manager;
 
@@ -134,6 +134,268 @@ fn resolve_install_inputs(app: &tauri::AppHandle) -> Result<(PathBuf, PathBuf), 
     Ok((helper, core))
 }
 
+// --- Linux AppImage private-FUSE-mount staging ---------------------------
+//
+// An AppImage mounts its SquashFS payload via FUSE at `/tmp/.mount_*` without
+// `allow_other`/`allow_root`, so root (`pkexec` and the elevated installer)
+// receives `EACCES` when trying to execute `ice-helper` or read `sing-box` and
+// `geoip/*.srs`. When running from an AppImage mount, stage the files into a
+// fresh user-owned `0700` temp directory on a regular filesystem and remove it
+// via RAII as soon as the elevated command finishes.
+
+#[cfg(any(target_os = "linux", test))]
+fn path_under_tmp_mount(path: &Path) -> bool {
+    let mut comps = path.components();
+    matches!(
+        (comps.next(), comps.next(), comps.next()),
+        (
+            Some(std::path::Component::RootDir),
+            Some(std::path::Component::Normal(tmp)),
+            Some(std::path::Component::Normal(mount)),
+        ) if tmp == "tmp" && mount.to_string_lossy().starts_with(".mount_")
+    )
+}
+
+/// Pure check for whether `resource_path` lies inside an AppImage private FUSE
+/// mount that root cannot access.
+///
+/// Checking `current_exe` / `resource_path` against `APPDIR` (in addition to
+/// `APPIMAGE` being non-empty) prevents false positives when a `.deb` install
+/// inherits `$APPIMAGE` / `$APPDIR` from a parent AppImage (e.g., an IDE's
+/// integrated terminal).
+#[cfg(any(target_os = "linux", test))]
+fn needs_appimage_staging(
+    appimage: Option<&std::ffi::OsStr>,
+    appdir: Option<&std::ffi::OsStr>,
+    current_exe: Option<&Path>,
+    resource_path: &Path,
+) -> bool {
+    if path_under_tmp_mount(resource_path) {
+        return true;
+    }
+    let has_appimage = appimage.is_some_and(|v| !v.is_empty());
+    if !has_appimage {
+        return false;
+    }
+    let Some(appdir_path) = appdir.filter(|v| !v.is_empty()).map(Path::new).filter(|p| {
+        (p.is_absolute() || p.to_string_lossy().starts_with('/')) && *p != Path::new("/")
+    }) else {
+        return false;
+    };
+    let exe_in_appdir = current_exe.is_some_and(|exe| exe.starts_with(appdir_path));
+    let resource_in_appdir = resource_path.starts_with(appdir_path);
+    exe_in_appdir || resource_in_appdir
+}
+
+/// RAII guard for a `0700` temporary staging directory used during Linux
+/// AppImage helper install/uninstall. Always removes the directory on drop.
+#[cfg(any(target_os = "linux", all(unix, test)))]
+struct HelperStagingDir {
+    dir: PathBuf,
+}
+
+#[cfg(any(target_os = "linux", all(unix, test)))]
+impl Drop for HelperStagingDir {
+    fn drop(&mut self) {
+        if let Err(err) = std::fs::remove_dir_all(&self.dir) {
+            if err.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(
+                    path = %self.dir.display(),
+                    error = %err,
+                    "failed to remove helper staging directory"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", all(unix, test)))]
+fn create_staging_dir(base_tmp: &Path) -> Result<HelperStagingDir, AppError> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let pid = std::process::id();
+    for _ in 0..16 {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = base_tmp.join(format!("ice-box-helper-stage-{pid}-{nanos}-{seq}"));
+        match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
+            Ok(()) => {
+                // Construct the RAII guard immediately so any later failure cleans up.
+                let guard = HelperStagingDir { dir };
+                std::fs::set_permissions(&guard.dir, std::fs::Permissions::from_mode(0o700))
+                    .map_err(|err| {
+                        AppError::with_code(
+                            ERR_HELPER_INSTALL_FAILED,
+                            format!(
+                                "failed to set permissions on helper staging dir {}: {err}",
+                                guard.dir.display()
+                            ),
+                        )
+                    })?;
+                return Ok(guard);
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => {
+                return Err(AppError::with_code(
+                    ERR_HELPER_INSTALL_FAILED,
+                    format!(
+                        "failed to create helper staging dir {}: {err}",
+                        dir.display()
+                    ),
+                ));
+            }
+        }
+    }
+    Err(AppError::with_code(
+        ERR_HELPER_INSTALL_FAILED,
+        "failed to create a unique helper staging directory",
+    ))
+}
+
+#[cfg(any(target_os = "linux", all(unix, test)))]
+fn copy_staged_file(src: &Path, dst: &Path, mode: u32) -> Result<(), AppError> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    let mut reader = std::fs::File::open(src).map_err(|err| {
+        AppError::with_code(
+            ERR_HELPER_INSTALL_FAILED,
+            format!("failed to read bundled file {}: {err}", src.display()),
+        )
+    })?;
+    let mut writer = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(mode)
+        .open(dst)
+        .map_err(|err| {
+            AppError::with_code(
+                ERR_HELPER_INSTALL_FAILED,
+                format!("failed to stage file {}: {err}", dst.display()),
+            )
+        })?;
+    std::io::copy(&mut reader, &mut writer).map_err(|err| {
+        AppError::with_code(
+            ERR_HELPER_INSTALL_FAILED,
+            format!(
+                "failed to copy {} to staging {}: {err}",
+                src.display(),
+                dst.display()
+            ),
+        )
+    })?;
+    drop(writer);
+    // Explicitly chmod so a permissive user umask (e.g. 0002) never leaves a
+    // group-writable staged file that the root installer would reject.
+    std::fs::set_permissions(dst, std::fs::Permissions::from_mode(mode)).map_err(|err| {
+        AppError::with_code(
+            ERR_HELPER_INSTALL_FAILED,
+            format!(
+                "failed to set mode {mode:o} on staged file {}: {err}",
+                dst.display()
+            ),
+        )
+    })?;
+    Ok(())
+}
+
+/// Stage `ice-helper` (`0755`), `sing-box` (`0755`), and `geoip/*.srs` (`0644`)
+/// into a fresh `0700` temp directory preserving the exact relative layout
+/// `resources_dir_from_core_src(core)` expects (`stage/sing-box`,
+/// `stage/geoip/*.srs`).
+#[cfg(any(target_os = "linux", all(unix, test)))]
+fn stage_install_inputs(
+    base_tmp: &Path,
+    helper_src: &Path,
+    core_src: &Path,
+) -> Result<(HelperStagingDir, PathBuf, PathBuf), AppError> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+
+    let guard = create_staging_dir(base_tmp)?;
+    let staged_helper = guard.dir.join(HELPER_RESOURCE_NAME);
+    let staged_core = guard.dir.join("sing-box");
+
+    copy_staged_file(helper_src, &staged_helper, 0o755)?;
+    copy_staged_file(core_src, &staged_core, 0o755)?;
+
+    if let Some(src_geoip) = core_src.parent().map(|p| p.join("geoip")) {
+        if src_geoip.is_dir() {
+            let staged_geoip = guard.dir.join("geoip");
+            std::fs::DirBuilder::new()
+                .mode(0o755)
+                .create(&staged_geoip)
+                .map_err(|err| {
+                    AppError::with_code(
+                        ERR_HELPER_INSTALL_FAILED,
+                        format!(
+                            "failed to create staged geoip dir {}: {err}",
+                            staged_geoip.display()
+                        ),
+                    )
+                })?;
+            std::fs::set_permissions(&staged_geoip, std::fs::Permissions::from_mode(0o755))
+                .map_err(|err| {
+                    AppError::with_code(
+                        ERR_HELPER_INSTALL_FAILED,
+                        format!(
+                            "failed to chmod staged geoip dir {}: {err}",
+                            staged_geoip.display()
+                        ),
+                    )
+                })?;
+
+            let entries = std::fs::read_dir(&src_geoip).map_err(|err| {
+                AppError::with_code(
+                    ERR_HELPER_INSTALL_FAILED,
+                    format!(
+                        "failed to list bundled geoip dir {}: {err}",
+                        src_geoip.display()
+                    ),
+                )
+            })?;
+            for entry in entries {
+                let entry = entry.map_err(|err| {
+                    AppError::with_code(
+                        ERR_HELPER_INSTALL_FAILED,
+                        format!(
+                            "failed to read bundled geoip dir {}: {err}",
+                            src_geoip.display()
+                        ),
+                    )
+                })?;
+                let name = entry.file_name();
+                if !name.to_string_lossy().ends_with(".srs") {
+                    continue;
+                }
+                let src_path = entry.path();
+                if !src_path.is_file() {
+                    continue;
+                }
+                copy_staged_file(&src_path, &staged_geoip.join(&name), 0o644)?;
+            }
+        }
+    }
+
+    Ok((guard, staged_helper, staged_core))
+}
+
+/// Stage only `ice-helper` (`0755`) into a fresh `0700` temp directory when
+/// `uninstall_helper_inner` falls back to the bundled helper inside an AppImage.
+#[cfg(any(target_os = "linux", all(unix, test)))]
+fn stage_uninstall_helper(
+    base_tmp: &Path,
+    helper_src: &Path,
+) -> Result<(HelperStagingDir, PathBuf), AppError> {
+    let guard = create_staging_dir(base_tmp)?;
+    let staged_helper = guard.dir.join(HELPER_RESOURCE_NAME);
+    copy_staged_file(helper_src, &staged_helper, 0o755)?;
+    Ok((guard, staged_helper))
+}
+
 fn current_uid() -> u32 {
     #[cfg(unix)]
     {
@@ -149,7 +411,7 @@ fn current_uid() -> u32 {
 /// `Status` probe, short bound). Drives the Settings install/uninstall
 /// buttons and the Home permission action; never mutates the OS.
 pub fn helper_installed(state: &AppState) -> bool {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
         let data_dir = state.paths.root();
         let socket = ice_tun_sys::helper::helper_socket_path();
@@ -158,7 +420,7 @@ pub fn helper_installed(state: &AppState) -> bool {
             Err(_) => false,
         }
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         let _ = state;
         false
@@ -208,11 +470,11 @@ fn wait_for_helper_ready(data_dir: &Path) -> Result<(), AppError> {
 // macOS only; the hashing primitives stay available in tests everywhere
 // (host-free, temp-file based).
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 static BUNDLE_CORE_SHA: OnceLock<Option<String>> = OnceLock::new();
 static INSTALLED_CORE_SHA: Mutex<Option<Option<String>>> = Mutex::new(None);
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
 fn sha256_of_file(path: &Path) -> Option<String> {
     use sha2::{Digest, Sha256};
     let bytes = std::fs::read(path).ok()?;
@@ -221,7 +483,7 @@ fn sha256_of_file(path: &Path) -> Option<String> {
     Some(format!("{:x}", hasher.finalize()))
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn bundle_core_sha(resource_dir: Option<&Path>) -> Option<String> {
     BUNDLE_CORE_SHA
         .get_or_init(|| {
@@ -232,7 +494,7 @@ fn bundle_core_sha(resource_dir: Option<&Path>) -> Option<String> {
         .clone()
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn installed_core_sha() -> Option<String> {
     let mut slot = INSTALLED_CORE_SHA.lock().expect("helper sha lock");
     match slot.as_ref() {
@@ -260,11 +522,11 @@ pub fn reset_helper_core_cache() {
 /// True means the helper would still run the previous core version: TUN
 /// activation is blocked until the elevated install refreshes the copy.
 pub fn helper_core_stale(resource_dir: Option<&Path>) -> bool {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
         cores_differ(&bundle_core_sha(resource_dir), &installed_core_sha())
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         let _ = resource_dir;
         false
@@ -272,7 +534,7 @@ pub fn helper_core_stale(resource_dir: Option<&Path>) -> bool {
 }
 
 /// Host-free comparison (tested with temp files).
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
 fn cores_differ(bundle: &Option<String>, installed: &Option<String>) -> bool {
     match (bundle, installed) {
         (Some(bundle), Some(installed)) => bundle != installed,
@@ -308,15 +570,42 @@ fn after_helper_change(app: &tauri::AppHandle) {
 /// Prompts the user for their admin password; nothing is mutated before the
 /// dialog is authorized, and cancellation leaves the system untouched.
 pub fn install_helper_inner(app: &tauri::AppHandle) -> Result<(), AppError> {
-    if !cfg!(target_os = "macos") {
+    if !cfg!(any(target_os = "macos", target_os = "linux")) {
         return Err(AppError::new(
             ErrorCode::TunNotSupported,
-            "helper install is only supported on macOS",
+            "helper install is only supported on macOS and Linux",
         ));
     }
     let state = app.state::<AppState>();
     refuse_while_tun_active(&state)?;
     let (helper, core) = resolve_install_inputs(app)?;
+    #[cfg(target_os = "linux")]
+    let _staging_guard;
+    #[cfg(target_os = "linux")]
+    let (helper, core) = {
+        let current_exe = std::env::current_exe().ok();
+        let appimage = std::env::var_os("APPIMAGE");
+        let appdir = std::env::var_os("APPDIR");
+        if needs_appimage_staging(
+            appimage.as_deref(),
+            appdir.as_deref(),
+            current_exe.as_deref(),
+            &helper,
+        ) || needs_appimage_staging(
+            appimage.as_deref(),
+            appdir.as_deref(),
+            current_exe.as_deref(),
+            &core,
+        ) {
+            let (guard, staged_helper, staged_core) =
+                stage_install_inputs(&std::env::temp_dir(), &helper, &core)?;
+            _staging_guard = Some(guard);
+            (staged_helper, staged_core)
+        } else {
+            _staging_guard = None;
+            (helper, core)
+        }
+    };
     let data_dir = state.paths.root();
     if !data_dir.is_dir() {
         return Err(AppError::with_code(
@@ -347,24 +636,57 @@ pub fn install_helper_inner(app: &tauri::AppHandle) -> Result<(), AppError> {
 
 /// Uninstall the privileged helper through the system authorization dialog.
 pub fn uninstall_helper_inner(app: &tauri::AppHandle) -> Result<(), AppError> {
-    if !cfg!(target_os = "macos") {
+    if !cfg!(any(target_os = "macos", target_os = "linux")) {
         return Err(AppError::new(
             ErrorCode::TunNotSupported,
-            "helper uninstall is only supported on macOS",
+            "helper uninstall is only supported on macOS and Linux",
         ));
     }
     let state = app.state::<AppState>();
     refuse_while_tun_active(&state)?;
     // Prefer the installed root copy; fall back to the bundled binary.
-    let helper = Some(PathBuf::from(ice_tun_sys::install_paths::HELPER_BIN_DEST))
-        .filter(|p| p.is_file())
-        .or_else(|| helper_binary(app.path().resource_dir().ok().as_deref()))
-        .ok_or_else(|| {
-            AppError::with_code(
-                ERR_HELPER_INSTALL_FAILED,
-                "helper binary not found; cannot uninstall",
-            )
-        })?;
+    let installed_helper = PathBuf::from(ice_tun_sys::install_paths::HELPER_BIN_DEST);
+    #[cfg(target_os = "linux")]
+    let _staging_guard;
+    let helper = if installed_helper.is_file() {
+        #[cfg(target_os = "linux")]
+        {
+            _staging_guard = None;
+        }
+        installed_helper
+    } else {
+        let bundled =
+            helper_binary(app.path().resource_dir().ok().as_deref()).ok_or_else(|| {
+                AppError::with_code(
+                    ERR_HELPER_INSTALL_FAILED,
+                    "helper binary not found; cannot uninstall",
+                )
+            })?;
+        #[cfg(target_os = "linux")]
+        {
+            let current_exe = std::env::current_exe().ok();
+            let appimage = std::env::var_os("APPIMAGE");
+            let appdir = std::env::var_os("APPDIR");
+            if needs_appimage_staging(
+                appimage.as_deref(),
+                appdir.as_deref(),
+                current_exe.as_deref(),
+                &bundled,
+            ) {
+                let (guard, staged_helper) =
+                    stage_uninstall_helper(&std::env::temp_dir(), &bundled)?;
+                _staging_guard = Some(guard);
+                staged_helper
+            } else {
+                _staging_guard = None;
+                bundled
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            bundled
+        }
+    };
     let data_dir = state.paths.root();
     let args = ["uninstall", data_dir.to_str().unwrap_or_default()];
     let outcome = run_elevated(&helper, &args)?;
@@ -456,5 +778,174 @@ mod tests {
         assert!(!cores_differ(&None, &old_sha));
         assert!(!cores_differ(&None, &None));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn needs_appimage_staging_detects_real_appimage_and_ignores_inherited_env() {
+        use std::ffi::OsStr;
+
+        // Plain .deb install: no APPIMAGE, regular /usr paths -> false.
+        assert!(!needs_appimage_staging(
+            None,
+            None,
+            Some(Path::new("/usr/bin/ice-box")),
+            Path::new("/usr/lib/ice-box/ice-helper"),
+        ));
+
+        // .deb launched from inside another AppImage's terminal (e.g. Cursor):
+        // APPIMAGE + APPDIR belong to Cursor, not ice-box -> false.
+        assert!(!needs_appimage_staging(
+            Some(OsStr::new("/opt/cursor.AppImage")),
+            Some(OsStr::new("/tmp/.mount_CursorABC")),
+            Some(Path::new("/usr/bin/ice-box")),
+            Path::new("/usr/lib/ice-box/ice-helper"),
+        ));
+
+        // Real ice-box AppImage in default /tmp/.mount_* -> true.
+        assert!(needs_appimage_staging(
+            Some(OsStr::new("/home/u/ice-box.AppImage")),
+            Some(OsStr::new("/tmp/.mount_iceboxXYZ")),
+            Some(Path::new("/tmp/.mount_iceboxXYZ/usr/bin/ice-box")),
+            Path::new("/tmp/.mount_iceboxXYZ/usr/lib/ice-box/ice-helper"),
+        ));
+
+        // Real AppImage mounted under a custom TMPDIR -> true via APPDIR match.
+        assert!(needs_appimage_staging(
+            Some(OsStr::new("/home/u/ice-box.AppImage")),
+            Some(OsStr::new("/run/user/1000/.mount_iceboxXYZ")),
+            Some(Path::new("/run/user/1000/.mount_iceboxXYZ/usr/bin/ice-box")),
+            Path::new("/run/user/1000/.mount_iceboxXYZ/usr/lib/ice-box/ice-helper"),
+        ));
+
+        // Path under /tmp/.mount_* is always treated as private FUSE mount.
+        assert!(needs_appimage_staging(
+            None,
+            None,
+            Some(Path::new("/usr/bin/ice-box")),
+            Path::new("/tmp/.mount_iceboxXYZ/usr/lib/ice-box/sing-box"),
+        ));
+
+        // Empty APPIMAGE or malformed root APPDIR -> false.
+        assert!(!needs_appimage_staging(
+            Some(OsStr::new("")),
+            Some(OsStr::new("/custom/mount")),
+            Some(Path::new("/custom/mount/usr/bin/ice-box")),
+            Path::new("/custom/mount/usr/lib/ice-box/ice-helper"),
+        ));
+        assert!(!needs_appimage_staging(
+            Some(OsStr::new("/home/u/ice-box.AppImage")),
+            Some(OsStr::new("/")),
+            Some(Path::new("/usr/bin/ice-box")),
+            Path::new("/usr/lib/ice-box/ice-helper"),
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stage_install_inputs_preserves_layout_modes_and_cleans_up_on_drop() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "ice-box-stage-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let src = root.join("bundle");
+        let tmp_base = root.join("tmp");
+        std::fs::create_dir_all(src.join("geoip")).unwrap();
+        std::fs::create_dir_all(&tmp_base).unwrap();
+
+        let helper_src = src.join("ice-helper");
+        let core_src = src.join("sing-box");
+        let srs_src = src.join("geoip").join("geoip-cn.srs");
+        std::fs::write(&helper_src, b"fake-helper").unwrap();
+        std::fs::write(&core_src, b"fake-sing-box").unwrap();
+        std::fs::write(&srs_src, b"fake-srs").unwrap();
+        std::fs::write(src.join("geoip").join("README.txt"), b"skip").unwrap();
+
+        let stage_dir_path;
+        {
+            let (guard, staged_helper, staged_core) =
+                stage_install_inputs(&tmp_base, &helper_src, &core_src).expect("stage install");
+            stage_dir_path = guard.dir.clone();
+            assert_eq!(
+                std::fs::metadata(&stage_dir_path)
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o700
+            );
+            assert_eq!(staged_helper, stage_dir_path.join("ice-helper"));
+            assert_eq!(staged_core, stage_dir_path.join("sing-box"));
+            assert_eq!(std::fs::read(&staged_helper).unwrap(), b"fake-helper");
+            assert_eq!(std::fs::read(&staged_core).unwrap(), b"fake-sing-box");
+            assert_eq!(
+                std::fs::metadata(&staged_helper)
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o755
+            );
+            assert_eq!(
+                std::fs::metadata(&staged_core)
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o755
+            );
+
+            // `resources_dir_from_core_src(staged_core)` expects `geoip/*.srs`
+            // directly inside `staged_core.parent()`.
+            let staged_geoip = staged_core.parent().unwrap().join("geoip");
+            let staged_srs = staged_geoip.join("geoip-cn.srs");
+            assert_eq!(std::fs::read(&staged_srs).unwrap(), b"fake-srs");
+            assert_eq!(
+                std::fs::metadata(&staged_srs).unwrap().permissions().mode() & 0o777,
+                0o644
+            );
+            assert!(!staged_geoip.join("README.txt").exists());
+        }
+        // Guard dropped: staging directory must be completely removed.
+        assert!(!stage_dir_path.exists());
+
+        // Error during staging (missing core) must not leave a staging dir behind.
+        let err = stage_install_inputs(&tmp_base, &helper_src, &src.join("missing-core"))
+            .err()
+            .expect("missing core fails");
+        assert_eq!(err.code, ERR_HELPER_INSTALL_FAILED.as_str());
+        assert_eq!(std::fs::read_dir(&tmp_base).unwrap().count(), 0);
+
+        // Uninstall staging helper copies ice-helper (0755) and cleans up on drop.
+        let uninstall_stage_path;
+        {
+            let (guard, staged_helper) =
+                stage_uninstall_helper(&tmp_base, &helper_src).expect("stage uninstall");
+            uninstall_stage_path = guard.dir.clone();
+            assert_eq!(
+                std::fs::metadata(&uninstall_stage_path)
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o700
+            );
+            assert_eq!(std::fs::read(&staged_helper).unwrap(), b"fake-helper");
+            assert_eq!(
+                std::fs::metadata(&staged_helper)
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o755
+            );
+        }
+        assert!(!uninstall_stage_path.exists());
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

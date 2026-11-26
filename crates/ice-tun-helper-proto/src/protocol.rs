@@ -36,9 +36,9 @@ pub const PROTOCOL_VERSION: u32 = 2;
 /// Hard cap for one request or response line (16 KiB).
 pub const MAX_FRAME_BYTES: usize = 16 * 1024;
 /// Socket path constants used by the daemon and the client. The daemon owns
-/// the well-known path (root-created under `/var/run`); tests and dev
+/// the well-known path (`/var/run` on macOS, `/run` on Linux); tests and dev
 /// runners may override via `ICE_BOX_TUN_HELPER_SOCKET`.
-pub const DEFAULT_SOCKET_PATH: &str = "/var/run/ice-box-helper.sock";
+pub const DEFAULT_SOCKET_PATH: &str = crate::install_paths::SOCKET_PATH;
 /// Hard cap on `SetDns` server count (defence in depth; macOS typically
 /// uses one or two resolvers).
 pub const MAX_DNS_SERVERS: usize = 4;

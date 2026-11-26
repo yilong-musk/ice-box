@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Privileged helper daemon entry (`docs/tun.md`, macOS production path).
+//! Privileged helper daemon entry (`docs/tun.md`, macOS & Linux production path).
 //!
-//! Runs as root under launchd. Binds a Unix socket, authenticates each peer
-//! by socket credential + per-installation token, and serves the narrow
-//! Start / Stop / Status / SetDns / TruncateCoreLog contract. The core binary
-//! and data dir come from
-//! the environment the installer records in the launchd plist; the client
-//! can never supply them.
+//! Runs as root under launchd (macOS) or systemd (Linux). Binds a Unix socket,
+//! authenticates each peer by socket credential + per-installation token, and
+//! serves the narrow Start / Stop / Status / SetDns / TruncateCoreLog contract.
+//! The core binary, data dir, and pinned SHA-256 come from the environment the
+//! installer records in the launchd plist (macOS) or systemd unit + root-only
+//! `/etc/ice-box/helper.env` (Linux); the client can never supply them.
 //!
 //! The same binary also implements the privileged `install` / `uninstall`
 //! modes used by the in-app authorization dialog (ice-elevate) and the
@@ -19,11 +19,11 @@
 //! TUN resources; this process only runs and terminates it.
 //!
 //! Non-unix builds are a stub so the workspace gate stays green on Windows
-//! CI; the daemon is macOS-only.
+//! CI; the daemon runs on macOS (launchd) and Linux (systemd).
 
 #[cfg(not(unix))]
 fn main() {
-    eprintln!("ice-helper is a macOS-only daemon");
+    eprintln!("ice-helper is a Unix (macOS/Linux) daemon");
     std::process::exit(1);
 }
 

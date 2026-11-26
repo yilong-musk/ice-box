@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Start Tauri dev for a specific platform target.
-# Usage: scripts/dev.sh [host | mac-arm64 | mac-x64 | win]
+# Usage: scripts/dev.sh [host | mac-arm64 | mac-x64 | win | linux-x64 | linux-arm64]
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -19,6 +19,11 @@ bash "$ROOT/scripts/prepare-singbox-resource.sh" "$ICE_PLATFORM_ALIAS"
 cd "$ROOT/apps/desktop"
 
 TAURI_ARGS=(dev)
+case "$ICE_PLATFORM_ALIAS" in
+  linux-x64 | linux-arm64)
+    TAURI_ARGS+=(--config src-tauri/tauri.linux.conf.json)
+    ;;
+esac
 CARGO_TARGET="$(ice_dev_cargo_target || true)"
 if [[ -n "${CARGO_TARGET:-}" ]]; then
   echo "cargo target: $CARGO_TARGET"

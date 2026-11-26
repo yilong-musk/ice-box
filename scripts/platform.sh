@@ -3,9 +3,10 @@
 # Shared platform aliases for ice-box scripts.
 # Source and call ice_resolve_platform <alias>; exports ICE_* variables below.
 #
-# Aliases: host | mac-arm64 | mac-x64 | win
-# Also accepts: darwin-aarch64 | darwin-x86_64 | windows-x86_64
+# Aliases: host | mac-arm64 | mac-x64 | win | linux-x64 | linux-arm64
+# Also accepts: darwin-aarch64 | darwin-x86_64 | windows-x86_64 | linux-x86_64 | linux-aarch64
 #               aarch64-apple-darwin | x86_64-apple-darwin | x86_64-pc-windows-msvc
+#               x86_64-unknown-linux-gnu | aarch64-unknown-linux-gnu
 
 ice_host_platform() {
   local os arch
@@ -14,6 +15,8 @@ ice_host_platform() {
   case "$os/$arch" in
     Darwin/arm64) echo "mac-arm64" ;;
     Darwin/x86_64) echo "mac-x64" ;;
+    Linux/x86_64) echo "linux-x64" ;;
+    Linux/aarch64 | Linux/arm64) echo "linux-arm64" ;;
     MINGW*/* | MSYS*/* | CYGWIN*/*) echo "win" ;;
     *)
       if [[ "${OS:-}" == "Windows_NT" ]]; then
@@ -56,8 +59,20 @@ ice_resolve_platform() {
       ICE_BIN="sing-box.exe"
       ICE_CARGO_TARGET="x86_64-pc-windows-msvc"
       ;;
+    linux-x64 | linux-x86_64 | x86_64-unknown-linux-gnu)
+      ICE_PLATFORM_ALIAS="linux-x64"
+      ICE_TARGET_DIR="linux-x86_64"
+      ICE_BIN="sing-box"
+      ICE_CARGO_TARGET="x86_64-unknown-linux-gnu"
+      ;;
+    linux-arm64 | linux-aarch64 | aarch64-unknown-linux-gnu)
+      ICE_PLATFORM_ALIAS="linux-arm64"
+      ICE_TARGET_DIR="linux-aarch64"
+      ICE_BIN="sing-box"
+      ICE_CARGO_TARGET="aarch64-unknown-linux-gnu"
+      ;;
     *)
-      echo "unknown platform: $raw (use host | mac-arm64 | mac-x64 | win)" >&2
+      echo "unknown platform: $raw (use host | mac-arm64 | mac-x64 | win | linux-x64 | linux-arm64)" >&2
       return 1
       ;;
   esac
@@ -78,6 +93,12 @@ ice_dev_cargo_target() {
     mac-x64)
       [[ "$ICE_PLATFORM_ALIAS" == "mac-arm64" ]] && echo "$ICE_CARGO_TARGET"
       ;;
+    linux-x64)
+      [[ "$ICE_PLATFORM_ALIAS" == "linux-arm64" ]] && echo "$ICE_CARGO_TARGET"
+      ;;
+    linux-arm64)
+      [[ "$ICE_PLATFORM_ALIAS" == "linux-x64" ]] && echo "$ICE_CARGO_TARGET"
+      ;;
     win)
       [[ "$ICE_PLATFORM_ALIAS" == "win" ]] || return 0
       ;;
@@ -94,13 +115,19 @@ ice_assert_dev_host() {
   case "$ICE_PLATFORM_ALIAS" in
     mac-arm64 | mac-x64)
       if [[ "$(uname -s)" != "Darwin" ]]; then
-        echo "dev:${ICE_PLATFORM_ALIAS} 需要在 macOS 上运行（当前: $(uname -s)）" >&2
+        echo "dev:${ICE_PLATFORM_ALIAS} must run on macOS (current: $(uname -s))" >&2
+        return 1
+      fi
+      ;;
+    linux-x64 | linux-arm64)
+      if [[ "$(uname -s)" != "Linux" ]]; then
+        echo "dev:${ICE_PLATFORM_ALIAS} must run on Linux (current: $(uname -s))" >&2
         return 1
       fi
       ;;
     win)
       if [[ "$host" != "win" ]]; then
-        echo "dev:win 需要在 Windows 上运行（当前: $(uname -s)）" >&2
+        echo "dev:win must run on Windows (current: $(uname -s))" >&2
         return 1
       fi
       ;;

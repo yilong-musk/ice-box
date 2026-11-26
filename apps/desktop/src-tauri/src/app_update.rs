@@ -32,12 +32,66 @@ pub const ERR_UPDATE_INSTALL_FAILED: ErrorCode = ErrorCode::UpdateInstallFailed;
 pub const ERR_UPDATE_DISABLED: ErrorCode = ErrorCode::UpdateDisabled;
 pub const UPDATE_PROGRESS_EVENT: &str = "app-update://progress";
 
+const RELEASES_BASE_URL: &str = "https://github.com/yilong-musk/ice-box/releases";
+
 static UPDATE_INSTALLING: AtomicBool = AtomicBool::new(false);
 
 /// True while an update is being applied so `ExitRequested` can let the
 /// Windows installer take over instead of `prevent_exit()`.
 pub fn update_installing() -> bool {
     UPDATE_INSTALLING.load(Ordering::SeqCst)
+}
+
+/// Whether this runtime supports in-place updater replacement.
+///
+/// Although `tauri-plugin-updater` supports `.deb` installs, our release
+/// manifest (`latest.json`) currently publishes `linux-x86_64` /
+/// `linux-aarch64` entries pointing to AppImages only. In-app installation is
+/// therefore restricted to AppImage installs; `.deb` and other system-package
+/// installs still check `latest.json` for newer versions and then open the
+/// GitHub Release download page in the browser.
+pub fn in_app_update_supported() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        let current_exe = std::env::current_exe().ok();
+        in_app_update_supported_with(
+            tauri::utils::platform::bundle_type(),
+            std::env::var_os("APPIMAGE").as_deref(),
+            std::env::var_os("APPDIR").as_deref(),
+            current_exe.as_deref(),
+        )
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        true
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn in_app_update_supported_with(
+    bundle_type: Option<tauri::utils::config::BundleType>,
+    appimage_env: Option<&std::ffi::OsStr>,
+    appdir_env: Option<&std::ffi::OsStr>,
+    current_exe: Option<&std::path::Path>,
+) -> bool {
+    match bundle_type {
+        Some(tauri::utils::config::BundleType::AppImage) => true,
+        Some(_) => false,
+        None => current_exe.is_some_and(|exe| {
+            crate::autostart::appimage_path_for_exe(appimage_env, appdir_env, exe).is_some()
+        }),
+    }
+}
+
+/// GitHub Releases URL opened when in-app installation is not supported.
+pub fn release_download_url(available_version: Option<&str>) -> String {
+    match available_version
+        .map(normalize_version)
+        .filter(|v| !v.is_empty())
+    {
+        Some(version) => format!("{RELEASES_BASE_URL}/tag/v{version}"),
+        None => format!("{RELEASES_BASE_URL}/latest"),
+    }
 }
 
 /// Persisted check / last-known-available state.
@@ -405,6 +459,12 @@ pub async fn install_app_update(app: AppHandle) -> Result<(), AppError> {
             "app updates cannot be installed from a debug / tauri dev build",
         ));
     }
+    if !in_app_update_supported() {
+        return Err(AppError::with_code(
+            ERR_UPDATE_DISABLED,
+            "in-app updates are only supported for AppImage builds on Linux; download the package from GitHub Releases",
+        ));
+    }
 
     let (settings, core_running) = {
         let state = app.state::<AppState>();
@@ -469,6 +529,25 @@ pub async fn install_app_update(app: AppHandle) -> Result<(), AppError> {
     {
         Ok(())
     }
+}
+
+/// Open the GitHub Release page for the latest (or cached available) version
+/// in the system browser. Used on Linux `.deb` and other non-AppImage installs,
+/// where `latest.json` does not publish a package artifact for in-app install.
+#[tauri::command]
+pub async fn open_app_download(app: AppHandle) -> Result<(), AppError> {
+    use tauri_plugin_opener::OpenerExt;
+
+    let paths = app.state::<AppState>().paths.clone();
+    let disk = load_update_check_state(&paths.update_check());
+    let version = disk
+        .available_version
+        .as_deref()
+        .filter(|v| is_newer_version(v, installed_app_version()));
+    let url = release_download_url(version);
+    app.opener()
+        .open_url(&url, None::<&str>)
+        .map_err(|err| AppError::with_code(ERR_UPDATE_INSTALL_FAILED, err.to_string()))
 }
 
 /// Persist-only when the user flipped the auto-check switch and nothing else.
@@ -725,6 +804,87 @@ mod tests {
         assert_eq!(
             check_error_code(&tauri_plugin_updater::Error::EmptyEndpoints),
             ERR_UPDATE_CHECK_FAILED
+        );
+    }
+
+    #[test]
+    fn linux_in_app_update_uses_bundle_type_and_rejects_inherited_appimage() {
+        use std::ffi::OsStr;
+        use std::path::Path;
+        use tauri::utils::config::BundleType;
+
+        let mount_exe = Path::new("/tmp/.mount_icebox123/usr/bin/ice-box");
+        let deb_exe = Path::new("/usr/bin/ice-box");
+
+        // Packaged bundle type is authoritative when embedded by tauri-bundler.
+        assert!(in_app_update_supported_with(
+            Some(BundleType::AppImage),
+            None,
+            None,
+            Some(mount_exe),
+        ));
+        assert!(!in_app_update_supported_with(
+            Some(BundleType::Deb),
+            Some(OsStr::new("/home/u/Cursor.AppImage")),
+            Some(OsStr::new("/tmp/.mount_Cursor123")),
+            Some(deb_exe),
+        ));
+
+        // Dev/unpatched fallback (bundle_type == None): genuine AppImage passes.
+        assert!(in_app_update_supported_with(
+            None,
+            Some(OsStr::new("/home/u/ice-box.AppImage")),
+            Some(OsStr::new("/tmp/.mount_icebox123")),
+            Some(mount_exe),
+        ));
+        assert!(in_app_update_supported_with(
+            None,
+            Some(OsStr::new("/home/u/ice-box.AppImage")),
+            None,
+            Some(mount_exe),
+        ));
+
+        // Foreign $APPIMAGE inherited from another AppImage's terminal on a
+        // `/usr/bin/ice-box` install must return false.
+        assert!(!in_app_update_supported_with(
+            None,
+            Some(OsStr::new("/home/u/Cursor.AppImage")),
+            Some(OsStr::new("/tmp/.mount_Cursor123")),
+            Some(deb_exe),
+        ));
+        assert!(!in_app_update_supported_with(
+            None,
+            Some(OsStr::new("/home/u/Cursor.AppImage")),
+            None,
+            Some(deb_exe),
+        ));
+        assert!(!in_app_update_supported_with(
+            None,
+            Some(OsStr::new("")),
+            Some(OsStr::new("/tmp/.mount_icebox123")),
+            Some(mount_exe),
+        ));
+        assert!(!in_app_update_supported_with(
+            None,
+            None,
+            None,
+            Some(deb_exe)
+        ));
+    }
+
+    #[test]
+    fn release_download_url_targets_tag_or_latest() {
+        assert_eq!(
+            release_download_url(Some("0.5.0")),
+            "https://github.com/yilong-musk/ice-box/releases/tag/v0.5.0"
+        );
+        assert_eq!(
+            release_download_url(Some("v0.5.0")),
+            "https://github.com/yilong-musk/ice-box/releases/tag/v0.5.0"
+        );
+        assert_eq!(
+            release_download_url(None),
+            "https://github.com/yilong-musk/ice-box/releases/latest"
         );
     }
 }

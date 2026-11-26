@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Download pinned sing-box into third_party/sing-box/<target>/
-# Usage: scripts/fetch-singbox.sh [host | mac-arm64 | mac-x64 | win]
+# Usage: scripts/fetch-singbox.sh [host | mac-arm64 | mac-x64 | win | linux-x64 | linux-arm64]
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -23,6 +23,12 @@ case "$ICE_PLATFORM_ALIAS" in
     ;;
   win)
     ASSET="sing-box-${VERSION}-windows-amd64.zip"
+    ;;
+  linux-x64)
+    ASSET="sing-box-${VERSION}-linux-amd64.tar.gz"
+    ;;
+  linux-arm64)
+    ASSET="sing-box-${VERSION}-linux-arm64.tar.gz"
     ;;
 esac
 
@@ -83,7 +89,14 @@ fi
 cp "$src" "$dest/$ICE_BIN"
 chmod +x "$dest/$ICE_BIN" 2>/dev/null || true
 echo "Installed $dest/$ICE_BIN"
-"$dest/$ICE_BIN" version
+HOST_PLATFORM="$(ice_host_platform)"
+if [[ "$ICE_PLATFORM_ALIAS" == "$HOST_PLATFORM" ]]; then
+  "$dest/$ICE_BIN" version
+else
+  if ! "$dest/$ICE_BIN" version 2>/dev/null; then
+    echo "note: cannot execute $dest/$ICE_BIN on this host (cross-fetched for $ICE_PLATFORM_ALIAS on ${HOST_PLATFORM:-unknown})"
+  fi
+fi
 
 # Windows archive companions: libcronet.dll (NaiveProxy outbound, shipped in
 # the same zip since 1.13) must sit next to sing-box.exe. wintun.dll is NOT

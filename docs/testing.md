@@ -62,7 +62,10 @@ iframe. The Linux CI gate installs Chromium and runs it; `GATE_SCOPE=rust` jobs
 skip it.
 
 CI runs the `.github/actions/gate-linux` action (full gate) and
-`GATE_SCOPE=rust` on macOS/Windows; packaging jobs build separately. The release
+`GATE_SCOPE=rust` on macOS/Windows; packaging jobs build separately (Linux
+packaging jobs also verify the `.deb` payload paths and the glibc 2.35 floor
+via `scripts/check-glibc-floor.sh`, covered by
+`scripts/test-check-glibc-floor.sh` in the fixture suite). The release
 workflow does not re-run the gate: its preflight requires those CI checks to
 have passed on the release commit (`scripts/verify-ci-status.sh`), runs
 `scripts/release-preflight.sh` before any build, and runs
@@ -96,18 +99,22 @@ and doc tests. Gates exclude all `#[ignore]` tests.
 Run relevant ignored tests when changing the corresponding subsystem. TUN,
 core, and system-proxy tests can modify host networking; use a disposable test
 host and stop the app first. Core/TUN tests require the bundled binary
-(`bash scripts/fetch-singbox.sh`, or add `win` for Windows).
+(`bash scripts/fetch-singbox.sh`, or pass `win`, `linux-x64`, or `linux-arm64`).
 
 | Test | Command | Prerequisite |
 |------|---------|--------------|
 | macOS host probes | `cargo test -p ice-tun-sys --test macos_backend -- --ignored` | Real Mac |
 | Windows host probes | `cargo test -p ice-tun-sys --test windows_backend -- --ignored` | Real Windows host with elevation |
+| Linux host probes | `cargo test -p ice-tun-sys --test linux_backend -- --ignored` | Real Linux host with `iproute2` |
 | macOS TUN (G9.12) | `bash scripts/run-acceptance-macos-tun.sh` | Cache sudo credentials with `sudo -v` first |
 | macOS helper (G9.13) | `bash scripts/run-acceptance-macos-tun.sh --helper` | Authorization for helper install/uninstall |
 | macOS restart recovery (G9.15) | `cargo test -p ice-box --lib g9_15 -- --ignored --nocapture` | Installed helper; unset `ICE_BOX_TUN_DEV_SUDO`; uses the installed app data directory |
 | Windows TUN (G9.14) | `bash scripts/run-acceptance-windows-tun.sh` | Elevated Bash shell and MSVC toolchain |
-| Pinned core config check | `ICE_BOX_SINGBOX_BIN=third_party/sing-box/darwin-aarch64/sing-box cargo test -p ice-config generated_configs_pass_pinned_core_check -- --ignored` | Bundled binary for the host (`bash scripts/fetch-singbox.sh`) |
-| System proxy | `cargo test -p ice-proxy-sys --lib -- --ignored --test-threads=1` | Native macOS/Windows host |
+| Linux core & system proxy | `bash scripts/run-acceptance-linux.sh` | Linux host (`gsettings` or KDE `kwriteconfig` for system proxy cases) |
+| Linux TUN (G9.12) | `bash scripts/run-acceptance-linux-tun.sh` | Cache sudo credentials with `sudo -v` first |
+| Linux helper (G9.13) | `bash scripts/run-acceptance-linux-tun.sh --helper` | systemd host and Polkit/sudo authorization for helper install/uninstall |
+| Pinned core config check | `ICE_BOX_SINGBOX_BIN=third_party/sing-box/<target>/sing-box cargo test -p ice-config generated_configs_pass_pinned_core_check -- --ignored` | Bundled binary for the host (`bash scripts/fetch-singbox.sh`; e.g., `darwin-aarch64` or `linux-x86_64`) |
+| System proxy | `cargo test -p ice-proxy-sys --lib -- --ignored --test-threads=1` | Native macOS, Windows, or Linux (GNOME/KDE) host |
 | HTTPS fetch | `cargo test -p ice-subscription --lib https_fetch_succeeds -- --ignored` | Network access |
 | HTTPS fetch through the app proxy | `ICE_BOX_TEST_PROXY=http://127.0.0.1:17890 cargo test -p ice-subscription --lib proxied_https_fetch_succeeds -- --ignored` | App running with the proxy on |
 | MCP bridge | manual: enable MCP, start the copied stdio configuration, and call `initialize`, `tools/list`, `get_status`, then `get_settings`; repeat after a service restart | Desktop app running; no proxy/TUN privilege needed |

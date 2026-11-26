@@ -136,6 +136,10 @@ def sha256_retry(url: str, expected: str) -> str:
     return digest
 
 
+# Linux desktop assets and updater entries were introduced after v0.4.0.
+core_version = tuple(int(part) for part in version.split("-", 1)[0].split("."))
+expects_linux = core_version > (0, 4, 0)
+
 expected = {
     f"ice-box_{version}_aarch64.dmg",
     "ice-box.app.tar.gz",
@@ -148,6 +152,17 @@ expected = {
     "NOTICE",
     "sing-box-LICENSE",
 }
+if expects_linux:
+    expected.update(
+        {
+            f"ice-box_{version}_amd64.deb",
+            f"ice-box_{version}_amd64.AppImage",
+            f"ice-box_{version}_amd64.AppImage.sig",
+            f"ice-box_{version}_arm64.deb",
+            f"ice-box_{version}_aarch64.AppImage",
+            f"ice-box_{version}_aarch64.AppImage.sig",
+        }
+    )
 if not prerelease:
     expected.add("latest.json")
 
@@ -240,13 +255,18 @@ else:
     if not payload or payload.get("version") != version:
         fail(f"{source} does not report version {version}")
     platforms = payload.get("platforms") or {}
-    for name in ("darwin-aarch64", "windows-x86_64"):
+    expected_platforms = (
+        ("darwin-aarch64", "windows-x86_64", "linux-x86_64", "linux-aarch64")
+        if expects_linux
+        else ("darwin-aarch64", "windows-x86_64")
+    )
+    for name in expected_platforms:
         platform = platforms.get(name) or {}
         if not (platform.get("signature") or "").strip():
             fail(f"latest.json {name} signature is empty")
         if f"/{tag}/" not in (platform.get("url") or ""):
             fail(f"latest.json {name} url does not point at {tag}")
-    print(f"latest.json reports {version} for darwin-aarch64 and windows-x86_64 ({source})")
+    print(f"latest.json reports {version} for {', '.join(expected_platforms)} ({source})")
 
 print(f"verify-release-assets: OK ({tag})")
 PY

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! System proxy backup / apply / restore (macOS & Windows).
-//! TUN is intentionally out of scope for v1.
+//! System proxy backup / apply / restore (macOS, Windows, & Linux).
 
 mod backup_file;
 mod bypass;
@@ -13,6 +12,9 @@ mod macos;
 #[cfg(target_os = "windows")]
 mod windows;
 
+#[cfg(target_os = "linux")]
+mod linux;
+
 #[cfg(target_os = "macos")]
 pub use macos::{
     parse_bypass_output, parse_proxy_get_output, MacosSystemProxy, NetworkSetupRunner,
@@ -21,6 +23,14 @@ pub use macos::{
 
 #[cfg(target_os = "windows")]
 pub use windows::WindowsSystemProxy;
+
+#[cfg(target_os = "linux")]
+pub use linux::{
+    detect_backend, format_gvariant_string, format_gvariant_string_list, parse_gvariant_string,
+    parse_gvariant_string_list, parse_kde_proxy_endpoint, sanitized_host_tool_env, CmdOutput,
+    GnomeProxyBackup, KdeProxyBackup, KdeTools, LinuxCmdRunner, LinuxProxyBackend,
+    LinuxSystemProxy, RealLinuxCmdRunner,
+};
 
 pub use backup_file::{
     disk_proxy_state, is_proxy_applied_on_disk, is_proxy_live_applied,
@@ -142,7 +152,11 @@ pub fn create_system_proxy() -> Box<dyn SystemProxy> {
     {
         Box::new(WindowsSystemProxy::new())
     }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(target_os = "linux")]
+    {
+        Box::new(LinuxSystemProxy::new())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         Box::new(NoopSystemProxy)
     }
@@ -188,7 +202,7 @@ impl From<ProxySysError> for AppError {
 mod factory_tests {
     use super::*;
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     #[test]
     fn unsupported_platform_uses_noop_that_does_not_poison_restore() {
         let proxy = create_system_proxy();
@@ -206,12 +220,89 @@ mod factory_tests {
         assert!(matches!(err, ProxySysError::NotImplemented(_)));
     }
 
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     #[test]
     fn supported_platform_backend_can_backup_without_mutating() {
         create_system_proxy()
             .backup()
             .expect("read-only backup must work without changing the OS proxy");
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod live_tests {
+    use super::*;
+    use crate::linux::LinuxSystemProxy;
+
+    /// G4.3-linux — real desktop session: backup -> apply -> read back -> restore.
+    /// Run: `cargo test -p ice-proxy-sys g4_3 -- --ignored --nocapture`
+    #[test]
+    #[ignore = "proxy_sys: mutates real Linux desktop proxy settings (GNOME/KDE)"]
+    fn g4_3_backup_apply_restore_roundtrip() {
+        let proxy = LinuxSystemProxy::new();
+        assert!(
+            proxy.is_available(),
+            "desktop proxy backend unavailable (backend={:?})",
+            proxy.backend()
+        );
+        let before = proxy.backup().expect("backup");
+
+        let endpoints = ProxyEndpoints {
+            http_host: "127.0.0.1".into(),
+            http_port: 17890,
+            socks_host: Some("127.0.0.1".into()),
+            socks_port: Some(17890),
+        };
+        proxy.apply(&endpoints).expect("apply");
+
+        let mid = proxy.backup().expect("read after apply");
+        assert!(mid.enabled);
+        assert_eq!(mid.http.as_deref(), Some("127.0.0.1:17890"));
+        assert_eq!(mid.https.as_deref(), Some("127.0.0.1:17890"));
+        assert_eq!(mid.socks.as_deref(), Some("127.0.0.1:17890"));
+
+        proxy.restore(&before).expect("restore");
+        let after = proxy.backup().expect("read after restore");
+        assert_eq!(after.enabled, before.enabled);
+        assert_eq!(after.http, before.http);
+        assert_eq!(after.https, before.https);
+        assert_eq!(after.socks, before.socks);
+        assert_eq!(after.extra, before.extra);
+        println!("G4.3-linux ok: backend={:?}", proxy.backend());
+    }
+
+    /// G4.4-linux — prior user proxy is restored rather than merely disabled.
+    #[test]
+    #[ignore = "proxy_sys: mutates real Linux desktop proxy settings (GNOME/KDE)"]
+    fn g4_4_restore_preserves_prior_user_proxy() {
+        let proxy = LinuxSystemProxy::new();
+        assert!(proxy.is_available(), "desktop proxy backend unavailable");
+        let original = proxy.backup().expect("original");
+
+        let user_ep = ProxyEndpoints {
+            http_host: "10.0.0.99".into(),
+            http_port: 3128,
+            socks_host: None,
+            socks_port: None,
+        };
+        proxy.apply(&user_ep).expect("set user proxy");
+        let user_backup = proxy.backup().expect("user backup");
+        assert_eq!(user_backup.http.as_deref(), Some("10.0.0.99:3128"));
+
+        let ice_ep = ProxyEndpoints {
+            http_host: "127.0.0.1".into(),
+            http_port: 17890,
+            socks_host: Some("127.0.0.1".into()),
+            socks_port: Some(17890),
+        };
+        proxy.apply(&ice_ep).expect("ice apply");
+
+        proxy.restore(&user_backup).expect("restore user");
+        let after = proxy.backup().expect("after");
+        assert_eq!(after.http.as_deref(), Some("10.0.0.99:3128"));
+
+        proxy.restore(&original).expect("restore original");
+        println!("G4.4-linux ok: user proxy restored then original restored");
     }
 }
 

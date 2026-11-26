@@ -649,6 +649,35 @@ describe("Settings", () => {
     expect(openAppDownload).not.toHaveBeenCalled();
   });
 
+  it("opens the browser download page when in-app updates are unsupported (Linux .deb)", async () => {
+    getStatus.mockResolvedValue({
+      ...defaultStatus,
+      in_app_update_supported: false,
+    });
+    openAppDownload.mockResolvedValue(undefined);
+    const { container } = render(
+      <Settings
+        availableUpdate={{
+          available: true,
+          version: "0.5.0",
+          notes: null,
+          skipped: false,
+          should_prompt: false,
+        }}
+      />,
+    );
+    const view = within(container);
+    const downloadBtn = await view.findByRole("button", {
+      name: t("settings.updateDownload"),
+    });
+    expect(
+      view.queryByRole("button", { name: t("settings.updateInstall") }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(downloadBtn);
+    await waitFor(() => expect(openAppDownload).toHaveBeenCalled());
+    expect(installAppUpdate).not.toHaveBeenCalled();
+  });
+
   it("re-enables update controls after the phone installer accepts the APK", async () => {
     phoneShell.value = true;
     let resolveInstall: () => void = () => {};

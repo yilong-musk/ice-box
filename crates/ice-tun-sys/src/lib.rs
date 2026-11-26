@@ -25,6 +25,7 @@ pub mod helper;
 pub use ice_tun_helper_proto as helper_protocol;
 pub use ice_tun_helper_proto::install_paths;
 pub use ice_tun_journal as journal;
+pub mod linux;
 pub mod macos;
 pub mod recovery;
 pub mod routes;
@@ -52,6 +53,11 @@ pub use ice_tun_pin::{
     read_last_tun_install_error, sha256_of_file, TUN_STOP_EVENT_NAME,
 };
 pub use journal::{steps, CidrRecord, DnsSnapshot, JournalState, RouteRecord, TunJournal};
+pub use linux::{
+    classify_dns_mode, is_linux_virtual_interface, linux_outbound_interface_is_safe,
+    linux_tun_interface_name_valid, LinuxDnsMode, LinuxHost, LinuxInterfaceState, LinuxTunBackend,
+    ProcessLinuxHost, LINUX_RESOLV_CONF_SERVICE, LINUX_TUN_PREFIX,
+};
 pub use macos::{
     is_tunnel_interface, outbound_interface_is_safe, pin_outbound_interface,
     plausible_pin_interface_name, utun_index, MacInterfaceState, MacOsHost, MacosTunBackend,
@@ -159,7 +165,31 @@ pub fn create_backend(
             config_path,
         ))
     }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(target_os = "linux")]
+    {
+        let coordinator: Box<dyn CoreCoordinator + Send> = if dev_sudo_runner_enabled() {
+            match binary {
+                Some(binary) => Box::new(SudoCoreCoordinator::new(binary, log_path)),
+                None => {
+                    tracing::warn!(
+                        "ICE_BOX_TUN_DEV_SUDO is set but no sing-box binary was resolved; TUN transitions stay fail-closed"
+                    );
+                    Box::new(DeferredCoreCoordinator)
+                }
+            }
+        } else if let Some(helper) = helper_coordinator(&config_path) {
+            helper
+        } else {
+            Box::new(DeferredCoreCoordinator)
+        };
+        Box::new(LinuxTunBackend::new(
+            owner_token,
+            Box::new(ProcessLinuxHost),
+            coordinator,
+            config_path,
+        ))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         // The parameters feed only the platform backends; drop them here so
         // the platform gate branch stays warn-free on every other host.
@@ -169,7 +199,7 @@ pub fn create_backend(
     }
 }
 
-/// Elevated core stdout/stderr: macOS helper log, or the Windows
+/// Elevated core stdout/stderr: macOS/Linux helper log, or the Windows
 /// ProgramData run-dir log. `None` on platforms with no privileged core log.
 pub fn elevated_core_log_path() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
@@ -178,11 +208,11 @@ pub fn elevated_core_log_path() -> Option<PathBuf> {
             &ice_tun_pin::program_data_dir(),
         ))
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
         Some(PathBuf::from(install_paths::CORE_LOG_DEST))
     }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         None
     }
@@ -192,7 +222,7 @@ pub fn elevated_core_log_path() -> Option<PathBuf> {
 /// dir. Returns `None` (fail-closed, no OS mutation) when the helper is not
 /// installed, not authorized, or unreachable. The probe is read-only: one
 /// `Status` frame over a bounded-timeout connection.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn helper_coordinator(config_path: &std::path::Path) -> Option<Box<dyn CoreCoordinator + Send>> {
     let data_dir = config_path.parent()?;
     let socket = crate::helper::helper_socket_path();

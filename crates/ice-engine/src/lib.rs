@@ -442,13 +442,13 @@ proxies:
     }
 
     #[test]
-    fn subscription_to_config_rejects_tun_intent_off_green_platforms() {
-        let err = subscription_to_config(
+    fn subscription_to_config_accepts_linux_tun_intent() {
+        let built = subscription_to_config(
             CLASH_FIXTURE,
             LocalTemplate {
                 tun: TunSettings {
                     enabled: true,
-                    interface_name: Some("utun420".into()),
+                    interface_name: Some("icebox0".into()),
                     ..TunSettings::default()
                 },
                 ..LocalTemplate::default()
@@ -457,20 +457,24 @@ proxies:
             CaptureIntent::Tun,
             HostPlatform::Linux,
         )
-        .expect_err("tun gate not green");
-        assert!(matches!(
-            err,
-            EngineError::Config(ConfigError::TunUnavailable(_))
-        ));
+        .expect("linux tun gate is green");
+        let parsed: serde_json::Value = serde_json::from_str(&built).expect("valid config json");
+        let tun = parsed["inbounds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["type"] == "tun")
+            .expect("tun inbound");
+        assert_eq!(tun["interface_name"], "icebox0");
     }
 
     #[test]
     fn engine_exposes_tun_gate_for_preflight() {
         assert!(tun_gate_for(HostPlatform::MacOs).ready);
         assert!(tun_gate_for(HostPlatform::Windows).ready);
+        assert!(tun_gate_for(HostPlatform::Linux).ready);
         assert!(tun_gate_for(HostPlatform::Android).ready);
         assert!(tun_gate_for(HostPlatform::Ios).ready);
-        assert!(!tun_gate_for(HostPlatform::Linux).ready);
         let gate: TunGate = tun_gate();
         assert_eq!(gate.ready, host_platform().tun_ready());
     }

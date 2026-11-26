@@ -3,7 +3,7 @@ name = "ice-helper"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Privileged helper daemon for ice-box TUN capture (macOS launchd)"
+description = "Privileged helper daemon for ice-box TUN capture (macOS launchd & Linux systemd)"
 
 [dependencies]
 serde = { workspace = true }

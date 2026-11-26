@@ -305,6 +305,18 @@ export function Settings({
     }
   }
 
+  async function runUpdateDownload() {
+    setUpdateError(null);
+    setUpdateBusy(true);
+    try {
+      await api.openAppDownload();
+    } catch (e) {
+      setUpdateError(formatUpdateError(e));
+    } finally {
+      setUpdateBusy(false);
+    }
+  }
+
   /// Briefly show the "saved" confirmation; re-armed on each save.
   function flashSaved() {
     showSaved(true, 2000);
@@ -694,8 +706,8 @@ export function Settings({
         />
       )}
 
-      {/* Hidden where the OS has no login item to write (Linux): the
-          switch there can only ever fail. */}
+      {/* Hidden where the OS has no login item to write: the switch there
+          can only ever fail. */}
       {status?.launch_at_login_supported === true && (
         <StartupCard
           enabled={launchAtLogin}
@@ -727,6 +739,11 @@ export function Settings({
           }}
           onCheck={() => void runUpdateCheck()}
           onInstall={() => void runUpdateInstall()}
+          onDownload={
+            status?.in_app_update_supported === false
+              ? () => void runUpdateDownload()
+              : undefined
+          }
         />
       </div>
 

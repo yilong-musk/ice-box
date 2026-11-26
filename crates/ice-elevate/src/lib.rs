@@ -68,23 +68,32 @@ impl std::error::Error for ElevateError {}
 
 /// Prompt for root authorization (system password dialog) and run `tool` with
 /// `args` as root. Blocks until the tool exits. The caller parses `output`
-/// for the tool's printed result; the exit code is not available through the
-/// AuthorizationServices pipe (see module docs).
+/// for the tool's printed result.
 #[cfg(target_os = "macos")]
 pub fn run_as_admin(tool: &Path, args: &[&str]) -> Result<ElevateOutcome, ElevateError> {
     crate::macos::run_as_admin(tool, args)
 }
 
-/// Non-macOS stub: fail closed, nothing is ever executed elevated.
-#[cfg(not(target_os = "macos"))]
+/// Prompt for root authorization via Polkit (`pkexec`) and run `tool` with
+/// `args` as root. Blocks until the tool exits.
+#[cfg(target_os = "linux")]
+pub fn run_as_admin(tool: &Path, args: &[&str]) -> Result<ElevateOutcome, ElevateError> {
+    crate::linux::run_as_admin(tool, args)
+}
+
+/// Other platforms: fail closed, nothing is ever executed elevated.
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn run_as_admin(_tool: &Path, _args: &[&str]) -> Result<ElevateOutcome, ElevateError> {
     Err(ElevateError::Unsupported(
-        "privileged helper installation is macOS-only".to_string(),
+        "privileged helper installation is only supported on macOS and Linux".to_string(),
     ))
 }
 
 #[cfg(target_os = "macos")]
 pub mod macos;
+
+#[cfg(target_os = "linux")]
+pub mod linux;
 
 #[cfg(test)]
 mod tests {
@@ -92,7 +101,7 @@ mod tests {
 
     #[test]
     fn unsupported_is_fail_closed_on_other_platforms() {
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
             let err = run_as_admin(Path::new("/bin/true"), &[]).unwrap_err();
             assert!(matches!(err, ElevateError::Unsupported(_)));

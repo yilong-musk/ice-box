@@ -583,10 +583,15 @@ mod imp {
         })
     }
 
-    /// Run `networksetup -setdnsservers <service> <servers...>` as root. An
-    /// empty `servers` list clears the override ("Empty" = DHCP fallback).
-    /// Callers must run [`validate_set_dns`] first; the command uses an argv
-    /// list, never a shell.
+    /// Apply validated DNS configuration as root.
+    ///
+    /// - macOS: `networksetup -setdnsservers <service> <servers...>` (empty
+    ///   list sends `"Empty"` to restore DHCP resolvers).
+    /// - Linux: when `service == "resolv.conf"`, atomically updates a regular
+    ///   (non-symlink) `/etc/resolv.conf`; otherwise targets the named network
+    ///   interface via `resolvectl` (`dns` + `domain ~.` + `default-route true`
+    ///   when non-empty, or `revert` when empty).
+    #[cfg(target_os = "macos")]
     fn set_system_dns(service: &str, servers: &[String]) -> Result<(), TunError> {
         let mut args = vec!["-setdnsservers", service];
         if servers.is_empty() {
@@ -614,6 +619,315 @@ mod imp {
                 format!("networksetup -setdnsservers {service} failed (exit {status:?})"),
             ))
         }
+    }
+
+    /// Header written at the top of a managed static `/etc/resolv.conf`.
+    pub const MANAGED_RESOLV_CONF_MARKER: &str = "# Managed by ice-box TUN";
+
+    #[cfg(target_os = "linux")]
+    const LINUX_RESOLV_CONF_SERVICE: &str = "resolv.conf";
+
+    fn is_managed_resolv_conf(bytes: &[u8]) -> bool {
+        bytes.starts_with(MANAGED_RESOLV_CONF_MARKER.as_bytes())
+    }
+
+    fn ensure_not_symlink(path: &Path) -> Result<(), TunError> {
+        match std::fs::symlink_metadata(path) {
+            Ok(meta) if meta.file_type().is_symlink() => Err(TunError::new(
+                ErrorCode::TunApplyFailed,
+                format!(
+                    "refusing to overwrite symlink {}; manage DNS via systemd-resolved instead",
+                    path.display()
+                ),
+            )),
+            Ok(_) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(TunError::new(
+                ErrorCode::TunApplyFailed,
+                format!("stat {}: {err}", path.display()),
+            )),
+        }
+    }
+
+    fn read_regular_file_nofollow(path: &Path) -> Result<Option<Vec<u8>>, TunError> {
+        let mut file = match OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(path)
+        {
+            Ok(file) => file,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(err) if err.raw_os_error() == Some(libc::ELOOP) => {
+                return Err(TunError::new(
+                    ErrorCode::TunApplyFailed,
+                    format!("refusing to follow symlink {}", path.display()),
+                ));
+            }
+            Err(err) => {
+                return Err(TunError::new(
+                    ErrorCode::TunApplyFailed,
+                    format!("open {}: {err}", path.display()),
+                ));
+            }
+        };
+        let meta = file.metadata().map_err(|err| {
+            TunError::new(
+                ErrorCode::TunApplyFailed,
+                format!("stat {}: {err}", path.display()),
+            )
+        })?;
+        if !meta.file_type().is_file() {
+            return Err(TunError::new(
+                ErrorCode::TunApplyFailed,
+                format!("{} is not a regular file", path.display()),
+            ));
+        }
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).map_err(|err| {
+            TunError::new(
+                ErrorCode::TunApplyFailed,
+                format!("read {}: {err}", path.display()),
+            )
+        })?;
+        Ok(Some(bytes))
+    }
+
+    fn write_file_atomic(path: &Path, bytes: &[u8], mode: u32) -> Result<(), TunError> {
+        static TMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let parent = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("/"));
+        std::fs::create_dir_all(parent).map_err(|err| {
+            TunError::new(
+                ErrorCode::TunApplyFailed,
+                format!("create dir {}: {err}", parent.display()),
+            )
+        })?;
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("resolv.conf");
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let seq = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let tmp = parent.join(format!(
+            ".ice-box-{name}.{}.{nanos}.{seq}.tmp",
+            std::process::id()
+        ));
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(mode)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&tmp)
+            .map_err(|err| {
+                TunError::new(
+                    ErrorCode::TunApplyFailed,
+                    format!("create {}: {err}", tmp.display()),
+                )
+            })?;
+        // Explicitly fchmod on the open fd so a restrictive process umask
+        // (e.g. hardened systemd UMask) cannot make /etc/resolv.conf unreadable.
+        if let Err(err) = file.set_permissions(std::fs::Permissions::from_mode(mode)) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(TunError::new(
+                ErrorCode::TunApplyFailed,
+                format!("chmod {}: {err}", tmp.display()),
+            ));
+        }
+        if let Err(err) = file.write_all(bytes) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(TunError::new(
+                ErrorCode::TunApplyFailed,
+                format!("write {}: {err}", tmp.display()),
+            ));
+        }
+        if let Err(err) = file.sync_all() {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(TunError::new(
+                ErrorCode::TunApplyFailed,
+                format!("sync {}: {err}", tmp.display()),
+            ));
+        }
+        drop(file);
+        std::fs::rename(&tmp, path).map_err(|err| {
+            let _ = std::fs::remove_file(&tmp);
+            TunError::new(
+                ErrorCode::TunApplyFailed,
+                format!("replace {}: {err}", path.display()),
+            )
+        })
+    }
+
+    #[cfg(any(target_os = "linux", test))]
+    fn set_static_resolv_conf_at(
+        resolv_path: &Path,
+        backup_path: &Path,
+        servers: &[String],
+    ) -> Result<(), TunError> {
+        ensure_not_symlink(resolv_path)?;
+        if servers.is_empty() {
+            let Some(backup_bytes) = read_regular_file_nofollow(backup_path)? else {
+                tracing::warn!(
+                    backup = %backup_path.display(),
+                    "static resolv.conf backup not found; leaving resolv.conf untouched"
+                );
+                return Ok(());
+            };
+            ensure_not_symlink(resolv_path)?;
+            write_file_atomic(resolv_path, &backup_bytes, 0o644)?;
+            if let Err(err) = std::fs::remove_file(backup_path) {
+                if err.kind() != std::io::ErrorKind::NotFound {
+                    return Err(TunError::new(
+                        ErrorCode::TunApplyFailed,
+                        format!("remove {}: {err}", backup_path.display()),
+                    ));
+                }
+            }
+            return Ok(());
+        }
+
+        // Preserve exact raw bytes (search, domain, options, link-local %scope,
+        // >4 nameservers) before overwriting with the managed header. When
+        // NetworkManager/dhclient rewrites resolv.conf mid-session, the marker
+        // is absent so the next apply refreshes the backup to the new network.
+        if let Some(existing) = read_regular_file_nofollow(resolv_path)? {
+            if !is_managed_resolv_conf(&existing) {
+                ensure_not_symlink(backup_path)?;
+                write_file_atomic(backup_path, &existing, 0o600)?;
+            }
+        }
+
+        let mut content = String::from(MANAGED_RESOLV_CONF_MARKER);
+        content.push('\n');
+        for server in servers {
+            content.push_str("nameserver ");
+            content.push_str(server);
+            content.push('\n');
+        }
+        ensure_not_symlink(resolv_path)?;
+        write_file_atomic(resolv_path, content.as_bytes(), 0o644)
+    }
+
+    fn restore_static_resolv_conf_backup_at(
+        resolv_path: &Path,
+        backup_path: &Path,
+    ) -> Result<bool, String> {
+        let meta = match std::fs::symlink_metadata(resolv_path) {
+            Ok(meta) => meta,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(err) => return Err(format!("stat {}: {err}", resolv_path.display())),
+        };
+        if !meta.file_type().is_file() {
+            return Ok(false);
+        }
+        let current = match read_regular_file_nofollow(resolv_path) {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) => return Ok(false),
+            Err(err) => {
+                if err.message.contains("symlink") {
+                    return Ok(false);
+                }
+                return Err(err.message);
+            }
+        };
+        if !is_managed_resolv_conf(&current) {
+            return Ok(false);
+        }
+        let Some(backup_bytes) =
+            read_regular_file_nofollow(backup_path).map_err(|err| err.message)?
+        else {
+            return Ok(false);
+        };
+        ensure_not_symlink(resolv_path).map_err(|err| err.message)?;
+        write_file_atomic(resolv_path, &backup_bytes, 0o644).map_err(|err| err.message)?;
+        if let Err(err) = std::fs::remove_file(backup_path) {
+            if err.kind() != std::io::ErrorKind::NotFound {
+                return Err(format!("remove {}: {err}", backup_path.display()));
+            }
+        }
+        Ok(true)
+    }
+
+    /// Restore the pre-TUN static `/etc/resolv.conf` raw-byte backup if and
+    /// only if `/etc/resolv.conf` is a regular file starting with
+    /// [`MANAGED_RESOLV_CONF_MARKER`] and the backup exists.
+    ///
+    /// Returns `Ok(true)` if restored, `Ok(false)` if there was nothing to
+    /// restore (e.g. symlinked `systemd-resolved`, externally modified file,
+    /// or missing backup).
+    pub fn restore_static_resolv_conf_backup() -> Result<bool, String> {
+        restore_static_resolv_conf_backup_at(
+            Path::new("/etc/resolv.conf"),
+            Path::new(ice_tun_helper_proto::install_paths::RESOLV_CONF_BACKUP_DEST),
+        )
+    }
+
+    #[cfg(target_os = "linux")]
+    fn run_resolvectl(args: &[&str]) -> Result<(), TunError> {
+        let output = Command::new("resolvectl")
+            .args(args)
+            .stdin(Stdio::null())
+            .output()
+            .map_err(|err| {
+                TunError::new(
+                    ErrorCode::TunApplyFailed,
+                    format!("run resolvectl {args:?}: {err}"),
+                )
+            })?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(TunError::new(
+                ErrorCode::TunApplyFailed,
+                format!(
+                    "resolvectl {args:?} failed (exit {:?}): {}",
+                    output.status.code(),
+                    String::from_utf8_lossy(&output.stderr).trim()
+                ),
+            ))
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn set_system_dns(service: &str, servers: &[String]) -> Result<(), TunError> {
+        if service == LINUX_RESOLV_CONF_SERVICE {
+            return set_static_resolv_conf_at(
+                Path::new("/etc/resolv.conf"),
+                Path::new(ice_tun_helper_proto::install_paths::RESOLV_CONF_BACKUP_DEST),
+                servers,
+            );
+        }
+        if servers.is_empty() {
+            // Once the kernel destroys the TUN interface, systemd-resolved
+            // drops its per-link DNS automatically; treat a gone link as clean.
+            if !Path::new(&format!("/sys/class/net/{service}")).exists() {
+                let _ = run_resolvectl(&["flush-caches"]);
+                return Ok(());
+            }
+            run_resolvectl(&["revert", service])?;
+            let _ = run_resolvectl(&["flush-caches"]);
+            return Ok(());
+        }
+        let mut dns_args = vec!["dns", service];
+        dns_args.extend(servers.iter().map(String::as_str));
+        run_resolvectl(&dns_args)?;
+        run_resolvectl(&["domain", service, "~."])?;
+        // Best-effort: newer systemd-resolved versions support explicit default-route.
+        let _ = run_resolvectl(&["default-route", service, "true"]);
+        let _ = run_resolvectl(&["flush-caches"]);
+        Ok(())
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    fn set_system_dns(_service: &str, _servers: &[String]) -> Result<(), TunError> {
+        Err(TunError::new(
+            ErrorCode::TunNotSupported,
+            "system DNS updates are only supported on macOS and Linux",
+        ))
     }
 
     /// The core lifecycle the daemon controls. Abstracted so tests inject a
@@ -1881,6 +2195,219 @@ mod imp {
             drop(listener);
             let _ = std::fs::remove_dir_all(&dir);
         }
+
+        #[test]
+        fn static_resolv_conf_backup_preserves_directives_and_restores_verbatim() {
+            let dir = std::env::temp_dir().join(format!(
+                "ice-helper-resolv-verbatim-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            let conf = dir.join("resolv.conf");
+            let backup = dir.join("run").join("resolv.conf.ice-box-backup");
+            let original = "# Generated by dhclient\n\
+                domain corp.internal\n\
+                search corp.internal example.org\n\
+                options edns0 trust-ad rotate ndots:2\n\
+                nameserver 192.168.1.1\n\
+                nameserver fe80::1%eth0\n\
+                nameserver 10.0.0.53\n\
+                nameserver 10.0.0.54\n\
+                nameserver 10.0.0.55\n";
+            std::fs::write(&conf, original).unwrap();
+
+            set_static_resolv_conf_at(&conf, &backup, &["223.5.5.5".into(), "119.29.29.29".into()])
+                .expect("apply managed resolv.conf");
+            let managed = std::fs::read_to_string(&conf).unwrap();
+            assert!(managed.starts_with(MANAGED_RESOLV_CONF_MARKER));
+            assert!(managed.contains("nameserver 223.5.5.5\n"));
+            assert!(managed.contains("nameserver 119.29.29.29\n"));
+            assert_eq!(std::fs::read_to_string(&backup).unwrap(), original);
+            assert_eq!(
+                std::fs::metadata(&backup).unwrap().permissions().mode() & 0o777,
+                0o600,
+                "backup must be root-only 0600"
+            );
+            assert_eq!(
+                std::fs::metadata(&conf).unwrap().permissions().mode() & 0o777,
+                0o644,
+                "managed resolv.conf must be world-readable 0644"
+            );
+
+            // Re-applying while the managed header is already present must NOT
+            // clobber the original backup with managed contents.
+            set_static_resolv_conf_at(&conf, &backup, &["223.5.5.5".into()])
+                .expect("re-apply managed resolv.conf");
+            assert_eq!(std::fs::read_to_string(&backup).unwrap(), original);
+
+            // Empty servers restores the exact original bytes (including >4
+            // nameservers, search/domain/options, and link-local %scope) and
+            // deletes the backup.
+            set_static_resolv_conf_at(&conf, &backup, &[]).expect("restore backup");
+            assert_eq!(std::fs::read_to_string(&conf).unwrap(), original);
+            assert_eq!(
+                std::fs::metadata(&conf).unwrap().permissions().mode() & 0o777,
+                0o644,
+                "restored resolv.conf must be world-readable 0644"
+            );
+            assert!(!backup.exists(), "backup must be removed after restore");
+
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn static_resolv_conf_mid_session_rewrite_updates_backup_on_reapply() {
+            let dir = std::env::temp_dir().join(format!(
+                "ice-helper-resolv-rewrite-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            let conf = dir.join("resolv.conf");
+            let backup = dir.join("resolv.conf.ice-box-backup");
+            let net_a = "search home.lan\nnameserver 192.168.1.1\n";
+            let net_b = "search office.corp\noptions edns0\nnameserver 10.20.0.1\n";
+            std::fs::write(&conf, net_a).unwrap();
+
+            set_static_resolv_conf_at(&conf, &backup, &["223.5.5.5".into(), "119.29.29.29".into()])
+                .expect("initial apply");
+            assert_eq!(std::fs::read_to_string(&backup).unwrap(), net_a);
+
+            // NetworkManager / dhclient rewrites resolv.conf mid-session without
+            // our managed marker.
+            std::fs::write(&conf, net_b).unwrap();
+
+            // Self-heal re-applies; backup must refresh to the new network's bytes.
+            set_static_resolv_conf_at(&conf, &backup, &["223.5.5.5".into(), "119.29.29.29".into()])
+                .expect("self-heal re-apply");
+            assert_eq!(std::fs::read_to_string(&backup).unwrap(), net_b);
+
+            set_static_resolv_conf_at(&conf, &backup, &[]).expect("restore new network");
+            assert_eq!(std::fs::read_to_string(&conf).unwrap(), net_b);
+            assert!(!backup.exists());
+
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn static_resolv_conf_restore_without_backup_is_noop() {
+            let dir = std::env::temp_dir().join(format!(
+                "ice-helper-resolv-nobackup-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            let conf = dir.join("resolv.conf");
+            let backup = dir.join("missing.backup");
+            let original = "nameserver 192.168.1.1\n";
+            std::fs::write(&conf, original).unwrap();
+
+            set_static_resolv_conf_at(&conf, &backup, &[]).expect("missing backup is a no-op");
+            assert_eq!(std::fs::read_to_string(&conf).unwrap(), original);
+
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn restore_static_resolv_conf_backup_at_checks_marker_and_type() {
+            let dir = std::env::temp_dir().join(format!(
+                "ice-helper-resolv-uninstall-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            let conf = dir.join("resolv.conf");
+            let backup = dir.join("resolv.conf.ice-box-backup");
+            let original = "search lan\noptions edns0\nnameserver 192.168.1.1\n";
+            std::fs::write(&conf, original).unwrap();
+
+            set_static_resolv_conf_at(&conf, &backup, &["223.5.5.5".into()]).unwrap();
+
+            // External modification (no marker): must skip restore.
+            let external = "nameserver 1.1.1.1\n";
+            std::fs::write(&conf, external).unwrap();
+            assert!(!restore_static_resolv_conf_backup_at(&conf, &backup).unwrap());
+            assert_eq!(std::fs::read_to_string(&conf).unwrap(), external);
+            assert!(backup.exists());
+
+            // Managed marker present + backup present: restores and removes backup.
+            std::fs::write(
+                &conf,
+                format!("{MANAGED_RESOLV_CONF_MARKER}\nnameserver 223.5.5.5\n"),
+            )
+            .unwrap();
+            assert!(restore_static_resolv_conf_backup_at(&conf, &backup).unwrap());
+            assert_eq!(std::fs::read_to_string(&conf).unwrap(), original);
+            assert!(!backup.exists());
+
+            // Calling again with no backup: returns Ok(false).
+            std::fs::write(
+                &conf,
+                format!("{MANAGED_RESOLV_CONF_MARKER}\nnameserver 223.5.5.5\n"),
+            )
+            .unwrap();
+            assert!(!restore_static_resolv_conf_backup_at(&conf, &backup).unwrap());
+
+            // Symlinked resolv.conf (e.g. systemd-resolved): returns Ok(false).
+            let target = dir.join("stub-resolv.conf");
+            std::fs::write(&target, "nameserver 127.0.0.53\n").unwrap();
+            let link = dir.join("link-resolv.conf");
+            std::os::unix::fs::symlink(&target, &link).unwrap();
+            std::fs::write(&backup, original).unwrap();
+            assert!(!restore_static_resolv_conf_backup_at(&link, &backup).unwrap());
+            assert_eq!(
+                std::fs::read_to_string(&target).unwrap(),
+                "nameserver 127.0.0.53\n"
+            );
+
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn static_resolv_conf_refuses_symlinks_for_apply_and_restore() {
+            let dir = std::env::temp_dir().join(format!(
+                "ice-helper-resolv-symlink-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            let target = dir.join("real-resolv");
+            std::fs::write(&target, "nameserver 1.1.1.1\n").unwrap();
+            let link = dir.join("symlink-resolv.conf");
+            std::os::unix::fs::symlink(&target, &link).unwrap();
+            let backup = dir.join("backup");
+
+            let err = set_static_resolv_conf_at(&link, &backup, &["223.5.5.5".into()])
+                .expect_err("symlink apply must be refused");
+            assert!(err.message.contains("symlink"));
+            assert!(!backup.exists());
+            assert_eq!(
+                std::fs::read_to_string(&target).unwrap(),
+                "nameserver 1.1.1.1\n"
+            );
+
+            std::fs::write(&backup, "nameserver 9.9.9.9\n").unwrap();
+            let err = set_static_resolv_conf_at(&link, &backup, &[])
+                .expect_err("symlink restore must be refused");
+            assert!(err.message.contains("symlink"));
+            assert_eq!(
+                std::fs::read_to_string(&target).unwrap(),
+                "nameserver 1.1.1.1\n"
+            );
+
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 } // mod imp
 
@@ -1888,6 +2415,7 @@ mod imp {
 pub use imp::FixedPeerAuth;
 #[cfg(unix)]
 pub use imp::{
-    restrict_helper_socket, serve_connection, serve_peer, try_acquire_connection_slot, PeerAuth,
-    ProcessCoreRunner, ServerConfig, SocketPeerAuth,
+    restore_static_resolv_conf_backup, restrict_helper_socket, serve_connection, serve_peer,
+    try_acquire_connection_slot, PeerAuth, ProcessCoreRunner, ServerConfig, SocketPeerAuth,
+    MANAGED_RESOLV_CONF_MARKER,
 };

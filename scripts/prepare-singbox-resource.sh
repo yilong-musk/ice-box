@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Ensure src-tauri/resources has the sing-box binary for the given platform.
-# Usage: scripts/prepare-singbox-resource.sh [host | mac-arm64 | mac-x64 | win]
+# Usage: scripts/prepare-singbox-resource.sh [host | mac-arm64 | mac-x64 | win | linux-x64 | linux-arm64]
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -71,15 +71,15 @@ else
   exit 1
 fi
 
-# Privileged helper daemon (macOS): embedded into the bundle so
-# the installer/release pipeline can install it into /Library/PrivilegedHelperTools.
+# Privileged helper daemon (macOS & Linux): embedded into the bundle so
+# the installer/release pipeline can install it into the system helper directory.
 case "$ICE_PLATFORM_ALIAS" in
-  mac-arm64 | mac-x64)
+  mac-arm64 | mac-x64 | linux-x64 | linux-arm64)
     HELPER_DEST="$DEST_DIR/ice-helper"
     if cargo build --release -p ice-helper --manifest-path "$ROOT/Cargo.toml" >/dev/null 2>&1; then
       cp "$ROOT/target/release/ice-helper" "$HELPER_DEST"
       chmod +x "$HELPER_DEST"
-      echo "Prepared helper resource $HELPER_DEST (macOS privileged helper daemon)"
+      echo "Prepared helper resource $HELPER_DEST (privileged helper daemon)"
     else
       echo "error: cargo build -p ice-helper failed; run it manually before the release build" >&2
       exit 1

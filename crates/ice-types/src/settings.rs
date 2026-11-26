@@ -280,7 +280,12 @@ impl TunSettings {
             ));
         }
         if let Some(name) = &self.interface_name {
-            if !tun_interface_name_valid(name, platform.is_macos()) {
+            let valid = if platform.is_linux() {
+                tun_interface_name_valid(name, false) && name.len() <= 15 && name.is_ascii()
+            } else {
+                tun_interface_name_valid(name, platform.is_macos())
+            };
+            if !valid {
                 return Err(AppError::new(
                     ErrorCode::ConfigInvalid,
                     format!("tun.interface_name is invalid: {name}"),

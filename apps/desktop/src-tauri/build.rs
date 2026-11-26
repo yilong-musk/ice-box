@@ -14,6 +14,8 @@ fn target_dir_name() -> &'static str {
         (Ok("macos"), Ok("aarch64")) => "darwin-aarch64",
         (Ok("macos"), Ok("x86_64")) => "darwin-x86_64",
         (Ok("windows"), Ok("x86_64")) => "windows-x86_64",
+        (Ok("linux"), Ok("x86_64")) => "linux-x86_64",
+        (Ok("linux"), Ok("aarch64")) => "linux-aarch64",
         _ => "unknown-target",
     }
 }

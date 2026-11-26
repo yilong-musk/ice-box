@@ -26,10 +26,20 @@ pub fn current_target_dir() -> &'static str {
     {
         "windows-x86_64"
     }
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    {
+        "linux-x86_64"
+    }
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    {
+        "linux-aarch64"
+    }
     #[cfg(not(any(
         all(target_os = "macos", target_arch = "aarch64"),
         all(target_os = "macos", target_arch = "x86_64"),
         all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "aarch64"),
     )))]
     {
         "unknown-target"
@@ -160,5 +170,15 @@ mod tests {
     fn bundled_version_pin_matches_vendor_file() {
         let pinned = include_str!("../../../third_party/sing-box/VERSION").trim();
         assert_eq!(BUNDLED_SINGBOX_VERSION, pinned);
+    }
+
+    #[test]
+    fn current_target_dir_is_known_on_desktop_targets() {
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        assert_eq!(current_target_dir(), "linux-x86_64");
+        #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+        assert_eq!(current_target_dir(), "linux-aarch64");
+        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+        assert_ne!(current_target_dir(), "unknown-target");
     }
 }

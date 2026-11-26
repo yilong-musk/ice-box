@@ -31,12 +31,15 @@ impl HostPlatform {
         matches!(self, Self::MacOs)
     }
 
-    /// Desktop TUN (macOS and Windows) and the mobile VPN (Android and iOS).
-    /// Linux has no TUN backend.
+    pub fn is_linux(self) -> bool {
+        matches!(self, Self::Linux)
+    }
+
+    /// Desktop TUN (macOS, Windows, and Linux) and the mobile VPN (Android and iOS).
     pub fn tun_ready(self) -> bool {
         matches!(
             self,
-            Self::MacOs | Self::Windows | Self::Android | Self::Ios
+            Self::MacOs | Self::Windows | Self::Linux | Self::Android | Self::Ios
         )
     }
 
@@ -68,9 +71,9 @@ mod tests {
     fn tun_ready_covers_desktop_tun_and_mobile() {
         assert!(HostPlatform::MacOs.tun_ready());
         assert!(HostPlatform::Windows.tun_ready());
+        assert!(HostPlatform::Linux.tun_ready());
         assert!(HostPlatform::Android.tun_ready());
         assert!(HostPlatform::Ios.tun_ready());
-        assert!(!HostPlatform::Linux.tun_ready());
         assert!(HostPlatform::Android.is_mobile());
         assert!(HostPlatform::Ios.is_mobile());
         assert!(!HostPlatform::MacOs.is_mobile());

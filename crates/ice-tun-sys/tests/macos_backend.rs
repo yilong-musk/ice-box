@@ -1257,7 +1257,15 @@ fn create_backend_capability_matches_the_platform_gate() {
             "the elevated coordinator can run netsh for dns_hijack"
         );
     }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(target_os = "linux")]
+    {
+        assert!(capability.supported, "linux_tun_ready: gate green");
+        assert!(
+            capability.dns_hijack,
+            "the elevated coordinator can manage Linux DNS for dns_hijack"
+        );
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         assert!(
             !capability.supported,

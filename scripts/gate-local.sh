@@ -772,7 +772,8 @@ run_fixtures_bucket() {
     scripts/test-gh-release-state.sh \
     scripts/test-verify-android-keystore.sh \
     scripts/test-android-version-code.sh \
-    scripts/test-verify-android-apk.sh; do
+    scripts/test-verify-android-apk.sh \
+    scripts/test-check-glibc-floor.sh; do
     if [[ -f "$ROOT/$fixture" ]]; then
       batch_add "$(basename "$fixture" .sh)" bash "$ROOT/$fixture"
     fi

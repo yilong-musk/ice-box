@@ -122,9 +122,9 @@ pub fn force_tun_gate_ready() {
     let _ = TEST_TUN_GATE_READY.set(());
 }
 
-/// T0 gate for an explicit [`HostPlatform`]. macOS and Windows are green
-/// (`macos_tun_ready` / `windows_tun_ready`). Android and iOS are green
-/// because capture is the platform VPN. Linux stays closed.
+/// T0 gate for an explicit [`HostPlatform`]. macOS, Windows, and Linux are
+/// green (`macos_tun_ready` / `windows_tun_ready` / `linux_tun_ready`), and
+/// Android and iOS are green because capture is the platform VPN.
 ///
 /// Host-free controller tests force the gate green via
 /// `force_tun_gate_ready` (`test-hooks` / `cfg(test)` only).

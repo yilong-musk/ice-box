@@ -20,8 +20,9 @@ tag, version sources, changelog, CI status of the commit, updater key, and
 Android keystore in a fast preflight job. It does not re-run the gate: the
 required CI checks on `main` already ran it for the same commit. It then builds
 the macOS arm64 `.dmg` (plus updater
-`.app.tar.gz` / `.sig`), the Windows NSIS `.exe` (plus `.exe.sig`), and one
-signed Android `arm64-v8a` APK, and stages everything as a **draft** GitHub
+`.app.tar.gz` / `.sig`), the Windows NSIS `.exe` (plus `.exe.sig`), the Linux
+`x86_64` and `arm64` `.deb` and `.AppImage` bundles (plus `.AppImage.sig`), and
+one signed Android `arm64-v8a` APK, and stages everything as a **draft** GitHub
 Release. The publish job verifies the assets and updater signatures, writes
 `SHA256SUMS`, and only then publishes; publishing makes the release the updater
 feed target.
@@ -185,7 +186,8 @@ composed `docs/images/hero.png` and `docs/images/hero.zh-CN.png`.
 Open a PR from a `release/vX.Y.Z` branch and merge into `main` (`release.sh`
 opens it for you). `main` has
 branch protection: all CI checks (`gate (linux)`, `gate + build (macOS dmg)`,
-`gate + build (Windows nsis)`) must pass and one approving review is required.
+`gate + build (Windows nsis)`, `build (Linux x64)`, `build (Linux arm64)`) must
+pass and one approving review is required.
 GitHub does not allow approving your own PR, so a solo maintainer merges with
 `gh pr merge --merge --admin` (the repository allows administrator bypass).
 `gh pr merge --auto` only queues the merge; auto-merge must be enabled in the
@@ -255,8 +257,9 @@ checks out the commit the preflight validated:
 | `tag` | ubuntu-latest | the one gate the build and publish jobs wait on (skipped in `preflight` mode); in manual `release` mode it also creates and pushes the annotated tag on the validated commit |
 | `build-macos` | macos-latest | starts right after the preflight (and tag); `tauri build --config src-tauri/tauri.updater.conf.json` (signing secrets); asserts the binary is arm64, the DMG is `ice-box_<ver>_aarch64.dmg`, and the bundle signature; uploads DMG + `*.app.tar.gz` + `.sig` |
 | `build-windows` | windows-latest | in parallel with macOS; NSIS (`npm run build:win -- --config src-tauri/tauri.updater.conf.json`, stacked on `tauri.windows.conf.json`); asserts the `ice-box_<ver>_x64-setup.exe` name and payload; uploads EXE + `.exe.sig` |
+| `build-linux` | ubuntu-22.04 (x64), ubuntu-22.04-arm (arm64) | in parallel; `.deb` + `.AppImage` (`APPIMAGE_EXTRACT_AND_RUN=1 npm run build:linux -- --config src-tauri/tauri.updater.conf.json`, stacked on `tauri.linux.conf.json`); asserts `.deb` payload paths (`/usr/bin/ice-box`, `/usr/lib/ice-box/sing-box`, `/usr/lib/ice-box/ice-helper`, `/usr/lib/ice-box/geoip/geoip-cn.srs`), glibc ceiling (`<= 2.35` via `scripts/check-glibc-floor.sh`), and canonical artifact names; uploads `.deb` + `.AppImage` + `.AppImage.sig` |
 | `build-android` | ubuntu-latest | in parallel; signed `arm64-v8a` APK (`scripts/build-android-apk.sh release arm64`) → `scripts/verify-android-apk.sh --release --version <ver>` → upload `ice-box_<ver>_android_arm64.apk` |
-| `publish` | ubuntu-latest | `needs` all three build jobs; detects the release state before downloading artifacts (a published rerun is verification-only); builds the short release body; cryptographically verifies the updater signatures with minisign against the committed pubkey; writes `SHA256SUMS`; creates a **draft** release, uploads, compares the draft asset list, then publishes (pre-release when the tag has a suffix) and runs `scripts/verify-release-assets.sh` |
+| `publish` | ubuntu-latest | `needs` all four build jobs; detects the release state before downloading artifacts (a published rerun is verification-only); builds the short release body; cryptographically verifies the updater signatures with minisign against the committed pubkey; writes `SHA256SUMS`; creates a **draft** release, uploads, compares the draft asset list, then publishes (pre-release when the tag has a suffix) and runs `scripts/verify-release-assets.sh` |
 
 The `publish` job uses the `release` environment. Configure required reviewers
 on that environment to make publication wait for a human; see
@@ -288,10 +291,14 @@ Published assets:
 - `ice-box.app.tar.gz` and `ice-box.app.tar.gz.sig` (macOS updater payload; exact names follow Tauri)
 - `ice-box_<ver>_x64-setup.exe` (Windows NSIS, first-time install)
 - `ice-box_<ver>_x64-setup.exe.sig` (Windows updater signature)
+- `ice-box_<ver>_amd64.deb` and `ice-box_<ver>_arm64.deb` (Linux Debian/Ubuntu packages; updated via package manager)
+- `ice-box_<ver>_amd64.AppImage` and `ice-box_<ver>_amd64.AppImage.sig` (Linux x86_64 AppImage + updater signature)
+- `ice-box_<ver>_aarch64.AppImage` and `ice-box_<ver>_aarch64.AppImage.sig` (Linux arm64 AppImage + updater signature)
 - `ice-box_<ver>_android_arm64.apk` (Android arm64-v8a, signed with the project keystore)
 - `SHA256SUMS` (checksums for every asset in the release)
 - `latest.json` (`version`, `notes`, `pub_date`, `platforms.darwin-aarch64` /
-  `platforms.windows-x86_64`; each `signature` is the **full `.sig` file text**,
+  `platforms.windows-x86_64` / `platforms.linux-x86_64` /
+  `platforms.linux-aarch64`; each `signature` is the **full `.sig` file text**,
   each `url` is `https://github.com/yilong-musk/ice-box/releases/download/<tag>/<asset>`).
   Final releases only; pre-releases do not include it.
 - `LICENSE`, `NOTICE`, `sing-box-LICENSE` (root GPLv3 plus bundled sing-box
@@ -307,7 +314,7 @@ overwrite them.
 
 ```bash
 gh run list --workflow release.yml --limit 1   # conclusion: success
-gh release view v0.1.2 --json assets           # dmg, exe, apk, tar.gz, sigs, SHA256SUMS, latest.json
+gh release view v0.1.2 --json assets           # dmg, exe, deb, AppImage, apk, tar.gz, sigs, SHA256SUMS, latest.json
 gh release view v0.1.2 --json body             # "Fixes and improvements" + CHANGELOG.md link
 bash scripts/verify-release-assets.sh v0.1.2   # asset downloads, SHA-256 checksums, latest.json
 ```
@@ -324,9 +331,10 @@ keeps pointing at the notes that shipped. The repository URL comes from
 `GITHUB_REPOSITORY`, so a fork's release body points at the fork. The full
 notes stay one click away in `CHANGELOG.md`.
 
-`latest.json` must list both `darwin-aarch64` and `windows-x86_64` with non-empty
-signatures. Fixture coverage: `bash scripts/test-merge-updater-latest.sh`
-(also run from `scripts/gate.sh` / `scripts/gate-local.sh`).
+`latest.json` must list `darwin-aarch64`, `windows-x86_64`, `linux-x86_64`, and
+`linux-aarch64` with non-empty signatures. Fixture coverage:
+`bash scripts/test-merge-updater-latest.sh` (also run from `scripts/gate.sh` /
+`scripts/gate-local.sh`).
 
 The website deploys only after a final release for the current
 `apps/desktop/package.json` version is published, and it checks that the
@@ -378,7 +386,8 @@ GitHub:
   hand. A signed-tag requirement rules out the manual `release` mode, because
   the workflow's tags are unsigned.
 - **Branch protection**: keep the required checks (`gate (linux)`,
-  `gate + build (macOS dmg)`, `gate + build (Windows nsis)`) on `main`.
+  `gate + build (macOS dmg)`, `gate + build (Windows nsis)`,
+  `build (Linux x64)`, `build (Linux arm64)`) on `main`.
 - **Secrets**: set `TAURI_SIGNING_PRIVATE_KEY`,
   `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, `ANDROID_KEYSTORE_BASE64`,
   `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and
@@ -459,10 +468,12 @@ Settings → Privacy & Security → Open Anyway (macOS 15+), right-click → Ope
 (older versions), or `xattr -dr com.apple.quarantine`.
 
 In-app updates after 0.1.5 do not change that decision: they only check minisign
-signatures. Windows NSIS installers remain without Authenticode. Because the
-DMG and EXE are not platform-signed, every release also publishes `SHA256SUMS`
+signatures. Windows NSIS installers remain without Authenticode, and Linux
+`.deb` / `.AppImage` packages are unsigned at the OS package level. Because the
+installers are not platform-signed, every release also publishes `SHA256SUMS`
 so first-time downloaders can verify the files they saved; the updater `.sig`
-files cover the in-app update payloads only.
+files cover the in-app update payloads only (macOS `.app.tar.gz`, Windows
+`.exe`, and Linux `.AppImage`).
 
 ## Android signing (one-time)
 
