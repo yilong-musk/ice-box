@@ -331,7 +331,12 @@ fn xdg_autostart_path(
     home: Option<&Path>,
 ) -> Result<std::path::PathBuf, String> {
     let config_root = match xdg_config_home {
-        Some(path) if path.is_absolute() => path.to_path_buf(),
+        // XDG paths are POSIX paths starting with `/`; checking the prefix
+        // keeps host-free tests consistent on Windows where `/custom/cfg` is
+        // not considered absolute by `Path::is_absolute`.
+        Some(path) if path.is_absolute() || path.to_string_lossy().starts_with('/') => {
+            path.to_path_buf()
+        }
         _ => home
             .ok_or_else(|| "HOME is not set".to_string())?
             .join(".config"),
@@ -553,16 +558,24 @@ mod tests {
     fn xdg_autostart_path_honors_absolute_xdg_config_home_and_falls_back_to_home() {
         assert_eq!(
             xdg_autostart_path(Some(Path::new("/custom/cfg")), Some(Path::new("/home/u"))).unwrap(),
-            PathBuf::from("/custom/cfg/autostart/com.yilong-musk.icebox.desktop")
+            PathBuf::from("/custom/cfg")
+                .join("autostart")
+                .join("com.yilong-musk.icebox.desktop")
         );
         assert_eq!(
             xdg_autostart_path(Some(Path::new("relative/cfg")), Some(Path::new("/home/u")))
                 .unwrap(),
-            PathBuf::from("/home/u/.config/autostart/com.yilong-musk.icebox.desktop")
+            PathBuf::from("/home/u")
+                .join(".config")
+                .join("autostart")
+                .join("com.yilong-musk.icebox.desktop")
         );
         assert_eq!(
             xdg_autostart_path(None, Some(Path::new("/home/u"))).unwrap(),
-            PathBuf::from("/home/u/.config/autostart/com.yilong-musk.icebox.desktop")
+            PathBuf::from("/home/u")
+                .join(".config")
+                .join("autostart")
+                .join("com.yilong-musk.icebox.desktop")
         );
         assert!(xdg_autostart_path(None, None).is_err());
     }

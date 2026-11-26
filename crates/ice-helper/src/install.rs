@@ -38,15 +38,15 @@ use std::process::Command;
 
 #[cfg(any(target_os = "macos", test))]
 pub use ice_tun_helper_proto::install_paths::LAUNCHD_LABEL;
+#[cfg(any(target_os = "linux", test))]
+pub use ice_tun_helper_proto::install_paths::RESOURCES_DEST_DIR;
 pub use ice_tun_helper_proto::install_paths::{
     CORE_BIN_DEST, CORE_BIN_DEST_DIR, CORE_LOG_DEST, CORE_RUN_DIR, ENV_ALLOWED_UID, ENV_CORE_BIN,
     ENV_CORE_BIN_SHA256, ENV_CORE_LOG, ENV_DATA_DIR, ENV_RESOURCES_DIR, ENV_SOCKET, ENV_TOKEN,
     HELPER_BIN_DEST, HELPER_LOG_DEST, PLIST_DEST, SOCKET_PATH, TOKEN_FILE_NAME,
 };
-#[cfg(any(target_os = "linux", test))]
-pub use ice_tun_helper_proto::install_paths::{
-    RESOURCES_DEST_DIR, SYSTEMD_UNIT_DEST, SYSTEMD_UNIT_NAME,
-};
+#[cfg(target_os = "linux")]
+pub use ice_tun_helper_proto::install_paths::{SYSTEMD_UNIT_DEST, SYSTEMD_UNIT_NAME};
 
 /// The installer must be running as root; everything below is a privileged
 /// OS mutation. The app only reaches this code through the elevation dialog.
