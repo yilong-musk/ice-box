@@ -3,6 +3,9 @@
 import type { RuleRow } from "../api/client";
 import { t, type MessageKey } from "./i18n";
 
+/** Rows per page of the Rules list. */
+export const RULES_PAGE_SIZE = 100;
+
 export const RULE_TYPE_LABEL_KEYS: Record<string, MessageKey> = {
   domain: "ruleType.domain",
   domain_suffix: "ruleType.domainSuffix",

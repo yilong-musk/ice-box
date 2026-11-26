@@ -11,11 +11,17 @@ pub async fn list_nodes(app: AppHandle) -> Result<Vec<NodeInfo>, AppError> {
     .await
 }
 
+/// Async on purpose: a sync command runs on the main thread, and releasing
+/// may wait for a Rules-page read that is still parsing the profile.
 #[tauri::command]
-pub fn release_rule_keyword_cache(app: AppHandle) {
-    if let Some(state) = app.try_state::<crate::AppState>() {
-        crate::application::drop_rule_keyword_cache(state.inner());
-    }
+pub async fn release_rule_keyword_cache(app: AppHandle) -> Result<(), AppError> {
+    run_blocking("release_rule_keyword_cache", move || {
+        if let Some(state) = app.try_state::<crate::AppState>() {
+            crate::application::drop_rule_keyword_cache(state.inner());
+        }
+        Ok(())
+    })
+    .await
 }
 
 #[tauri::command]

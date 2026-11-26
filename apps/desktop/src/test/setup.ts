@@ -5,6 +5,7 @@ import { cleanup } from "@testing-library/react";
 import { afterEach, vi } from "vitest";
 import { THEME_STORAGE_KEY } from "../lib/theme";
 import { applyStoredLanguage, LANGUAGE_STORAGE_KEY } from "../lib/i18n";
+import { clearRulesSnapshot, clearSubscriptionsSnapshot } from "../lib/pageSnapshots";
 
 function ensureLocalStorage() {
   try {
@@ -100,6 +101,9 @@ afterEach(() => {
   applyStoredLanguage();
   document.documentElement.classList.remove("dark");
   document.documentElement.style.colorScheme = "";
+  // Session snapshots the pages start from: each test reads its own mocks.
+  clearSubscriptionsSnapshot();
+  clearRulesSnapshot();
 });
 
 // jsdom has no canvas backend and logs "Not implemented" for getContext.

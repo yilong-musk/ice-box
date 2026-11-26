@@ -172,6 +172,17 @@ vi.mock("./api/client", () => ({
     start: vi.fn(),
     stop: vi.fn(),
     listSubscriptions: vi.fn().mockResolvedValue([]),
+    getRuleOverview: vi.fn().mockResolvedValue({
+      total: 0,
+      disabled: 0,
+      custom: 0,
+      rule_sets: 0,
+      types: [],
+    }),
+    listRules: vi
+      .fn()
+      .mockResolvedValue({ total: 0, offset: 0, limit: 100, items: [] }),
+    releaseRuleSearch: vi.fn().mockResolvedValue(undefined),
     getConnectionStats: vi.fn().mockResolvedValue({
       running: true,
       count: 0,
@@ -279,6 +290,25 @@ describe("App", () => {
         t("recover.proxyAfterExit", { detail: "mock" }),
       );
     });
+  });
+
+  it("prepares Subscriptions and Rules in the background after launch", async () => {
+    vi.useFakeTimers();
+    const view = within(render(<App />).container);
+    expect(view.queryByTestId("subs-panel")).toBeNull();
+    expect(view.queryByTestId("rules-panel")).toBeNull();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_500);
+    });
+
+    // Rendered hidden, ahead of their first visit; Home stays on screen.
+    // Nodes only gets its snapshot read: its kept pane would lay it out.
+    expect(view.getByTestId("subs-panel")).toBeInTheDocument();
+    expect(view.getByTestId("rules-panel")).toBeInTheDocument();
+    expect(view.queryByTestId("nodes-panel")).toBeNull();
+    expect(view.getByTestId("home-panel")).toBeVisible();
+    expect(view.getByTestId("rules-panel")).not.toBeVisible();
   });
 
   it("opens each page in the content pane", async () => {

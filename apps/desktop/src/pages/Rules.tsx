@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Ban, CirclePlay, Layers, Pencil, Plus, Trash2 } from "lucide-react";
 import {
   api,
@@ -46,8 +46,15 @@ import {
   pageCount,
   ruleMatchSummary,
   ruleOutbound,
+  RULES_PAGE_SIZE,
   ruleTypeLabel,
 } from "../lib/rules";
+import {
+  readRulesSnapshot,
+  rulesSnapshotClears,
+  subscribeRulesSnapshotClears,
+  writeRulesSnapshot,
+} from "../lib/pageSnapshots";
 
 const MAX_KEYWORD_DEBOUNCE_MS = 300;
 /** Distance from the list bottom within which the pager stays visible. */
@@ -84,11 +91,30 @@ export function Rules({ onNavigate, active = true }: Props) {
   useLanguagePreference();
   const phone = isPhoneShell();
   const { nextGeneration, isStale } = useGenerationGuard();
-  const [overview, setOverview] = useState<RuleOverview>(EMPTY_OVERVIEW);
-  const [rows, setRows] = useState<RuleRow[]>([]);
-  const [total, setTotal] = useState(0);
+  const [overview, setOverview] = useState<RuleOverview>(
+    () => readRulesSnapshot()?.overview ?? EMPTY_OVERVIEW,
+  );
+  const [rows, setRows] = useState<RuleRow[]>(
+    () => readRulesSnapshot()?.list.items ?? [],
+  );
+  const [total, setTotal] = useState(() => readRulesSnapshot()?.list.total ?? 0);
+  // Until the first read lands, no rows means "not loaded yet", not "no rules".
+  const [loaded, setLoaded] = useState(() => readRulesSnapshot() !== undefined);
+  // Whether the rows on screen were read since the page was last shown. Rows
+  // kept from an earlier visit (or a snapshot) may name rules the backend has
+  // since changed, so their actions wait for the refresh.
+  const [fresh, setFresh] = useState(false);
+  // A cleared rules snapshot means the live subscription moved or was
+  // updated while this page was away. Its rows then belong to the old
+  // profile: drop them before they are painted, and show the loading line
+  // until the refresh lands.
+  const snapshotClears = useSyncExternalStore(
+    subscribeRulesSnapshotClears,
+    rulesSnapshotClears,
+  );
+  const [rowsClears, setRowsClears] = useState(snapshotClears);
   const [offset, setOffset] = useState(0);
-  const [limit] = useState(100);
+  const [limit] = useState(RULES_PAGE_SIZE);
   const [filters, setFilters] = useState<Filters>({
     keyword: "",
     type: "",
@@ -110,6 +136,16 @@ export function Rules({ onNavigate, active = true }: Props) {
   const listRef = useRef<HTMLDivElement>(null);
   const mountedRef = useRef(true);
   const overviewRequestRef = useRef<Promise<RuleOverview> | null>(null);
+
+  if (rowsClears !== snapshotClears) {
+    setRowsClears(snapshotClears);
+    setOverview(EMPTY_OVERVIEW);
+    setRows([]);
+    setTotal(0);
+    setLoaded(false);
+    setFresh(false);
+    setError(null);
+  }
 
   useEffect(() => {
     mountedRef.current = true;
@@ -154,26 +190,47 @@ export function Rules({ onNavigate, active = true }: Props) {
       setOverview(ov);
       setRows(list.items);
       setTotal(list.total);
+      setLoaded(true);
+      setFresh(true);
       if (list.offset >= list.total && list.total > 0 && list.offset > 0) {
         setOffset(Math.max(0, list.total - list.limit));
         return;
       }
+      // The unfiltered first page is what the page opens on next time.
+      if (
+        !req.keyword &&
+        !req.type &&
+        req.disabled === "all" &&
+        req.custom == null &&
+        req.offset === 0
+      ) {
+        writeRulesSnapshot({ overview: ov, list });
+      }
       setError(null);
     } catch (e) {
       if (overviewRequestRef.current === overviewRequest) overviewRequestRef.current = null;
-      if (!isStale(gen)) setError(formatInvokeError(e));
+      if (!isStale(gen)) {
+        setError(formatInvokeError(e));
+        setLoaded(true);
+      }
     }
   }, [debouncedKeyword, filters.type, filters.status, filters.custom, offset, limit, isStale, nextGeneration]);
 
   useEffect(() => {
     overviewRequestRef.current = null;
-    if (!active) {
+    if (!active) return;
+    return () => {
+      // Leaving the page (or hiding its pane, which tears this effect down)
+      // drops reads in flight and the backend's copy of every subscription
+      // rule. The rows on screen stay, so the next visit shows them at once
+      // and refreshes them in place; their actions wait for that refresh.
       nextGeneration();
-      setRows([]);
-      setOverview(EMPTY_OVERVIEW);
-      setTotal(0);
-      if (typeof api.releaseRuleSearch === "function") void api.releaseRuleSearch();
-    }
+      overviewRequestRef.current = null;
+      setFresh(false);
+      if (typeof api.releaseRuleSearch === "function") {
+        void api.releaseRuleSearch().catch(() => {});
+      }
+    };
   }, [active, nextGeneration]);
 
   useEffect(() => {
@@ -348,6 +405,8 @@ export function Rules({ onNavigate, active = true }: Props) {
   const pages = pageCount(total, limit);
   const page = Math.floor(offset / limit) + 1;
   const showList = overview.total > 0 || overview.custom > 0 || rows.length > 0;
+  // Row actions name rules by fingerprint; wait until the rows are current.
+  const rowActionsDisabled = busy || !fresh;
 
   const addCustomButton = (
     <Button
@@ -520,7 +579,11 @@ export function Rules({ onNavigate, active = true }: Props) {
             </ToggleGroup>
           </div>
 
-          {!showList ? (
+          {!showList && !loaded ? (
+            <p className="my-auto text-sm text-muted-foreground">
+              {t("rules.loading")}
+            </p>
+          ) : !showList ? (
             <EmptyState
               framed={false}
               className="my-auto"
@@ -620,7 +683,7 @@ export function Rules({ onNavigate, active = true }: Props) {
                               type="button"
                               size="icon-sm"
                               variant="outline"
-                              disabled={busy}
+                              disabled={rowActionsDisabled}
                               aria-label={t("common.edit")}
                               title={t("common.edit")}
                               onClick={() =>
@@ -636,7 +699,7 @@ export function Rules({ onNavigate, active = true }: Props) {
                               type="button"
                               size="icon-sm"
                               variant="outline"
-                              disabled={busy}
+                              disabled={rowActionsDisabled}
                               aria-label={
                                 row.disabled
                                   ? t("common.enable")
@@ -661,7 +724,7 @@ export function Rules({ onNavigate, active = true }: Props) {
                               type="button"
                               size="icon-sm"
                               variant="destructive"
-                              disabled={busy}
+                              disabled={rowActionsDisabled}
                               aria-label={t("common.delete")}
                               title={t("common.delete")}
                               onClick={() => setPendingDelete(row)}

@@ -259,6 +259,7 @@ const zh = {
   "subs.title": "订阅",
   "subs.emptyHint": "尚未导入订阅",
   "subs.count": "{n} 条",
+  "subs.loading": "加载订阅列表…",
   "subs.emptyTitle": "暂无订阅",
   "subs.emptyDesc":
     "打开软件会自动启动内核；需要时在主页用大按钮接管系统代理，也可导入订阅链接或 sing-box 配置文件。",
@@ -313,6 +314,7 @@ const zh = {
   "rules.logicalSummary": "{mode} 组合 · {count} 条规则",
   "rules.invertedSummary": "非 ({summary})",
   "rules.disabledCount": "已禁用 {count}",
+  "rules.loading": "加载规则列表…",
   "rules.emptyTitle": "暂无规则",
   "rules.emptyDesc":
     "当前没有订阅规则，也没有自定义规则。导入含规则的订阅后可在此查询、禁用规则或添加自定义规则。",
@@ -839,6 +841,7 @@ const en: Record<MessageKey, string> = {
   "subs.title": "Subscriptions",
   "subs.emptyHint": "No subscriptions yet",
   "subs.count": "{n} items",
+  "subs.loading": "Loading subscriptions…",
   "subs.emptyTitle": "No subscriptions",
   "subs.emptyDesc":
     "The app starts the core automatically; capture the system proxy from Home when needed, or import a subscription URL or a sing-box config file.",
@@ -893,6 +896,7 @@ const en: Record<MessageKey, string> = {
   "rules.logicalSummary": "{mode} of {count} rules",
   "rules.invertedSummary": "NOT ({summary})",
   "rules.disabledCount": "Disabled {count}",
+  "rules.loading": "Loading rules…",
   "rules.emptyTitle": "No rules",
   "rules.emptyDesc":
     "No subscription rules and no custom rules. After importing a subscription with rules you can search, disable rules, and add custom rules here.",

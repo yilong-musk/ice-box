@@ -3,6 +3,7 @@
 import {
   Activity,
   memo,
+  startTransition,
   useCallback,
   useDeferredValue,
   useEffect,
@@ -63,6 +64,16 @@ import { useThemePreference } from "./lib/theme";
 import { startBackgroundAppUpdateCheck } from "./lib/appUpdateCheck";
 import { RuntimeStoreProvider, useRuntimeStore } from "./lib/runtimeStore";
 import { PaneTabContext, PaneVisibleContext } from "./lib/paneVisibility";
+import {
+  prefetchNodes,
+  prefetchSubscriptions,
+  schedulePagePrefetch,
+} from "./lib/pagePrefetch";
+
+/** How long after launch the page prefetch waits before it looks for idle
+ * time: past the first frames, the launch proxy restore and the first status
+ * reads. */
+const PAGE_PREFETCH_DELAY_MS = 2_000;
 
 type Tab =
   | "home"
@@ -632,6 +643,28 @@ function AppShell() {
       const next = new Set(prev);
       next.add(id);
       return next;
+    });
+  }, []);
+
+  // Once launch has settled, read what Nodes and Subscriptions open on, then
+  // render Subscriptions and Rules hidden, so their first visit only flips
+  // visibility instead of mounting the page. Nodes is not mounted ahead: on
+  // the desktop it sits in a kept pane, which lays out the whole list even
+  // while hidden; its snapshot already lets the first visit show content.
+  useEffect(() => {
+    const tabs: Tab[] = ["subs", "rules"];
+    return schedulePagePrefetch({
+      delayMs: PAGE_PREFETCH_DELAY_MS,
+      tasks: [...(isPhoneShell() ? [] : [prefetchNodes]), prefetchSubscriptions],
+      onDone: () => {
+        // A transition: the hidden pages render without holding up input.
+        startTransition(() => {
+          setVisited((prev) => {
+            if (tabs.every((id) => prev.has(id))) return prev;
+            return new Set([...prev, ...tabs]);
+          });
+        });
+      },
     });
   }, []);
 

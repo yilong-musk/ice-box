@@ -5,6 +5,11 @@ import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { t, isMessageKey } from "../lib/i18n";
 import { ruleTypeLabel } from "../lib/rules";
 import {
+  clearRulesSnapshot,
+  readRulesSnapshot,
+  writeRulesSnapshot,
+} from "../lib/pageSnapshots";
+import {
   installTitlebarActionsSlot,
   removeTitlebarActionsSlot,
   titlebarActionsSlot,
@@ -27,6 +32,7 @@ const listNodes = vi.fn();
 const listenStateChanged = vi.fn();
 const getRuleSetStatus = vi.fn();
 const refreshRuleSets = vi.fn();
+const releaseRuleSearch = vi.fn();
 
 vi.mock("../api/client", () => ({
   api: {
@@ -40,6 +46,7 @@ vi.mock("../api/client", () => ({
     listenStateChanged: (...args: unknown[]) => listenStateChanged(...args),
     getRuleSetStatus: (...args: unknown[]) => getRuleSetStatus(...args),
     refreshRuleSets: (...args: unknown[]) => refreshRuleSets(...args),
+    releaseRuleSearch: (...args: unknown[]) => releaseRuleSearch(...args),
   },
   formatInvokeError: (err: unknown) => {
     if (err && typeof err === "object") {
@@ -121,6 +128,7 @@ describe("Rules", () => {
     listenStateChanged.mockResolvedValue(() => {});
     getRuleSetStatus.mockResolvedValue([]);
     refreshRuleSets.mockResolvedValue([]);
+    releaseRuleSearch.mockResolvedValue(undefined);
     listNodes.mockResolvedValue([
       { tag: "n1", outbound_type: "socks", group_now: null, group_all: null },
       { tag: "Proxies", outbound_type: "selector", group_now: "n1", group_all: ["n1"] },
@@ -284,6 +292,86 @@ describe("Rules", () => {
       scrollArea?.querySelector('[data-slot="scroll-area-viewport"]'),
     ).toBeInTheDocument();
     expect(view.getByTestId("rules-panel")).toBeInTheDocument();
+  });
+
+  it("shows a loading line, not the empty state, before the first read lands", () => {
+    getRuleOverview.mockReturnValue(new Promise(() => {}));
+    listRules.mockReturnValue(new Promise(() => {}));
+    const view = within(render(<Rules />).container);
+    expect(view.getByText(t("rules.loading"))).toBeInTheDocument();
+    expect(view.queryByText(t("rules.emptyTitle"))).toBeNull();
+  });
+
+  it("opens on the last unfiltered page while it reads the current one", async () => {
+    writeRulesSnapshot({ overview: sampleOverview(), list: sampleList() });
+    getRuleOverview.mockReturnValue(new Promise(() => {}));
+    listRules.mockReturnValue(new Promise(() => {}));
+    const view = within(render(<Rules />).container);
+    expect(view.getByText("youtube.com")).toBeInTheDocument();
+    expect(view.queryByText(t("rules.loading"))).toBeNull();
+    await waitFor(() => expect(listRules).toHaveBeenCalledTimes(1));
+  });
+
+  it("keeps only the unfiltered first page as the snapshot", async () => {
+    const view = within(render(<Rules />).container);
+    await view.findByText("youtube.com");
+    const first = readRulesSnapshot();
+    expect(first?.list.items).toHaveLength(3);
+
+    listRules.mockResolvedValue(sampleList({ total: 1, items: [] }));
+    view.getByRole("radio", { name: t("rules.disabledCount", { count: 1 }) }).click();
+    await waitFor(() => {
+      const calls = listRules.mock.calls;
+      expect((calls[calls.length - 1]?.[0] as { disabled: string }).disabled).toBe("disabled");
+    });
+    expect(readRulesSnapshot()).toBe(first);
+  });
+
+  it("keeps the rows when the pane is left and releases the backend copy", async () => {
+    const { container, rerender } = render(<Rules active />);
+    const view = within(container);
+    await view.findByText("youtube.com");
+    expect(releaseRuleSearch).not.toHaveBeenCalled();
+
+    rerender(<Rules active={false} />);
+    expect(releaseRuleSearch).toHaveBeenCalledTimes(1);
+    expect(view.getByText("youtube.com")).toBeInTheDocument();
+  });
+
+  it("drops rows kept from before a subscription switch when shown again", async () => {
+    const { container, rerender } = render(<Rules active />);
+    const view = within(container);
+    await view.findByText("youtube.com");
+    rerender(<Rules active={false} />);
+
+    // Another subscription went live while the page was away.
+    act(() => clearRulesSnapshot());
+    getRuleOverview.mockReturnValue(new Promise(() => {}));
+    listRules.mockReturnValue(new Promise(() => {}));
+    rerender(<Rules active />);
+
+    expect(view.queryByText("youtube.com")).toBeNull();
+    expect(view.getByText(t("rules.loading"))).toBeInTheDocument();
+  });
+
+  it("holds row actions until the rows shown have been refreshed", async () => {
+    writeRulesSnapshot({ overview: sampleOverview(), list: sampleList() });
+    let resolveList: (value: unknown) => void = () => {};
+    listRules.mockReturnValue(new Promise((resolve) => (resolveList = resolve)));
+    const view = within(render(<Rules />).container);
+
+    // Rows from the snapshot are shown but not actionable yet.
+    expect(view.getByText("youtube.com")).toBeInTheDocument();
+    expect(view.getByRole("button", { name: t("common.disable") })).toBeDisabled();
+    expect(view.getByRole("button", { name: t("common.delete") })).toBeDisabled();
+
+    await act(async () => {
+      resolveList(sampleList());
+    });
+    await waitFor(() =>
+      expect(view.getByRole("button", { name: t("common.disable") })).toBeEnabled(),
+    );
+    expect(view.getByRole("button", { name: t("common.delete") })).toBeEnabled();
   });
 
   it("reloads the active subscription when the pane is reactivated", async () => {
