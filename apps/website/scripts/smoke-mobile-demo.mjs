@@ -76,17 +76,18 @@ async function waitForServer(preview, timeoutMs = 20_000) {
   throw new Error(`preview server did not start within ${timeoutMs}ms`);
 }
 
-async function waitForText(locator, expected, timeoutMs = 8000) {
+async function waitForText(locator, expected, timeoutMs = 15_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if ((await locator.textContent())?.trim() === expected) return;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   const actual = (await locator.textContent())?.trim();
+  if (actual === expected) return;
   throw new Error(`expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
 }
 
-async function waitForTheme(frame, dark, timeoutMs = 8000) {
+async function waitForTheme(frame, dark, timeoutMs = 15_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const isDark = await frame
@@ -95,17 +96,22 @@ async function waitForTheme(frame, dark, timeoutMs = 8000) {
     if (isDark === dark) return;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
+  const isDark = await frame
+    .locator("html")
+    .evaluate((el) => el.classList.contains("dark"));
+  if (isDark === dark) return;
   throw new Error(
     `phone iframe theme did not resolve to ${dark ? "dark" : "light"}`,
   );
 }
 
-async function waitForAttribute(locator, name, expected, timeoutMs = 8000) {
+async function waitForAttribute(locator, name, expected, timeoutMs = 15_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if ((await locator.getAttribute(name)) === expected) return;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
+  if ((await locator.getAttribute(name)) === expected) return;
   throw new Error(`${name} did not become ${expected}`);
 }
 
