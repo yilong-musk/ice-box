@@ -85,21 +85,23 @@ const LIGHT_CLASS: Record<LightTone, string> = {
   zoom: "bg-[#28c840] text-[#006500]",
 };
 
-/** Glyphs drawn on a 12px light, shown while the group is hovered. */
+/** Two filled triangles, as the macOS green light draws its arrows. */
+function TriangleGlyph({ d }: { d: string }) {
+  return <path d={d} fill="currentColor" strokeWidth={0.5} strokeLinejoin="round" />;
+}
+
+/**
+ * Glyphs drawn on a 12px light, shown while the group is hovered. The zoom
+ * light uses the macOS full-screen pair in both states (triangles pointing
+ * out to maximize, pointing in to restore), on the same top-left to
+ * bottom-right diagonal; the plus is the Option-key zoom glyph on macOS and
+ * would mix two conventions.
+ */
 const LIGHT_GLYPH: Record<LightGlyph, ReactNode> = {
   close: <path d="M3.75 3.75l4.5 4.5M8.25 3.75l-4.5 4.5" />,
   minimize: <path d="M3.25 6h5.5" />,
-  zoom: <path d="M6 3.25v5.5M3.25 6h5.5" />,
-  // A maximized window: two triangles pointing in, as the macOS green light
-  // shows to leave full screen.
-  restore: (
-    <path
-      d="M6.6 2.9v2.5h2.5zM5.4 9.1V6.6H2.9z"
-      fill="currentColor"
-      strokeWidth={0.5}
-      strokeLinejoin="round"
-    />
-  ),
+  zoom: <TriangleGlyph d="M3.25 3.25h4.25L3.25 7.5zM8.75 8.75H4.5l4.25-4.25z" />,
+  restore: <TriangleGlyph d="M5.4 2.65v2.75H2.65zM6.6 9.35V6.6h2.75z" />,
 };
 
 /** Whether the window is maximized, so the zoom light can offer to restore. */
