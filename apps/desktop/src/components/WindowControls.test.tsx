@@ -13,6 +13,7 @@ let followFocus = true;
 const shellEvents = vi.hoisted(() => ({
   hidden: new Set<() => void>(),
   shown: new Set<() => void>(),
+  maximized: new Set<(maximized: boolean) => void>(),
 }));
 
 vi.mock("@platform/windowChrome", async (importOriginal) => {
@@ -22,6 +23,12 @@ vi.mock("@platform/windowChrome", async (importOriginal) => {
     detectWindowChrome: () => chrome,
     controlsFollowWindowFocus: () => followFocus,
     runWindowCommand: (...args: unknown[]) => runWindowCommand(...args),
+    subscribeWindowMaximized: (onChange: (maximized: boolean) => void) => {
+      shellEvents.maximized.add(onChange);
+      return () => {
+        shellEvents.maximized.delete(onChange);
+      };
+    },
   };
 });
 
@@ -64,6 +71,7 @@ describe("WindowControls", () => {
     runWindowCommand.mockReset();
     shellEvents.hidden.clear();
     shellEvents.shown.clear();
+    shellEvents.maximized.clear();
   });
 
   it("does not render caption buttons on macOS overlay chrome", () => {
@@ -96,6 +104,32 @@ describe("WindowControls", () => {
     expect(runWindowCommand).toHaveBeenCalledWith("minimize");
     expect(runWindowCommand).toHaveBeenCalledWith("toggleMaximize");
     expect(runWindowCommand).toHaveBeenCalledWith("close");
+  });
+
+  it("offers to restore a maximized window on the zoom light", () => {
+    chrome = "windows-custom";
+    render(<WindowControls />);
+    const zoom = () =>
+      screen
+        .getByTestId("window-controls")
+        .querySelector<HTMLElement>('button[data-tone="zoom"]')!;
+
+    expect(zoom()).toHaveAttribute("data-glyph", "zoom");
+    expect(zoom()).toHaveAccessibleName(t("window.maximize"));
+
+    act(() => {
+      for (const onChange of shellEvents.maximized) onChange(true);
+    });
+    expect(zoom()).toHaveAttribute("data-glyph", "restore");
+    expect(zoom()).toHaveAccessibleName(t("window.restore"));
+    fireEvent.click(zoom());
+    expect(runWindowCommand).toHaveBeenCalledWith("toggleMaximize");
+
+    act(() => {
+      for (const onChange of shellEvents.maximized) onChange(false);
+    });
+    expect(zoom()).toHaveAttribute("data-glyph", "zoom");
+    expect(zoom()).toHaveAccessibleName(t("window.maximize"));
   });
 
   it("shows the glyphs on every light while the group is hovered", () => {

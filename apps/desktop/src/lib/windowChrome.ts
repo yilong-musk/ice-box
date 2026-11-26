@@ -154,6 +154,72 @@ export async function resizeWindowWidthBy(
   }
 }
 
+/**
+ * Report whether the window is maximized: once at start, then whenever it is
+ * resized (the zoom light, a title-bar double-click, Win+Up, snapping and
+ * restoring all resize it). Only changes are reported. Resize events are
+ * coalesced: at most one query runs per animation frame, and queries never
+ * overlap, so dragging an edge or an animated resize does not cost an IPC
+ * round trip per event. Returns an unsubscribe function; outside Tauri
+ * nothing is reported.
+ */
+export function subscribeWindowMaximized(
+  onChange: (maximized: boolean) => void,
+): () => void {
+  let disposed = false;
+  let unlisten: (() => void) | null = null;
+  void (async () => {
+    try {
+      const { getCurrentWindow } = await loadTauriApis();
+      const current = getCurrentWindow();
+      let last: boolean | null = null;
+      // A check is queued or running; resizes meanwhile only mark it stale.
+      let busy = false;
+      let stale = false;
+      const refresh = async () => {
+        busy = true;
+        try {
+          do {
+            await nextFrame();
+            if (disposed) return;
+            // Resizes from here on happen after this query starts, so they
+            // need another one.
+            stale = false;
+            const maximized = await current.isMaximized();
+            if (disposed) return;
+            if (maximized !== last) {
+              last = maximized;
+              onChange(maximized);
+            }
+          } while (stale);
+        } catch {
+          // The window is going away; keep the last known state.
+        } finally {
+          busy = false;
+        }
+      };
+      const request = () => {
+        if (busy) stale = true;
+        else void refresh();
+      };
+      const off = await current.onResized(request);
+      if (disposed) {
+        off();
+        return;
+      }
+      unlisten = off;
+      // The start state; a resize that already queued a check covers it.
+      request();
+    } catch {
+      // Browser preview and unit tests are not inside Tauri.
+    }
+  })();
+  return () => {
+    disposed = true;
+    unlisten?.();
+  };
+}
+
 export async function runWindowCommand(command: WindowCommand): Promise<void> {
   try {
     const { getCurrentWindow } = await loadTauriApis();

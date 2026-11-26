@@ -7,6 +7,7 @@ import {
   isMacosHost,
   resizeWindowWidthBy,
   runWindowCommand,
+  subscribeWindowMaximized,
 } from "./windowChrome";
 
 const minimize = vi.fn().mockResolvedValue(undefined);
@@ -28,18 +29,27 @@ const setSize = vi.fn(async (size: LogicalSize) => {
 const setMinSize = vi.fn(async (size: LogicalSize) => {
   fakeWindow.calls.push(`min:${size.width}`);
 });
+const resizedHandlers = new Set<() => void>();
+const onResized = vi.fn(async (handler: () => void) => {
+  resizedHandlers.add(handler);
+  return () => {
+    resizedHandlers.delete(handler);
+  };
+});
+const isMaximized = vi.fn(async () => fakeWindow.maximized);
 
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({
     minimize,
     toggleMaximize,
     close,
-    isMaximized: async () => fakeWindow.maximized,
+    isMaximized,
     isFullscreen: async () => false,
     scaleFactor: async () => 1,
     innerSize: async () => new PhysicalSize(fakeWindow.width, fakeWindow.height),
     setSize,
     setMinSize,
+    onResized,
   }),
 }));
 
@@ -104,6 +114,87 @@ describe("runWindowCommand", () => {
     expect(minimize).toHaveBeenCalledTimes(1);
     expect(toggleMaximize).toHaveBeenCalledTimes(1);
     expect(close).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("subscribeWindowMaximized", () => {
+  const resize = () => {
+    for (const handler of resizedHandlers) handler();
+  };
+  /** Wait out a few frames so any queued or running check has settled. */
+  const settle = async () => {
+    for (let i = 0; i < 3; i += 1) {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    }
+  };
+
+  it("reports the start state and each change on resize, then stops", async () => {
+    resetFakeWindow(720);
+    isMaximized.mockClear();
+    const seen: boolean[] = [];
+    const unsubscribe = subscribeWindowMaximized((maximized) => seen.push(maximized));
+    await vi.waitFor(() => expect(seen).toEqual([false]));
+
+    fakeWindow.maximized = true;
+    resize();
+    await vi.waitFor(() => expect(seen).toEqual([false, true]));
+
+    // A resize that keeps the state (dragging an edge) reports nothing.
+    resize();
+    await settle();
+    expect(isMaximized).toHaveBeenCalledTimes(3);
+    expect(seen).toEqual([false, true]);
+
+    fakeWindow.maximized = false;
+    resize();
+    await vi.waitFor(() => expect(seen).toEqual([false, true, false]));
+
+    unsubscribe();
+    expect(resizedHandlers.size).toBe(0);
+    fakeWindow.maximized = true;
+    resize();
+    await settle();
+    expect(seen).toEqual([false, true, false]);
+  });
+
+  it("coalesces a burst of resizes into one query per frame", async () => {
+    resetFakeWindow(720);
+    isMaximized.mockClear();
+    const seen: boolean[] = [];
+    const unsubscribe = subscribeWindowMaximized((maximized) => seen.push(maximized));
+    await vi.waitFor(() => expect(seen).toEqual([false]));
+    expect(isMaximized).toHaveBeenCalledTimes(1);
+
+    fakeWindow.maximized = true;
+    resize();
+    resize();
+    resize();
+    await settle();
+    expect(isMaximized).toHaveBeenCalledTimes(2);
+    expect(seen).toEqual([false, true]);
+    unsubscribe();
+  });
+
+  it("queries again when a resize lands while a query is running", async () => {
+    resetFakeWindow(720);
+    isMaximized.mockClear();
+    const seen: boolean[] = [];
+    const unsubscribe = subscribeWindowMaximized((maximized) => seen.push(maximized));
+    await vi.waitFor(() => expect(seen).toEqual([false]));
+
+    // Hold the next query open, then maximize and resize while it runs.
+    let release!: () => void;
+    isMaximized.mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => (release = () => resolve(false))),
+    );
+    resize();
+    await vi.waitFor(() => expect(isMaximized).toHaveBeenCalledTimes(2));
+    fakeWindow.maximized = true;
+    resize();
+    release();
+    await vi.waitFor(() => expect(seen).toEqual([false, true]));
+    expect(isMaximized).toHaveBeenCalledTimes(3);
+    unsubscribe();
   });
 });
 
