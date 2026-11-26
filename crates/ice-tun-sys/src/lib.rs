@@ -54,9 +54,9 @@ pub use ice_tun_pin::{
 };
 pub use journal::{steps, CidrRecord, DnsSnapshot, JournalState, RouteRecord, TunJournal};
 pub use linux::{
-    is_linux_virtual_interface, linux_outbound_interface_is_safe, linux_tun_interface_name_valid,
-    LinuxDnsMode, LinuxHost, LinuxInterfaceState, LinuxTunBackend, ProcessLinuxHost,
-    LINUX_RESOLV_CONF_SERVICE, LINUX_TUN_PREFIX,
+    classify_dns_mode, is_linux_virtual_interface, linux_outbound_interface_is_safe,
+    linux_tun_interface_name_valid, LinuxDnsMode, LinuxHost, LinuxInterfaceState, LinuxTunBackend,
+    ProcessLinuxHost, LINUX_RESOLV_CONF_SERVICE, LINUX_TUN_PREFIX,
 };
 pub use macos::{
     is_tunnel_interface, outbound_interface_is_safe, pin_outbound_interface,

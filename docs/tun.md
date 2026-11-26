@@ -158,33 +158,44 @@ by the manual acceptance script in [testing.md](testing.md#live-tests).
   inbound sets `dns_mode: disabled` so system DNS remains under `LinuxTunBackend`
   and `ice-helper`, with DNS captured by the explicit `hijack-dns` route rules.
 - Before starting the elevated core, wait until `ip -4 route get 1.1.1.1`
-  resolves to a physical NIC (not a leftover TUN/loopback device) and pin that
-  name as `route.default_interface` with `auto_detect_interface: false`.
-  `process_name` bypass rules exclude `ice-box` and `sing-box` so direct origin
-  probes, subscription fetches, and update checks avoid routing loops.
+  resolves to a physical NIC (including `ppp*` PPPoE uplinks, but never a
+  leftover TUN/loopback device) and pin that name as `route.default_interface`
+  with `auto_detect_interface: false`. `process_name` bypass rules exclude
+  `ice-box` and `sing-box` so direct origin probes, subscription fetches, and
+  update checks avoid routing loops.
 - With `dns_hijack`:
-  - When `systemd-resolved` is active, `ice-helper` configures per-link DNS on
-    the TUN interface via `resolvectl` (`dns`, `domain ~.`, `default-route true`,
-    `flush-caches`) and reverts it with `resolvectl revert <iface>` on disable
-    or recovery.
+  - When `systemd-resolved` is active **and** `/etc/resolv.conf` routes through
+    its stub listener (`stub-resolv.conf` symlink or `127.0.0.53`/`127.0.0.54`),
+    `ice-helper` configures per-link DNS on the TUN interface via `resolvectl`
+    (`dns`, `domain ~.`, `default-route true`, `flush-caches`) and reverts it
+    best-effort on disable or recovery.
   - Otherwise, if `/etc/resolv.conf` is a regular file (not a symlink),
-    `ice-helper` atomically writes a generated resolver file and compares its
-    current content before restoring the journaled backup, preserving external
-    edits made while TUN was active. Symlinked `/etc/resolv.conf` files without
-    `systemd-resolved` are refused rather than clobbering another network
-    manager's target.
+    `ice-helper` backs up its original raw bytes to a root-only file
+    (`/usr/local/libexec/ice-box/run/resolv.conf.ice-box-backup`, `0600`)
+    before atomically writing the managed resolver file, preserving `search`,
+    `domain`, `options`, link-local `%scope`, and arbitrary nameserver counts.
+    Restore compares current servers before writing the backed-up bytes back
+    verbatim (and also runs during helper uninstall if the file still carries
+    the managed marker), preserving external edits made while TUN was active.
+    Symlinked `/etc/resolv.conf` files without `systemd-resolved` stub routing
+    are left untouched rather than clobbering another network manager's target.
 
 ### Linux elevation
 
 The app installs and removes `ice-helper` through Polkit (`pkexec`). The
-systemd service (`/etc/systemd/system/ice-box-helper.service`) listens on
+hardened systemd service (`/etc/systemd/system/ice-box-helper.service`,
+`Restart=on-failure`) loads the per-installation auth token from a root-only
+`EnvironmentFile` (`/etc/ice-box/helper.env`, `0600`), listens on
 `/run/ice-box-helper.sock`, authenticates the peer UID (`SO_PEERCRED`) and
-installation token, pins the installed binaries under
-`/usr/local/libexec/ice-box/` (`ice-helper`, `sing-box`, `run/`, `resources/`),
-and writes logs to `/var/log/ice-box-{core,helper}.log`.
+token, pins the installed binaries under `/usr/local/libexec/ice-box/`
+(`ice-helper`, `sing-box`, `run/`, `resources/`), and writes logs to
+`/var/log/ice-box-{core,helper}.log`.
 
-Because an AppImage unpacks into an ephemeral FUSE mount that root cannot rely
-on across launches, installation copies bundled `geoip/*.srs` rule-sets into
+Because an AppImage unpacks into a user-private FUSE mount (`/tmp/.mount_*`)
+that root cannot traverse or rely on across launches, in-app Polkit
+install/uninstall stages `ice-helper`, `sing-box`, and `geoip/*.srs` into a
+transient user-owned `0700` temp directory before invoking `pkexec`, and the
+root installer copies bundled `geoip/*.srs` rule-sets into
 `/usr/local/libexec/ice-box/resources/geoip` and sanitizes user configs into a
 root-owned run directory before invoking `sing-box`. Manual install/uninstall
 scripts (`scripts/install-helper-linux.sh`, `scripts/uninstall-helper-linux.sh`)

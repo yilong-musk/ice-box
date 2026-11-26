@@ -7,11 +7,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::bypass::bypass_domains;
-use crate::linux::{format_host_port, run_checked, LinuxCmdRunner};
+use crate::linux::{bracket_ipv6_host, format_host_port, run_checked, LinuxCmdRunner};
 use crate::{ProxyBackup, ProxyEndpoints, ProxySysError};
 
 const KIO_FILE: &str = "kioslaverc";
 const KIO_GROUP: &str = "Proxy Settings";
+const KEY_PROXY_CONFIG_SCRIPT: &str = "Proxy Config Script";
 
 /// Resolved KDE config CLI pair (Plasma 6 preferred, Plasma 5 fallback).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +30,7 @@ pub struct KdeProxyBackup {
     pub socks_proxy: String,
     pub no_proxy_for: String,
     pub reversed_exception: String,
+    #[serde(default, alias = "Proxy Config Script", alias = "ProxyConfigScript")]
     pub proxy_config_script: String,
 }
 
@@ -99,11 +101,7 @@ fn notify_kio_reload(runner: &dyn LinuxCmdRunner) {
 }
 
 fn format_kde_proxy_value(scheme: &str, host: &str, port: u16) -> String {
-    let host = if host.contains(':') && !host.starts_with('[') {
-        format!("[{host}]")
-    } else {
-        host.to_string()
-    };
+    let host = bracket_ipv6_host(host);
     // KDE KCM (`kcm_proxy`) writes `scheme://host port` (space-separated),
     // which KIO, Qt, and Chromium's Linux proxy service all parse.
     format!("{scheme}://{host} {port}")
@@ -149,7 +147,7 @@ pub fn backup(runner: &dyn LinuxCmdRunner, tools: &KdeTools) -> Result<ProxyBack
     let reversed_exception =
         read_key(runner, tools, "ReversedException").map_err(ProxySysError::ApplyFailed)?;
     let proxy_config_script =
-        read_key(runner, tools, "ProxyConfigScript").map_err(ProxySysError::ApplyFailed)?;
+        read_key(runner, tools, KEY_PROXY_CONFIG_SCRIPT).map_err(ProxySysError::ApplyFailed)?;
 
     let enabled = matches!(proxy_type.as_str(), "1" | "2" | "3");
     let (http, https, socks) = if proxy_type == "1" {
@@ -262,7 +260,7 @@ pub fn restore(
     write_key(
         runner,
         tools,
-        "ProxyConfigScript",
+        KEY_PROXY_CONFIG_SCRIPT,
         &state.proxy_config_script,
     )
     .map_err(ProxySysError::RestoreFailed)?;
@@ -298,5 +296,34 @@ mod tests {
             Some("[::1]:8080")
         );
         assert_eq!(parse_kde_proxy_endpoint(""), None);
+    }
+
+    #[test]
+    fn kde_backup_deserializes_legacy_and_spaced_pac_keys() {
+        let base = |key: &str, val: &str| {
+            serde_json::json!({
+                "proxy_type": "2",
+                "http_proxy": "",
+                "https_proxy": "",
+                "socks_proxy": "",
+                "no_proxy_for": "",
+                "reversed_exception": "false",
+                key: val,
+            })
+        };
+
+        let canonical: KdeProxyBackup =
+            serde_json::from_value(base("proxy_config_script", "http://corp.local/a.pac")).unwrap();
+        assert_eq!(canonical.proxy_config_script, "http://corp.local/a.pac");
+
+        let legacy: KdeProxyBackup =
+            serde_json::from_value(base("ProxyConfigScript", "http://corp.local/legacy.pac"))
+                .unwrap();
+        assert_eq!(legacy.proxy_config_script, "http://corp.local/legacy.pac");
+
+        let spaced: KdeProxyBackup =
+            serde_json::from_value(base("Proxy Config Script", "http://corp.local/spaced.pac"))
+                .unwrap();
+        assert_eq!(spaced.proxy_config_script, "http://corp.local/spaced.pac");
     }
 }

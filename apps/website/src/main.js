@@ -25,6 +25,8 @@ import {
   installerFilename,
   linuxInstallerDownloadUrl,
   linuxInstallerFilename,
+  linuxPrimaryInstallerVariant,
+  refineLinuxArch,
 } from "./downloads";
 import {
   applyMarketingLanguage,
@@ -131,8 +133,9 @@ const LINUX_VARIANT_LINKS = [
 const windowLights = `<span class="window-lights" aria-hidden="true"><i></i><i></i><i></i></span>`;
 
 const currentPlatform = detectPlatform(navigator.userAgent, navigator.maxTouchPoints);
-const linuxPrimaryVariant =
-  detectLinuxArch(navigator.userAgent) === "arm64" ? "appimage-aarch64" : "appimage-amd64";
+let linuxPrimaryVariant = linuxPrimaryInstallerVariant(
+  detectLinuxArch(navigator.userAgent),
+);
 
 function platformPrimaryFilename(platform) {
   return platform === "linux"
@@ -302,6 +305,7 @@ root.innerHTML = `
 `;
 
 const parts = {
+  heroDownload: root.querySelector(".hero-download"),
   heroDownloadLabel: root.querySelector(".hero-download-label"),
   heroReleaseLabel: root.querySelector(".hero-release-label"),
   demoFrame: root.querySelector(".demo-screen iframe"),
@@ -559,3 +563,17 @@ window.addEventListener("storage", (event) => {
 });
 
 applyCopy(language);
+
+if (currentPlatform === "linux") {
+  refineLinuxArch(navigator).then((refinedArch) => {
+    const nextVariant = linuxPrimaryInstallerVariant(refinedArch);
+    if (nextVariant === linuxPrimaryVariant) return;
+    linuxPrimaryVariant = nextVariant;
+    parts.heroDownload.href = platformPrimaryUrl(currentPlatform);
+    const linuxCardButton = root.querySelector('[data-platform="linux"] .download-button');
+    if (linuxCardButton) {
+      linuxCardButton.href = platformPrimaryUrl("linux");
+    }
+    applyDownloadCopy(language);
+  });
+}

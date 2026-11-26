@@ -29,10 +29,32 @@ if [[ ! -d /run/systemd/system ]]; then
   exit 1
 fi
 
-echo "== preflight: sudo =="
-sudo -v
+CURRENT_UID="$(id -u)"
+if [[ "$CURRENT_UID" -eq 0 ]]; then
+  if [[ -z "${SUDO_UID:-}" || "$SUDO_UID" -eq 0 ]]; then
+    echo "ERROR: refusing to install directly as root without SUDO_UID (that would lock the helper socket to uid 0); run as your desktop user or via sudo" >&2
+    exit 1
+  fi
+  TARGET_UID="$SUDO_UID"
+else
+  TARGET_UID="$CURRENT_UID"
+  echo "== preflight: sudo =="
+  sudo -v
+fi
 
-DEFAULT_DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/com.yilong-musk.icebox"
+TARGET_HOME="$HOME"
+if [[ -n "${SUDO_USER:-}" ]]; then
+  SUDO_HOME="$(getent passwd "$SUDO_USER" | cut -d: -f6 || true)"
+  if [[ -n "$SUDO_HOME" ]]; then
+    TARGET_HOME="$SUDO_HOME"
+  fi
+fi
+
+# shellcheck source=scripts/platform.sh
+source "$ROOT/scripts/platform.sh"
+ice_resolve_platform host
+
+DEFAULT_DATA_DIR="${XDG_DATA_HOME:-$TARGET_HOME/.local/share}/com.yilong-musk.icebox"
 DATA_DIR="${1:-$DEFAULT_DATA_DIR}"
 CORE_BIN="${2:-}"
 HELPER_SRC="${3:-${ICE_BOX_HELPER_BIN:-}}"
@@ -44,8 +66,7 @@ fi
 if [[ -z "$CORE_BIN" ]]; then
   for candidate in \
     "$ROOT/apps/desktop/src-tauri/resources/sing-box" \
-    "$ROOT/third_party/sing-box/linux-x86_64/sing-box" \
-    "$ROOT/third_party/sing-box/linux-aarch64/sing-box"
+    "$ROOT/third_party/sing-box/$ICE_TARGET_DIR/sing-box"
   do
     if [[ -x "$candidate" ]]; then
       CORE_BIN="$candidate"
@@ -57,11 +78,21 @@ if [[ -z "$CORE_BIN" || ! -x "$CORE_BIN" ]]; then
   echo "ERROR: sing-box binary not found — pass it as the 2nd argument or run scripts/fetch-singbox.sh" >&2
   exit 1
 fi
+CORE_BIN="$(cd "$(dirname "$CORE_BIN")" && pwd)/$(basename "$CORE_BIN")"
 if [[ ! -d "$DATA_DIR" ]]; then
-  mkdir -p "$DATA_DIR"
+  if [[ "$CURRENT_UID" -eq 0 && -n "${SUDO_USER:-}" ]]; then
+    sudo -u "$SUDO_USER" mkdir -p "$DATA_DIR"
+  else
+    mkdir -p "$DATA_DIR"
+  fi
 fi
+DATA_DIR="$(cd "$DATA_DIR" && pwd)"
 
 if [[ -z "$HELPER_SRC" ]]; then
+  if [[ "$CURRENT_UID" -eq 0 ]]; then
+    echo "ERROR: ice-helper binary not found and refusing to run 'cargo build' as root; run as your user or pass HELPER_BIN as the 3rd argument" >&2
+    exit 1
+  fi
   echo "== building ice-helper =="
   cargo build --release -p ice-helper --manifest-path "$ROOT/Cargo.toml"
   HELPER_SRC="$ROOT/target/release/ice-helper"
@@ -74,7 +105,11 @@ if [[ ! -x "$HELPER_SRC" ]]; then
 fi
 
 echo "== running ice-helper install (root) =="
-sudo "$HELPER_SRC" install "$DATA_DIR" "$CORE_BIN" "$(id -u)"
+if [[ "$CURRENT_UID" -eq 0 ]]; then
+  "$HELPER_SRC" install "$DATA_DIR" "$CORE_BIN" "$TARGET_UID"
+else
+  sudo "$HELPER_SRC" install "$DATA_DIR" "$CORE_BIN" "$TARGET_UID"
+fi
 
 echo ""
 echo "ice-helper installed:"
@@ -82,7 +117,8 @@ echo "  binary    : /usr/local/libexec/ice-box/ice-helper"
 echo "  core      : /usr/local/libexec/ice-box/sing-box"
 echo "  resources : /usr/local/libexec/ice-box/resources"
 echo "  unit      : /etc/systemd/system/ice-box-helper.service"
+echo "  env file  : /etc/ice-box/helper.env (root, 0600)"
 echo "  socket    : /run/ice-box-helper.sock"
-echo "  token     : $DATA_DIR/helper-token (installing uid, 0600)"
+echo "  token     : $DATA_DIR/helper-token (uid $TARGET_UID, 0600)"
 echo ""
 echo "To uninstall: sudo ./scripts/uninstall-helper-linux.sh \"$DATA_DIR\""

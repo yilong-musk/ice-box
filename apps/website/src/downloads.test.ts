@@ -9,6 +9,8 @@ import {
   installerFilename,
   linuxInstallerDownloadUrl,
   linuxInstallerFilename,
+  linuxPrimaryInstallerVariant,
+  refineLinuxArch,
 } from "./downloads.ts";
 
 test("installer urls are the published release assets", () => {
@@ -98,6 +100,80 @@ test("detectLinuxArch distinguishes amd64 and arm64", () => {
   assert.equal(detectLinuxArch("Mozilla/5.0 (X11; Linux x86_64)"), "amd64");
   assert.equal(detectLinuxArch("Mozilla/5.0 (X11; Linux aarch64)"), "arm64");
   assert.equal(detectLinuxArch("Mozilla/5.0 (X11; Linux arm64)"), "arm64");
+});
+
+test("refineLinuxArch resolves arm64 on Chromium with a frozen x86_64 UA", async () => {
+  const frozenUa =
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
+  assert.equal(detectLinuxArch(frozenUa), "amd64");
+
+  const uaData = {
+    async getHighEntropyValues(hints: readonly string[]) {
+      assert.equal(this, uaData);
+      assert.deepEqual(hints, ["architecture"]);
+      return { architecture: "arm" };
+    },
+  };
+  const arch = await refineLinuxArch({
+    userAgent: frozenUa,
+    userAgentData: uaData,
+  });
+  assert.equal(arch, "arm64");
+  assert.equal(linuxPrimaryInstallerVariant(arch), "appimage-aarch64");
+  assert.equal(
+    linuxInstallerDownloadUrl("0.5.0", linuxPrimaryInstallerVariant(arch)),
+    "https://github.com/yilong-musk/ice-box/releases/download/v0.5.0/ice-box_0.5.0_aarch64.AppImage",
+  );
+
+  assert.equal(
+    await refineLinuxArch({
+      userAgent: frozenUa,
+      userAgentData: {
+        getHighEntropyValues: async () => ({ architecture: "arm64" }),
+      },
+    }),
+    "arm64",
+  );
+  assert.equal(
+    await refineLinuxArch({
+      userAgent: frozenUa,
+      userAgentData: {
+        getHighEntropyValues: async () => ({ architecture: "x86" }),
+      },
+    }),
+    "amd64",
+  );
+});
+
+test("refineLinuxArch keeps sync fallback when userAgentData is absent or rejects", async () => {
+  assert.equal(
+    await refineLinuxArch({ userAgent: "Mozilla/5.0 (X11; Linux x86_64)" }),
+    "amd64",
+  );
+  assert.equal(
+    await refineLinuxArch({ userAgent: "Mozilla/5.0 (X11; Linux aarch64)" }),
+    "arm64",
+  );
+  assert.equal(
+    await refineLinuxArch({
+      userAgent: "Mozilla/5.0 (X11; Linux aarch64)",
+      userAgentData: {
+        getHighEntropyValues: async () => {
+          throw new Error("denied");
+        },
+      },
+    }),
+    "arm64",
+  );
+  assert.equal(
+    await refineLinuxArch({
+      userAgent: "Mozilla/5.0 (X11; Linux x86_64)",
+      userAgentData: {
+        getHighEntropyValues: async () => ({ architecture: "" }),
+      },
+    }),
+    "amd64",
+  );
 });
 
 test("detectPlatform does not take an iPad in desktop mode for a Mac", () => {

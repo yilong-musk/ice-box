@@ -76,13 +76,13 @@ const DEFAULT_ROUTE_TRIES: u32 = 10;
 const DEFAULT_ROUTE_DELAY_MS: u64 = 150;
 
 /// Interface names that must not be used as sing-box `route.default_interface`.
-/// Covers macOS utun/ipsec/ppp and Windows Wintun/TAP/Teredo/loopback leftovers.
+/// Covers macOS utun/ipsec and Windows Wintun/TAP/Teredo/loopback leftovers.
+/// `ppp*` is deliberately allowed because PPPoE broadband uplinks use `ppp0`.
 pub fn is_tunnel_interface(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     lower.starts_with("utun")
         || lower.starts_with("tun")
         || lower.starts_with("ipsec")
-        || lower.starts_with("ppp")
         || lower.starts_with("wintun")
         || lower.starts_with("tap")
         || lower.starts_with("isatap")
@@ -1309,11 +1309,11 @@ mod parsing_tests {
         assert!(is_tunnel_interface("utun420"));
         assert!(is_tunnel_interface("tun0"));
         assert!(is_tunnel_interface("ipsec0"));
-        assert!(is_tunnel_interface("ppp0"));
         assert!(is_tunnel_interface("Wintun"));
         assert!(is_tunnel_interface("Wintun 2"));
         assert!(is_tunnel_interface("TAP-Windows Adapter V9"));
         assert!(is_tunnel_interface("Loopback Pseudo-Interface 1"));
+        assert!(!is_tunnel_interface("ppp0"));
         assert!(!is_tunnel_interface("en0"));
         assert!(!is_tunnel_interface("bridge0"));
         assert!(!is_tunnel_interface("Ethernet"));

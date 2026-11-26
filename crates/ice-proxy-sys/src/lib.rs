@@ -27,9 +27,9 @@ pub use windows::WindowsSystemProxy;
 #[cfg(target_os = "linux")]
 pub use linux::{
     detect_backend, format_gvariant_string, format_gvariant_string_list, parse_gvariant_string,
-    parse_gvariant_string_list, parse_kde_proxy_endpoint, CmdOutput, GnomeProxyBackup,
-    KdeProxyBackup, KdeTools, LinuxCmdRunner, LinuxProxyBackend, LinuxSystemProxy,
-    RealLinuxCmdRunner,
+    parse_gvariant_string_list, parse_kde_proxy_endpoint, sanitized_host_tool_env, CmdOutput,
+    GnomeProxyBackup, KdeProxyBackup, KdeTools, LinuxCmdRunner, LinuxProxyBackend,
+    LinuxSystemProxy, RealLinuxCmdRunner,
 };
 
 pub use backup_file::{

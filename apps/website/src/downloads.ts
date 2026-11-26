@@ -76,9 +76,56 @@ export function linuxInstallerDownloadUrl(
   return `${RELEASE_BASE}/v${bare}/${linuxInstallerFilename(bare, variant)}`;
 }
 
-/** Detect Linux CPU architecture from the browser user agent. */
-export function detectLinuxArch(userAgent: string): "amd64" | "arm64" {
+export type LinuxArch = "amd64" | "arm64";
+
+export interface UserAgentDataLike {
+  getHighEntropyValues?: (
+    hints: readonly string[],
+  ) => Promise<{ architecture?: string }>;
+}
+
+export interface NavigatorLike {
+  userAgent: string;
+  userAgentData?: UserAgentDataLike;
+}
+
+/** Detect Linux CPU architecture synchronously from the browser user agent. */
+export function detectLinuxArch(userAgent: string): LinuxArch {
   return /aarch64|arm64/i.test(userAgent) ? "arm64" : "amd64";
+}
+
+/** Map a Linux CPU architecture to its primary AppImage installer variant. */
+export function linuxPrimaryInstallerVariant(
+  arch: LinuxArch,
+): "appimage-amd64" | "appimage-aarch64" {
+  return arch === "arm64" ? "appimage-aarch64" : "appimage-amd64";
+}
+
+/**
+ * Refine Linux CPU architecture via User-Agent Client Hints.
+ *
+ * Chromium freezes `navigator.userAgent` to `X11; Linux x86_64` even on arm64
+ * hosts; `navigator.userAgentData.getHighEntropyValues(["architecture"])`
+ * exposes the real architecture when supported. Falls back to the synchronous
+ * UA detection when Client Hints are unavailable or rejected.
+ */
+export async function refineLinuxArch(nav: NavigatorLike): Promise<LinuxArch> {
+  const fallback = detectLinuxArch(nav.userAgent);
+  const getHints = nav.userAgentData?.getHighEntropyValues;
+  if (typeof getHints !== "function") return fallback;
+  try {
+    const hints = await getHints.call(nav.userAgentData, ["architecture"]);
+    const arch = hints?.architecture?.trim().toLowerCase();
+    if (arch === "arm" || arch === "arm64" || arch === "aarch64") {
+      return "arm64";
+    }
+    if (arch === "x86" || arch === "x86_64" || arch === "amd64") {
+      return "amd64";
+    }
+  } catch {
+    // Permission denied or unsupported hint: keep the synchronous UA fallback.
+  }
+  return fallback;
 }
 
 /**

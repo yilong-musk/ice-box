@@ -6,13 +6,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::bypass::bypass_domains;
-use crate::linux::{format_host_port, run_checked, LinuxCmdRunner};
+use crate::linux::{bracket_ipv6_host, format_host_port, run_checked, LinuxCmdRunner};
 use crate::{ProxyBackup, ProxyEndpoints, ProxySysError};
 
 const SCHEMA_ROOT: &str = "org.gnome.system.proxy";
 const SCHEMA_HTTP: &str = "org.gnome.system.proxy.http";
 const SCHEMA_HTTPS: &str = "org.gnome.system.proxy.https";
 const SCHEMA_SOCKS: &str = "org.gnome.system.proxy.socks";
+const MEMORY_BACKEND_WARNING: &str = "Using the 'memory' GSettings backend";
 
 /// Full snapshot of `org.gnome.system.proxy` keys for lossless restore.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -67,7 +68,25 @@ fn set_value(
     key: &str,
     value: &str,
 ) -> Result<(), String> {
-    run_checked(runner, "gsettings", &["set", schema, key, value]).map(|_| ())
+    let args = ["set", schema, key, value];
+    let out = runner
+        .run("gsettings", &args)
+        .map_err(|e| format!("spawn gsettings: {e}"))?;
+    if !out.success {
+        let detail = if !out.stderr.trim().is_empty() {
+            out.stderr.trim()
+        } else {
+            out.stdout.trim()
+        };
+        return Err(format!("gsettings {args:?} failed: {detail}"));
+    }
+    if out.stderr.contains(MEMORY_BACKEND_WARNING) {
+        return Err(format!(
+            "gsettings {args:?} wrote to the in-memory GSettings backend: {}",
+            out.stderr.trim()
+        ));
+    }
+    Ok(())
 }
 
 pub fn backup(runner: &dyn LinuxCmdRunner) -> Result<ProxyBackup, ProxySysError> {
@@ -128,14 +147,16 @@ pub fn apply(runner: &dyn LinuxCmdRunner, endpoints: &ProxyEndpoints) -> Result<
     let pre_backup = backup(runner)?;
 
     let write = || -> Result<(), String> {
-        let http_host = format_gvariant_string(&endpoints.http_host);
+        let http_host_val = bracket_ipv6_host(&endpoints.http_host);
+        let http_host = format_gvariant_string(&http_host_val);
         let http_port = endpoints.http_port.to_string();
-        let socks_host = format_gvariant_string(
+        let socks_host_val = bracket_ipv6_host(
             endpoints
                 .socks_host
                 .as_deref()
                 .unwrap_or(&endpoints.http_host),
         );
+        let socks_host = format_gvariant_string(&socks_host_val);
         let socks_port = endpoints
             .socks_port
             .unwrap_or(endpoints.http_port)
@@ -153,6 +174,30 @@ pub fn apply(runner: &dyn LinuxCmdRunner, endpoints: &ProxyEndpoints) -> Result<
         // Best-effort: `use-same-proxy` is ignored when a schema omits it.
         let _ = set_value(runner, SCHEMA_ROOT, "use-same-proxy", "false");
         set_value(runner, SCHEMA_ROOT, "mode", "'manual'")?;
+
+        // Read back the persisted values to catch silent writes to an
+        // in-memory GSettings backend (e.g. broken GIO/dconf environment).
+        let actual_mode = get_string(runner, SCHEMA_ROOT, "mode")?;
+        if actual_mode != "manual" {
+            return Err(format!(
+                "gsettings read-back mismatch for {SCHEMA_ROOT} mode: expected 'manual', got '{actual_mode}'"
+            ));
+        }
+        if !http_host_val.is_empty() && endpoints.http_port != 0 {
+            let actual_http_host = get_string(runner, SCHEMA_HTTP, "host")?;
+            if actual_http_host != http_host_val {
+                return Err(format!(
+                    "gsettings read-back mismatch for {SCHEMA_HTTP} host: expected '{http_host_val}', got '{actual_http_host}'"
+                ));
+            }
+        } else if !socks_host_val.is_empty() {
+            let actual_socks_host = get_string(runner, SCHEMA_SOCKS, "host")?;
+            if actual_socks_host != socks_host_val {
+                return Err(format!(
+                    "gsettings read-back mismatch for {SCHEMA_SOCKS} host: expected '{socks_host_val}', got '{actual_socks_host}'"
+                ));
+            }
+        }
         Ok(())
     };
 

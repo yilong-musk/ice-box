@@ -44,13 +44,22 @@ pub fn update_installing() -> bool {
 
 /// Whether this runtime supports in-place updater replacement.
 ///
-/// On Linux, Tauri v2's updater only replaces AppImage installs (which export
-/// `$APPIMAGE`). `.deb` and other system-package installs still check
-/// `latest.json`, then open the release download page in the browser instead.
+/// Although `tauri-plugin-updater` supports `.deb` installs, our release
+/// manifest (`latest.json`) currently publishes `linux-x86_64` /
+/// `linux-aarch64` entries pointing to AppImages only. In-app installation is
+/// therefore restricted to AppImage installs; `.deb` and other system-package
+/// installs still check `latest.json` for newer versions and then open the
+/// GitHub Release download page in the browser.
 pub fn in_app_update_supported() -> bool {
     #[cfg(target_os = "linux")]
     {
-        in_app_update_supported_with(std::env::var_os("APPIMAGE").as_deref())
+        let current_exe = std::env::current_exe().ok();
+        in_app_update_supported_with(
+            tauri::utils::platform::bundle_type(),
+            std::env::var_os("APPIMAGE").as_deref(),
+            std::env::var_os("APPDIR").as_deref(),
+            current_exe.as_deref(),
+        )
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -59,8 +68,19 @@ pub fn in_app_update_supported() -> bool {
 }
 
 #[cfg(any(target_os = "linux", test))]
-fn in_app_update_supported_with(appimage_env: Option<&std::ffi::OsStr>) -> bool {
-    appimage_env.is_some_and(|v| !v.is_empty())
+fn in_app_update_supported_with(
+    bundle_type: Option<tauri::utils::config::BundleType>,
+    appimage_env: Option<&std::ffi::OsStr>,
+    appdir_env: Option<&std::ffi::OsStr>,
+    current_exe: Option<&std::path::Path>,
+) -> bool {
+    match bundle_type {
+        Some(tauri::utils::config::BundleType::AppImage) => true,
+        Some(_) => false,
+        None => current_exe.is_some_and(|exe| {
+            crate::autostart::appimage_path_for_exe(appimage_env, appdir_env, exe).is_some()
+        }),
+    }
 }
 
 /// GitHub Releases URL opened when in-app installation is not supported.
@@ -512,8 +532,8 @@ pub async fn install_app_update(app: AppHandle) -> Result<(), AppError> {
 }
 
 /// Open the GitHub Release page for the latest (or cached available) version
-/// in the system browser. Used on Linux `.deb` installs where in-place
-/// replacement is unavailable.
+/// in the system browser. Used on Linux `.deb` and other non-AppImage installs,
+/// where `latest.json` does not publish a package artifact for in-app install.
 #[tauri::command]
 pub async fn open_app_download(app: AppHandle) -> Result<(), AppError> {
     use tauri_plugin_opener::OpenerExt;
@@ -788,14 +808,68 @@ mod tests {
     }
 
     #[test]
-    fn linux_in_app_update_requires_non_empty_appimage_env() {
-        assert!(in_app_update_supported_with(Some(std::ffi::OsStr::new(
-            "/home/u/ice-box.AppImage"
-        ))));
-        assert!(!in_app_update_supported_with(Some(std::ffi::OsStr::new(
-            ""
-        ))));
-        assert!(!in_app_update_supported_with(None));
+    fn linux_in_app_update_uses_bundle_type_and_rejects_inherited_appimage() {
+        use std::ffi::OsStr;
+        use std::path::Path;
+        use tauri::utils::config::BundleType;
+
+        let mount_exe = Path::new("/tmp/.mount_icebox123/usr/bin/ice-box");
+        let deb_exe = Path::new("/usr/bin/ice-box");
+
+        // Packaged bundle type is authoritative when embedded by tauri-bundler.
+        assert!(in_app_update_supported_with(
+            Some(BundleType::AppImage),
+            None,
+            None,
+            Some(mount_exe),
+        ));
+        assert!(!in_app_update_supported_with(
+            Some(BundleType::Deb),
+            Some(OsStr::new("/home/u/Cursor.AppImage")),
+            Some(OsStr::new("/tmp/.mount_Cursor123")),
+            Some(deb_exe),
+        ));
+
+        // Dev/unpatched fallback (bundle_type == None): genuine AppImage passes.
+        assert!(in_app_update_supported_with(
+            None,
+            Some(OsStr::new("/home/u/ice-box.AppImage")),
+            Some(OsStr::new("/tmp/.mount_icebox123")),
+            Some(mount_exe),
+        ));
+        assert!(in_app_update_supported_with(
+            None,
+            Some(OsStr::new("/home/u/ice-box.AppImage")),
+            None,
+            Some(mount_exe),
+        ));
+
+        // Foreign $APPIMAGE inherited from another AppImage's terminal on a
+        // `/usr/bin/ice-box` install must return false.
+        assert!(!in_app_update_supported_with(
+            None,
+            Some(OsStr::new("/home/u/Cursor.AppImage")),
+            Some(OsStr::new("/tmp/.mount_Cursor123")),
+            Some(deb_exe),
+        ));
+        assert!(!in_app_update_supported_with(
+            None,
+            Some(OsStr::new("/home/u/Cursor.AppImage")),
+            None,
+            Some(deb_exe),
+        ));
+        assert!(!in_app_update_supported_with(
+            None,
+            Some(OsStr::new("")),
+            Some(OsStr::new("/tmp/.mount_icebox123")),
+            Some(mount_exe),
+        ));
+        assert!(!in_app_update_supported_with(
+            None,
+            None,
+            None,
+            Some(deb_exe)
+        ));
     }
 
     #[test]

@@ -52,22 +52,56 @@ where
         .any(|arg| arg.as_ref() == std::ffi::OsStr::new(AUTOSTART_FLAG))
 }
 
+/// Return the enclosing `.AppImage` path only when `current_exe` actually runs
+/// from this process's own AppImage mount.
+///
+/// Desktop terminals spawned inside another AppImage (such as an IDE's
+/// integrated terminal) inherit the parent's `$APPIMAGE` / `$APPDIR`. Verifying
+/// that `current_exe` sits under `$APPDIR` (or under `/tmp/.mount_` when
+/// `$APPDIR` is absent) prevents a `.deb` install launched from such a terminal
+/// from recording a foreign AppImage path.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn appimage_path_for_exe(
+    appimage: Option<&std::ffi::OsStr>,
+    appdir: Option<&std::ffi::OsStr>,
+    current_exe: &Path,
+) -> Option<std::path::PathBuf> {
+    let appimage = appimage.filter(|v| !v.is_empty())?;
+    let exe_in_mount = match appdir.filter(|v| !v.is_empty()) {
+        Some(dir) => path_is_under(current_exe, Path::new(dir)),
+        None => is_appimage_mount_path(current_exe),
+    };
+    exe_in_mount.then(|| std::path::PathBuf::from(appimage))
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn path_is_under(exe: &Path, dir: &Path) -> bool {
+    if let (Ok(canon_exe), Ok(canon_dir)) = (exe.canonicalize(), dir.canonicalize()) {
+        return canon_dir.parent().is_some() && canon_exe.starts_with(&canon_dir);
+    }
+    dir.parent().is_some() && exe.starts_with(dir)
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn is_appimage_mount_path(exe: &Path) -> bool {
+    let candidate = exe.canonicalize().unwrap_or_else(|_| exe.to_path_buf());
+    candidate.to_string_lossy().starts_with("/tmp/.mount_")
+}
+
 /// Resolve the stable executable path to record in the login item.
 ///
 /// On Linux AppImage launches, `current_exe()` points inside the ephemeral
 /// `/tmp/.mount_*` FUSE mount that vanishes on exit; `$APPIMAGE` carries the
-/// real `.AppImage` file path on disk.
+/// real `.AppImage` file path on disk when verified against `$APPDIR` /
+/// `current_exe`.
 #[cfg(any(target_os = "linux", test))]
 fn resolve_linux_executable(
     appimage_env: Option<&std::ffi::OsStr>,
+    appdir_env: Option<&std::ffi::OsStr>,
     current_exe: &Path,
 ) -> std::path::PathBuf {
-    if let Some(appimage) = appimage_env {
-        if !appimage.is_empty() {
-            return std::path::PathBuf::from(appimage);
-        }
-    }
-    current_exe.to_path_buf()
+    appimage_path_for_exe(appimage_env, appdir_env, current_exe)
+        .unwrap_or_else(|| current_exe.to_path_buf())
 }
 
 /// Register (or drop) the login item for this process's executable.
@@ -75,7 +109,11 @@ pub fn set_enabled(enabled: bool) -> Result<(), String> {
     let current =
         std::env::current_exe().map_err(|err| format!("resolve the running executable: {err}"))?;
     #[cfg(target_os = "linux")]
-    let exe = resolve_linux_executable(std::env::var_os("APPIMAGE").as_deref(), &current);
+    let exe = resolve_linux_executable(
+        std::env::var_os("APPIMAGE").as_deref(),
+        std::env::var_os("APPDIR").as_deref(),
+        &current,
+    );
     #[cfg(not(target_os = "linux"))]
     let exe = current;
     imp::set_enabled(&exe, enabled)
@@ -538,20 +576,53 @@ mod tests {
     }
 
     #[test]
-    fn linux_executable_prefers_appimage_env_over_ephemeral_mount() {
-        let current = Path::new("/tmp/.mount_ice-bo1234/usr/bin/ice-box");
+    fn linux_executable_prefers_verified_appimage_env_and_rejects_inherited_appimage() {
+        let mount_exe = Path::new("/tmp/.mount_ice-bo1234/usr/bin/ice-box");
+        let appdir = std::ffi::OsStr::new("/tmp/.mount_ice-bo1234");
+        let appimage = std::ffi::OsStr::new("/home/u/Apps/ice-box.AppImage");
+
+        // Genuine AppImage with matching APPDIR.
         assert_eq!(
-            resolve_linux_executable(
-                Some(std::ffi::OsStr::new("/home/u/Apps/ice-box.AppImage")),
-                current
-            ),
+            resolve_linux_executable(Some(appimage), Some(appdir), mount_exe),
             PathBuf::from("/home/u/Apps/ice-box.AppImage")
         );
+        // Genuine AppImage without APPDIR falls back to `/tmp/.mount_` check.
         assert_eq!(
-            resolve_linux_executable(Some(std::ffi::OsStr::new("")), current),
-            current
+            resolve_linux_executable(Some(appimage), None, mount_exe),
+            PathBuf::from("/home/u/Apps/ice-box.AppImage")
         );
-        assert_eq!(resolve_linux_executable(None, current), current);
+        // Empty or absent APPIMAGE keeps current_exe.
+        assert_eq!(
+            resolve_linux_executable(Some(std::ffi::OsStr::new("")), Some(appdir), mount_exe),
+            mount_exe
+        );
+        assert_eq!(
+            resolve_linux_executable(None, Some(appdir), mount_exe),
+            mount_exe
+        );
+
+        // `.deb` install launched from another AppImage's terminal (foreign
+        // $APPIMAGE and $APPDIR) must keep `/usr/bin/ice-box`.
+        let deb_exe = Path::new("/usr/bin/ice-box");
+        let foreign_appimage = std::ffi::OsStr::new("/home/u/Apps/Cursor.AppImage");
+        let foreign_appdir = std::ffi::OsStr::new("/tmp/.mount_Cursor999");
+        assert_eq!(
+            resolve_linux_executable(Some(foreign_appimage), Some(foreign_appdir), deb_exe),
+            deb_exe
+        );
+        assert_eq!(
+            resolve_linux_executable(Some(foreign_appimage), None, deb_exe),
+            deb_exe
+        );
+        // Root APPDIR must never falsely match arbitrary executables.
+        assert_eq!(
+            resolve_linux_executable(
+                Some(foreign_appimage),
+                Some(std::ffi::OsStr::new("/")),
+                deb_exe
+            ),
+            deb_exe
+        );
     }
 
     #[test]

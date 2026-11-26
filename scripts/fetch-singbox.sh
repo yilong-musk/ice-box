@@ -89,8 +89,13 @@ fi
 cp "$src" "$dest/$ICE_BIN"
 chmod +x "$dest/$ICE_BIN" 2>/dev/null || true
 echo "Installed $dest/$ICE_BIN"
-if ! "$dest/$ICE_BIN" version 2>/dev/null; then
-  echo "note: cannot execute $dest/$ICE_BIN on this host (cross-fetched)"
+HOST_PLATFORM="$(ice_host_platform)"
+if [[ "$ICE_PLATFORM_ALIAS" == "$HOST_PLATFORM" ]]; then
+  "$dest/$ICE_BIN" version
+else
+  if ! "$dest/$ICE_BIN" version 2>/dev/null; then
+    echo "note: cannot execute $dest/$ICE_BIN on this host (cross-fetched for $ICE_PLATFORM_ALIAS on ${HOST_PLATFORM:-unknown})"
+  fi
 fi
 
 # Windows archive companions: libcronet.dll (NaiveProxy outbound, shipped in

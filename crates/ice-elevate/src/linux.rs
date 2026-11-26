@@ -8,12 +8,26 @@
 //! the dialog (`ElevateError::Cancelled`); exit status 127 means Polkit denied
 //! authorization or could not authenticate (`ElevateError::Denied`).
 
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::{ElevateError, ElevateOutcome};
 
-const PKEXEC_CANDIDATES: &[&str] = &["/usr/bin/pkexec", "/bin/pkexec"];
+const PKEXEC_CANDIDATES: &[&str] = &["/usr/bin/pkexec", "/bin/pkexec", "/run/wrappers/bin/pkexec"];
+
+/// Validate a `$PATH`-discovered `pkexec` binary: it must be a regular file
+/// owned by root (`uid == 0`), have the setuid bit set (`0o4000`), and not be
+/// group- or world-writable (`mode & 0o022 == 0`). This prevents a trojan
+/// `pkexec` earlier in a user's `PATH` from harvesting the admin password.
+pub(crate) fn is_trusted_pkexec_meta(is_file: bool, uid: u32, mode: u32) -> bool {
+    is_file && uid == 0 && (mode & 0o4000 != 0) && (mode & 0o022 == 0)
+}
+
+fn is_trusted_pkexec(path: &Path) -> bool {
+    std::fs::metadata(path)
+        .is_ok_and(|meta| is_trusted_pkexec_meta(meta.is_file(), meta.uid(), meta.mode()))
+}
 
 fn find_pkexec() -> Option<PathBuf> {
     for candidate in PKEXEC_CANDIDATES {
@@ -25,7 +39,7 @@ fn find_pkexec() -> Option<PathBuf> {
     if let Some(paths) = std::env::var_os("PATH") {
         for dir in std::env::split_paths(&paths) {
             let candidate = dir.join("pkexec");
-            if candidate.is_file() {
+            if is_trusted_pkexec(&candidate) {
                 return Some(candidate);
             }
         }
@@ -76,9 +90,16 @@ pub fn map_pkexec_output(
         // Polkit documented status 127: not authorized / no agent / execution failed.
         Some(127) => {
             let detail = if stderr_trimmed.is_empty() {
-                "polkit authorization failed (exit 127)".to_string()
+                "polkit authorization failed (exit 127); ensure a polkit authentication agent is running and the helper binary is accessible to root".to_string()
             } else {
-                stderr_trimmed.to_string()
+                let lower = stderr_trimmed.to_ascii_lowercase();
+                if lower.contains("permission") || lower.contains("access") {
+                    format!(
+                        "{stderr_trimmed} (hint: root must be able to access and execute the helper binary; if running from an AppImage or private mount, ensure it is staged outside the mount or use scripts/install-helper-linux.sh)"
+                    )
+                } else {
+                    stderr_trimmed.to_string()
+                }
             };
             Err(ElevateError::Denied(detail))
         }
@@ -137,6 +158,57 @@ mod tests {
     fn exit_127_maps_to_denied_with_stderr() {
         let err = map_pkexec_output(Some(127), "", "Not authorized\n").unwrap_err();
         assert!(matches!(err, ElevateError::Denied(msg) if msg.contains("Not authorized")));
+    }
+
+    #[test]
+    fn exit_127_includes_hint_when_empty_or_permission_denied() {
+        let empty = map_pkexec_output(Some(127), "", "").unwrap_err();
+        assert!(matches!(
+            empty,
+            ElevateError::Denied(msg) if msg.contains("127") && msg.contains("accessible to root")
+        ));
+
+        let perm = map_pkexec_output(
+            Some(127),
+            "",
+            "Error executing command as another user: Permission denied\n",
+        )
+        .unwrap_err();
+        assert!(matches!(
+            perm,
+            ElevateError::Denied(msg)
+                if msg.contains("Permission denied") && msg.contains("hint:")
+        ));
+
+        let access = map_pkexec_output(Some(127), "", "Cannot access binary\n").unwrap_err();
+        assert!(matches!(
+            access,
+            ElevateError::Denied(msg)
+                if msg.contains("Cannot access") && msg.contains("hint:")
+        ));
+    }
+
+    #[test]
+    fn pkexec_candidates_include_nixos_wrapper() {
+        assert!(PKEXEC_CANDIDATES.contains(&"/run/wrappers/bin/pkexec"));
+    }
+
+    #[test]
+    fn trusted_pkexec_meta_requires_root_setuid_non_writable_regular_file() {
+        assert!(is_trusted_pkexec_meta(true, 0, 0o104755));
+        assert!(is_trusted_pkexec_meta(true, 0, 0o4755));
+        assert!(is_trusted_pkexec_meta(true, 0, 0o4711));
+
+        // Not a regular file.
+        assert!(!is_trusted_pkexec_meta(false, 0, 0o4755));
+        // Not owned by root.
+        assert!(!is_trusted_pkexec_meta(true, 1000, 0o4755));
+        // Missing setuid bit.
+        assert!(!is_trusted_pkexec_meta(true, 0, 0o0755));
+        // Group-writable or world-writable.
+        assert!(!is_trusted_pkexec_meta(true, 0, 0o4775));
+        assert!(!is_trusted_pkexec_meta(true, 0, 0o4757));
+        assert!(!is_trusted_pkexec_meta(true, 0, 0o4777));
     }
 
     #[test]

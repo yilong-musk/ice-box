@@ -217,20 +217,33 @@ impl LinuxHost for ProcessLinuxHost {
     }
 
     fn dns_mode(&self) -> LinuxDnsMode {
-        if Command::new("resolvectl")
+        let resolvectl_ok = Command::new("resolvectl")
             .arg("status")
             .output()
-            .is_ok_and(|out| out.status.success())
-        {
-            return LinuxDnsMode::SystemdResolved;
-        }
+            .is_ok_and(|out| out.status.success());
         let resolv = Path::new("/etc/resolv.conf");
-        if let Ok(meta) = std::fs::symlink_metadata(resolv) {
-            if meta.file_type().is_file() {
-                return LinuxDnsMode::StaticResolvConf;
-            }
+        let meta = std::fs::symlink_metadata(resolv).ok();
+        let is_regular_file = meta.as_ref().is_some_and(|m| m.file_type().is_file());
+        let symlink_target = if meta.as_ref().is_some_and(|m| m.file_type().is_symlink()) {
+            std::fs::read_link(resolv).ok()
+        } else {
+            None
+        };
+        let content = std::fs::read_to_string(resolv).ok();
+        let mode = classify_dns_mode(
+            resolvectl_ok,
+            is_regular_file,
+            symlink_target.as_deref(),
+            content.as_deref(),
+        );
+        if resolvectl_ok && mode != LinuxDnsMode::SystemdResolved {
+            tracing::warn!(
+                ?mode,
+                symlink_target = ?symlink_target,
+                "systemd-resolved is running but /etc/resolv.conf does not point to its stub listener; not using per-link resolved DNS"
+            );
         }
-        LinuxDnsMode::Unmanaged
+        mode
     }
 
     fn dns_servers(&self, service: &str) -> Result<Vec<String>, TunError> {
@@ -392,6 +405,62 @@ pub fn parse_resolvectl_has_global_domain(output: &str) -> bool {
     })
 }
 
+/// Classify the Linux DNS management mode from host observations.
+///
+/// Only selects [`LinuxDnsMode::SystemdResolved`] when `resolvectl status`
+/// succeeded AND `/etc/resolv.conf` actually routes through `systemd-resolved`'s
+/// stub listener: either its symlink target ends with `stub-resolv.conf` (e.g.
+/// `/run/systemd/resolve/stub-resolv.conf`), or its parsed nameservers are
+/// non-empty and all `127.0.0.53` / `127.0.0.54`. Otherwise falls back to
+/// [`LinuxDnsMode::StaticResolvConf`] when `/etc/resolv.conf` is a regular
+/// (non-symlink) file, or [`LinuxDnsMode::Unmanaged`].
+pub fn classify_dns_mode(
+    resolvectl_ok: bool,
+    is_regular_file: bool,
+    symlink_target: Option<&Path>,
+    resolv_conf_content: Option<&str>,
+) -> LinuxDnsMode {
+    if resolvectl_ok {
+        let symlink_points_to_stub = symlink_target
+            .is_some_and(|target| target.file_name().is_some_and(|n| n == "stub-resolv.conf"));
+        let uses_stub_servers = resolv_conf_content.is_some_and(|content| {
+            let servers = parse_resolv_conf_servers(content);
+            !servers.is_empty()
+                && servers
+                    .iter()
+                    .all(|s| s == "127.0.0.53" || s == "127.0.0.54")
+        });
+        if symlink_points_to_stub || uses_stub_servers {
+            return LinuxDnsMode::SystemdResolved;
+        }
+    }
+    if is_regular_file {
+        LinuxDnsMode::StaticResolvConf
+    } else {
+        LinuxDnsMode::Unmanaged
+    }
+}
+
+/// Whether `state` still refers to the interface recorded in the journal.
+///
+/// When both a live interface state and a journaled `ifindex` exist, only an
+/// exact `ifindex` match is treated as ours — an unrelated interface reusing
+/// the same name is never attributed to us. When a legacy/partial journal lacks
+/// an `ifindex`, any interface with that name fails closed as still present.
+fn owned_interface_present(state: Option<&LinuxInterfaceState>, expected_id: Option<&str>) -> bool {
+    match (state, expected_id) {
+        (Some(st), Some(id)) => st.ifindex.to_string() == id,
+        (Some(_), None) => true,
+        (None, _) => false,
+    }
+}
+
+fn record_restore_error(slot: &mut Option<TunError>, err: TunError) {
+    if slot.is_none() {
+        *slot = Some(err);
+    }
+}
+
 /// Parse `nameserver <ip>` lines from `/etc/resolv.conf`.
 pub fn parse_resolv_conf_servers(content: &str) -> Vec<String> {
     let mut servers = Vec::new();
@@ -527,13 +596,16 @@ impl LinuxTunBackend {
         }
     }
 
-    fn rollback_dns_after_apply_failure(
-        &mut self,
-        service: &str,
-        before: &[String],
-        apply_err: TunError,
-    ) -> TunError {
-        let dns_result = self.coordinator.set_dns(service, before);
+    fn rollback_dns_after_apply_failure(&mut self, service: &str, apply_err: TunError) -> TunError {
+        if service != LINUX_RESOLV_CONF_SERVICE {
+            // Resolved per-link DNS disappears automatically when the TUN link
+            // is destroyed by core stop; revert best-effort before stopping.
+            let _ = self.coordinator.set_dns(service, &[]);
+            return self.rollback_after_apply_failure(apply_err);
+        }
+        // Static /etc/resolv.conf: empty servers restores the helper's exact
+        // raw-byte backup (or no-ops if no backup was written).
+        let dns_result = self.coordinator.set_dns(service, &[]);
         let core_result = self.coordinator.stop();
         match (dns_result, core_result) {
             (Ok(()), Ok(())) => apply_err,
@@ -637,30 +709,44 @@ impl LinuxTunBackend {
         Ok(false)
     }
 
-    fn observe_owned_state(&self, config: &TunConfig, name: &str) -> Result<OwnedState, TunError> {
+    fn observe_owned_state(
+        &self,
+        config: &TunConfig,
+        name: &str,
+        expected_ifindex: u32,
+    ) -> Result<OwnedState, TunError> {
         let expected_addresses = &config.addresses;
         let expected_routes = routes::auto_route_destinations(config);
         let mut last_diagnostic = String::from("interface not observed");
+        let mut last_ipv6_only_failure = false;
         for _ in 0..APPLY_CONVERGE_TRIES {
             let state = self.host.interface_state(name)?;
-            let missing_addresses = state.as_ref().map_or_else(
-                || expected_addresses.to_vec(),
-                |interface| {
-                    expected_addresses
-                        .iter()
-                        .filter(|address| !interface.addresses.contains(*address))
-                        .cloned()
-                        .collect::<Vec<_>>()
-                },
-            );
-            let addresses_ok = state.is_some() && missing_addresses.is_empty();
-            let mut missing_route = None;
-            if addresses_ok {
-                for destination in &expected_routes {
+            let id_matches = state
+                .as_ref()
+                .is_some_and(|interface| interface.ifindex == expected_ifindex);
+            let missing_addresses = if id_matches {
+                state.as_ref().map_or_else(
+                    || expected_addresses.to_vec(),
+                    |interface| {
+                        expected_addresses
+                            .iter()
+                            .filter(|address| !interface.addresses.contains(*address))
+                            .cloned()
+                            .collect::<Vec<_>>()
+                    },
+                )
+            } else {
+                expected_addresses.to_vec()
+            };
+            let v4_addresses_ok = id_matches && !missing_addresses.iter().any(|a| !a.contains(':'));
+            let v6_addresses_ok = id_matches && !missing_addresses.iter().any(|a| a.contains(':'));
+            let mut missing_v4_route = None;
+            if v4_addresses_ok {
+                for destination in expected_routes.iter().filter(|d| !d.contains(':')) {
                     if self.route_resolves_to(destination, name)? {
                         continue;
                     }
-                    missing_route = Some(format!(
+                    missing_v4_route = Some(format!(
                         "{destination} -> {}",
                         self.host
                             .route_interface(&routes::route_probe_address(destination))?
@@ -669,8 +755,24 @@ impl LinuxTunBackend {
                     break;
                 }
             }
-            let routes_ok = addresses_ok && missing_route.is_none();
-            if routes_ok {
+            let mut missing_v6_route = None;
+            if v6_addresses_ok {
+                for destination in expected_routes.iter().filter(|d| d.contains(':')) {
+                    if self.route_resolves_to(destination, name)? {
+                        continue;
+                    }
+                    missing_v6_route = Some(format!(
+                        "{destination} -> {}",
+                        self.host
+                            .route_interface(&routes::route_probe_address(destination))?
+                            .unwrap_or_else(|| "<none>".into())
+                    ));
+                    break;
+                }
+            }
+            let ipv4_ok = v4_addresses_ok && missing_v4_route.is_none();
+            let ipv6_ok = v6_addresses_ok && missing_v6_route.is_none();
+            if ipv4_ok && ipv6_ok {
                 let owned_addresses = expected_addresses
                     .iter()
                     .map(|cidr| CidrRecord {
@@ -692,13 +794,22 @@ impl LinuxTunBackend {
                     routes: owned_routes,
                 });
             }
+            last_ipv6_only_failure = ipv4_ok && !ipv6_ok && routes::has_v6(expected_addresses);
+            let missing_route = missing_v4_route.or(missing_v6_route);
             let interface_summary = state.map_or_else(
                 || "<missing>".to_string(),
                 |interface| {
-                    format!(
-                        "ifindex={} up={} addresses={:?}",
-                        interface.ifindex, interface.up, interface.addresses
-                    )
+                    if interface.ifindex != expected_ifindex {
+                        format!(
+                            "ifindex={} (expected {expected_ifindex}) up={} addresses={:?}",
+                            interface.ifindex, interface.up, interface.addresses
+                        )
+                    } else {
+                        format!(
+                            "ifindex={} up={} addresses={:?}",
+                            interface.ifindex, interface.up, interface.addresses
+                        )
+                    }
                 },
             );
             last_diagnostic = format!(
@@ -706,11 +817,19 @@ impl LinuxTunBackend {
             );
             std::thread::sleep(Duration::from_millis(APPLY_CONVERGE_DELAY_MS));
         }
+        let elapsed_ms = APPLY_CONVERGE_TRIES * APPLY_CONVERGE_DELAY_MS as u32;
+        if last_ipv6_only_failure {
+            return Err(TunError::new(
+                ErrorCode::TunHealthcheckFailed,
+                format!(
+                    "interface {name} converged for IPv4, but IPv6 addresses/routes did not converge within {elapsed_ms} ms (IPv6 may be disabled on this host via ipv6.disable=1 or sysctl net.ipv6.conf.all.disable_ipv6=1; enable IPv6 to use dual-stack TUN); last observation: {last_diagnostic}"
+                ),
+            ));
+        }
         Err(TunError::new(
             ErrorCode::TunHealthcheckFailed,
             format!(
-                "interface {name} did not converge to the required addresses and routes within {} ms; last observation: {last_diagnostic}",
-                APPLY_CONVERGE_TRIES * APPLY_CONVERGE_DELAY_MS as u32
+                "interface {name} did not converge to the required addresses and routes within {elapsed_ms} ms; last observation: {last_diagnostic}"
             ),
         ))
     }
@@ -763,10 +882,7 @@ impl LinuxTunBackend {
             None => (true, false),
             Some(after) => {
                 let (service, _) = dns_snapshot_parts(&after.platform_snapshot);
-                if interface_gone
-                    && service != LINUX_RESOLV_CONF_SERVICE
-                    && applied.interface_name.as_deref() == Some(service.as_str())
-                {
+                if interface_gone && service != LINUX_RESOLV_CONF_SERVICE {
                     return (false, false);
                 }
                 match self.dns_matches_after(after) {
@@ -849,6 +965,19 @@ impl TunBackend for LinuxTunBackend {
             LinuxDnsMode::Unmanaged
         };
 
+        // Snapshot whether an interface with the chosen name already exists
+        // before starting the core so we never mistakenly adopt a pre-existing
+        // foreign interface with the same name/ifindex.
+        if let Some(existing) = self.host.interface_state(name)? {
+            return Err(TunError::new(
+                ErrorCode::TunApplyFailed,
+                format!(
+                    "interface {name} already exists (ifindex {}) before core start; refusing to adopt it",
+                    existing.ifindex
+                ),
+            ));
+        }
+
         let core_pid = self.coordinator.start_with_config(&self.config_path)?;
         let mut state = None;
         for _ in 0..INTERFACE_APPEAR_TRIES {
@@ -884,7 +1013,7 @@ impl TunBackend for LinuxTunBackend {
             return Err(self.rollback_after_apply_failure(err));
         }
 
-        let observed = match self.observe_owned_state(config, name) {
+        let observed = match self.observe_owned_state(config, name, initial_state.ifindex) {
             Ok(observed) => observed,
             Err(err) => {
                 return Err(self.rollback_after_apply_failure(err));
@@ -932,25 +1061,33 @@ impl TunBackend for LinuxTunBackend {
                 .iter()
                 .map(|s| s.to_string())
                 .collect();
-            if let Err(err) = self.coordinator.set_dns(service, &target) {
-                return Err(self.rollback_dns_after_apply_failure(service, &before, err));
-            }
             let after_snap = DnsSnapshot {
                 platform_snapshot: dns_snapshot(service, &target),
             };
             dns_before = Some(before_snap);
             dns_after = Some(after_snap);
+            // Persist DNS intent (dns_before + expected dns_after) BEFORE
+            // mutating OS DNS so a crash between set_dns and DNS_APPLIED still
+            // leaves DNS recoverable.
+            if let Err(err) = self.journal_record(steps::ROUTES_ADDED, |journal| {
+                journal.dns_before = dns_before.clone();
+                journal.dns_after = dns_after.clone();
+            }) {
+                return Err(self.rollback_after_apply_failure(err));
+            }
+            if let Err(err) = self.coordinator.set_dns(service, &target) {
+                return Err(self.rollback_dns_after_apply_failure(service, err));
+            }
             if let Err(err) = self.journal_record(steps::DNS_APPLIED, |journal| {
                 journal.dns_before = dns_before.clone();
                 journal.dns_after = dns_after.clone();
             }) {
-                return Err(self.rollback_dns_after_apply_failure(service, &before, err));
+                return Err(self.rollback_dns_after_apply_failure(service, err));
             }
             if let Some(after) = &dns_after {
                 if self.dns_matches_after_until_deadline(after) != Some(true) {
                     return Err(self.rollback_dns_after_apply_failure(
                         service,
-                        &before,
                         TunError::new(
                             ErrorCode::TunHealthcheckFailed,
                             format!(
@@ -996,25 +1133,33 @@ impl TunBackend for LinuxTunBackend {
             _ => false,
         };
         let interface_up = state.as_ref().is_some_and(|st| st.up && id_matches);
-        let addresses_present = state.as_ref().is_some_and(|st| {
-            applied
-                .expected_addresses
-                .iter()
-                .all(|addr| st.addresses.contains(addr))
-        });
-        let mut routes_owned = true;
-        for destination in &applied.expected_routes {
-            if !self.route_resolves_to(destination, name)? {
-                routes_owned = false;
-                break;
+        let addresses_present = id_matches
+            && state.as_ref().is_some_and(|st| {
+                applied
+                    .expected_addresses
+                    .iter()
+                    .all(|addr| st.addresses.contains(addr))
+            });
+        let mut routes_owned = id_matches;
+        if routes_owned {
+            for destination in &applied.expected_routes {
+                if !self.route_resolves_to(destination, name)? {
+                    routes_owned = false;
+                    break;
+                }
             }
         }
         let control_path = self.host.route_interface("127.0.0.1")?;
         let control_path_reachable = control_path.as_deref().is_some_and(|iface| iface != name);
-        let interface_gone = state.is_none();
-        let (dns_consistent, dns_owned) = self.dns_verify_flags(applied, interface_gone);
-        let owned_routes_remain = self.owned_routes_remain(applied, name)?;
-        let nothing_owned = interface_gone && !owned_routes_remain && !dns_owned;
+        let our_interface_gone = !owned_interface_present(state.as_ref(), expected_id);
+        let foreign_reused_name = state.is_some() && our_interface_gone;
+        let (dns_consistent, dns_owned) = self.dns_verify_flags(applied, our_interface_gone);
+        let owned_routes_remain = if foreign_reused_name {
+            false
+        } else {
+            self.owned_routes_remain(applied, name)?
+        };
+        let nothing_owned = our_interface_gone && !owned_routes_remain && !dns_owned;
         let health = TunHealth {
             interface_up,
             addresses_present,
@@ -1037,147 +1182,216 @@ impl TunBackend for LinuxTunBackend {
 
     fn restore(&mut self, applied: &AppliedTun) -> Result<(), TunError> {
         let mut restore_error: Option<TunError> = None;
+        let expected_id = applied.interface_id.as_deref();
 
         // For systemd-resolved per-link DNS (attached to the TUN link itself),
-        // revert before stopping the core while the link is still present.
-        let mut dns_already_restored = false;
+        // revert best-effort before stopping the core while our link (matching
+        // ifindex) is still present. Once the TUN interface is destroyed, the
+        // kernel and systemd-resolved drop per-link DNS automatically, so a
+        // drift or revert failure never flags RecoveryRequired once gone.
         if let Some(after) = &applied.dns_after {
-            let (service, expected) = dns_snapshot_parts(&after.platform_snapshot);
+            let (service, _) = dns_snapshot_parts(&after.platform_snapshot);
             if service != LINUX_RESOLV_CONF_SERVICE
                 && applied.interface_name.as_deref() == Some(service.as_str())
             {
-                if let Ok(Some(_)) = self.host.interface_state(&service) {
-                    if let Ok(current) = self.host.dns_servers(&service) {
-                        if current == expected {
-                            if let Err(err) = self.coordinator.set_dns(&service, &[]) {
-                                restore_error = Some(err);
-                            } else {
-                                dns_already_restored = true;
-                            }
-                        } else {
-                            restore_error = Some(TunError::new(
-                                ErrorCode::TunRecoveryRequired,
-                                "system DNS on TUN link no longer matches dns_after; external change preserved",
-                            ));
-                            dns_already_restored = true;
+                match self.host.interface_state(&service) {
+                    Ok(Some(st)) if owned_interface_present(Some(&st), expected_id) => {
+                        if let Err(err) = self.coordinator.set_dns(&service, &[]) {
+                            tracing::warn!(
+                                service = %service,
+                                error = %err,
+                                "best-effort per-link resolvectl revert failed before core stop; link teardown will clear it"
+                            );
                         }
                     }
-                } else {
-                    // Link already gone: flush caches best-effort and mark clean.
-                    let _ = self.coordinator.set_dns(&service, &[]);
-                    dns_already_restored = true;
+                    Ok(None) => {
+                        // Link already gone: flush caches best-effort.
+                        let _ = self.coordinator.set_dns(&service, &[]);
+                    }
+                    Ok(Some(foreign)) => {
+                        tracing::info!(
+                            service = %service,
+                            foreign_ifindex = foreign.ifindex,
+                            expected_id = ?expected_id,
+                            "skipping per-link DNS revert for unrelated interface reusing TUN name"
+                        );
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            service = %service,
+                            error = %err,
+                            "probe failed before per-link DNS revert; proceeding with core stop"
+                        );
+                    }
                 }
             }
         }
 
-        self.coordinator.stop().map_err(|err| {
-            TunError::new(
-                err.code,
-                format!("stop core during restore: {}", err.message),
-            )
-        })?;
-        tracing::info!("linux restore: elevated core stopped");
+        let core_stopped = match self.coordinator.stop() {
+            Ok(()) => {
+                tracing::info!("linux restore: elevated core stopped");
+                true
+            }
+            Err(err) => {
+                record_restore_error(
+                    &mut restore_error,
+                    TunError::new(
+                        ErrorCode::TunRecoveryRequired,
+                        format!("stop core during restore: {}", err.message),
+                    ),
+                );
+                false
+            }
+        };
 
         if let Err(err) = self.journal_record(steps::RESTORE_STARTED, |_| {}) {
-            if restore_error.is_none() {
-                restore_error = Some(err);
-            }
+            record_restore_error(&mut restore_error, err);
         }
 
         let name = applied.interface_name.as_deref();
-        let mut interface_gone = false;
-        for _ in 0..INTERFACE_TEARDOWN_TRIES {
-            let state = match name {
-                Some(name) => self.host.interface_state(name)?,
-                None => None,
-            };
-            if state.is_none() {
-                interface_gone = true;
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(INTERFACE_TEARDOWN_DELAY_MS));
-        }
-        if !interface_gone {
-            return Err(TunError::new(
-                ErrorCode::TunRecoveryRequired,
-                format!(
-                    "interface {} still present after core stop; removal needs the privileged helper",
-                    name.unwrap_or("<unknown>")
-                ),
-            ));
-        }
-        tracing::info!("linux restore: interface teardown verified");
-
+        let mut interface_gone = name.is_none();
+        let mut foreign_reused_name = false;
         if let Some(name) = name {
-            if self.owned_routes_remain(applied, name)? {
-                return Err(TunError::new(
-                    ErrorCode::TunRecoveryRequired,
-                    format!("owned routes still resolve to {name} after core stop"),
-                ));
+            let mut last_probe_err: Option<TunError> = None;
+            for attempt in 0..INTERFACE_TEARDOWN_TRIES {
+                match self.host.interface_state(name) {
+                    Ok(state) => {
+                        last_probe_err = None;
+                        if !owned_interface_present(state.as_ref(), expected_id) {
+                            foreign_reused_name = state.is_some();
+                            interface_gone = true;
+                            break;
+                        }
+                    }
+                    Err(err) => {
+                        last_probe_err = Some(err);
+                    }
+                }
+                if !core_stopped {
+                    break;
+                }
+                if attempt + 1 < INTERFACE_TEARDOWN_TRIES {
+                    std::thread::sleep(Duration::from_millis(INTERFACE_TEARDOWN_DELAY_MS));
+                }
+            }
+            if let Some(err) = last_probe_err {
+                record_restore_error(&mut restore_error, err);
+            } else if !interface_gone {
+                record_restore_error(
+                    &mut restore_error,
+                    TunError::new(
+                        ErrorCode::TunRecoveryRequired,
+                        format!(
+                            "interface {name} still present after core stop; removal needs the privileged helper"
+                        ),
+                    ),
+                );
+            } else {
+                tracing::info!(
+                    name,
+                    foreign_reused_name,
+                    "linux restore: interface teardown verified"
+                );
             }
         }
 
-        if let Err(err) = self.journal_record(steps::ROUTES_REMOVED, |journal| {
-            journal.routes.clear();
-            journal.expected_routes.clear();
-        }) {
-            if restore_error.is_none() {
-                restore_error = Some(err);
-            }
-        }
-        if let Err(err) = self.journal_record(steps::INTERFACE_REMOVED, |journal| {
-            journal.interface_name = None;
-            journal.interface_id = None;
-            journal.addresses.clear();
-            journal.expected_addresses.clear();
-        }) {
-            if restore_error.is_none() {
-                restore_error = Some(err);
-            }
-        }
-
-        if let Some(after) = &applied.dns_after {
-            if dns_already_restored {
-                if restore_error.is_none() {
-                    if let Err(err) = self.journal_record(steps::DNS_RESTORED, |journal| {
-                        journal.dns_before = None;
-                        journal.dns_after = None;
-                    }) {
-                        restore_error = Some(err);
+        let mut routes_clean = false;
+        if interface_gone {
+            if let Some(name) = name {
+                if foreign_reused_name {
+                    routes_clean = true;
+                } else {
+                    match self.owned_routes_remain(applied, name) {
+                        Ok(true) => {
+                            record_restore_error(
+                                &mut restore_error,
+                                TunError::new(
+                                    ErrorCode::TunRecoveryRequired,
+                                    format!("owned routes still resolve to {name} after core stop"),
+                                ),
+                            );
+                        }
+                        Ok(false) => {
+                            routes_clean = true;
+                        }
+                        Err(err) => {
+                            record_restore_error(&mut restore_error, err);
+                        }
                     }
                 }
             } else {
-                // Static `/etc/resolv.conf` compare-before-restore.
-                let (service, expected) = dns_snapshot_parts(&after.platform_snapshot);
-                let current = self.host.dns_servers(&service)?;
-                if current == expected {
-                    let (_, before) = dns_snapshot_parts(
-                        applied
-                            .dns_before
-                            .as_ref()
-                            .map(|b| b.platform_snapshot.as_str())
-                            .unwrap_or(""),
-                    );
-                    if let Err(err) = self.coordinator.set_dns(&service, &before) {
-                        if restore_error.is_none() {
-                            restore_error = Some(err);
-                        }
-                    } else if let Err(err) = self.journal_record(steps::DNS_RESTORED, |journal| {
-                        journal.dns_before = None;
-                        journal.dns_after = None;
-                    }) {
-                        if restore_error.is_none() {
-                            restore_error = Some(err);
+                routes_clean = true;
+            }
+        }
+
+        if routes_clean {
+            if let Err(err) = self.journal_record(steps::ROUTES_REMOVED, |journal| {
+                journal.routes.clear();
+                journal.expected_routes.clear();
+            }) {
+                record_restore_error(&mut restore_error, err);
+            }
+        }
+        if interface_gone && routes_clean {
+            if let Err(err) = self.journal_record(steps::INTERFACE_REMOVED, |journal| {
+                journal.interface_name = None;
+                journal.interface_id = None;
+                journal.addresses.clear();
+                journal.expected_addresses.clear();
+            }) {
+                record_restore_error(&mut restore_error, err);
+            }
+        }
+
+        // DNS restore runs regardless of core stop / interface teardown / route
+        // verification outcomes so static `/etc/resolv.conf` is never left
+        // stranded on the TUN public resolvers.
+        if let Some(after) = &applied.dns_after {
+            let (service, expected) = dns_snapshot_parts(&after.platform_snapshot);
+            if service == LINUX_RESOLV_CONF_SERVICE {
+                // Static `/etc/resolv.conf` compare-before-restore: pass an
+                // empty server list so the helper restores the exact pre-TUN
+                // raw-byte backup (preserving search/domain/options, %scope,
+                // and >4 nameservers).
+                match self.host.dns_servers(&service) {
+                    Ok(current) if current == expected => {
+                        match self.coordinator.set_dns(&service, &[]) {
+                            Ok(()) => {
+                                if let Err(err) =
+                                    self.journal_record(steps::DNS_RESTORED, |journal| {
+                                        journal.dns_before = None;
+                                        journal.dns_after = None;
+                                    })
+                                {
+                                    record_restore_error(&mut restore_error, err);
+                                }
+                            }
+                            Err(err) => {
+                                record_restore_error(&mut restore_error, err);
+                            }
                         }
                     }
-                } else {
-                    let err = TunError::new(
-                        ErrorCode::TunRecoveryRequired,
-                        "system DNS no longer matches the journal's dns_after snapshot; external change preserved",
-                    );
-                    if restore_error.is_none() {
-                        restore_error = Some(err);
+                    Ok(_) => {
+                        record_restore_error(
+                            &mut restore_error,
+                            TunError::new(
+                                ErrorCode::TunRecoveryRequired,
+                                "system DNS no longer matches the journal's dns_after snapshot; external change preserved",
+                            ),
+                        );
                     }
+                    Err(err) => {
+                        record_restore_error(&mut restore_error, err);
+                    }
+                }
+            } else if interface_gone {
+                // systemd-resolved per-link DNS disappeared with the TUN link;
+                // never fall through to static resolv.conf handling.
+                if let Err(err) = self.journal_record(steps::DNS_RESTORED, |journal| {
+                    journal.dns_before = None;
+                    journal.dns_after = None;
+                }) {
+                    record_restore_error(&mut restore_error, err);
                 }
             }
         }
@@ -1227,9 +1441,34 @@ impl TunBackend for LinuxTunBackend {
             return Ok(false);
         };
         let (service, expected) = dns_snapshot_parts(&after.platform_snapshot);
+        if service != LINUX_RESOLV_CONF_SERVICE
+            && applied.interface_name.as_deref() == Some(service.as_str())
+        {
+            let state = self.host.interface_state(&service)?;
+            if !owned_interface_present(state.as_ref(), applied.interface_id.as_deref()) {
+                return Ok(false);
+            }
+        }
         let current = self.host.dns_servers(&service)?;
         if current == expected {
             return Ok(false);
+        }
+        if service == LINUX_RESOLV_CONF_SERVICE {
+            // NetworkManager / dhclient rewrote /etc/resolv.conf on a network
+            // change: update the journal's dns_before baseline before
+            // re-applying. Because the rewritten file lacks our managed marker,
+            // the helper refreshes its raw-byte backup to the new network's
+            // exact bytes before writing the managed resolv.conf.
+            let new_before = DnsSnapshot {
+                platform_snapshot: dns_snapshot(&service, &current),
+            };
+            if let Some(path) = &self.journal_path {
+                if let Some(mut journal) = TunJournal::load(path)? {
+                    journal.dns_before = Some(new_before);
+                    journal.updated_at = ice_tun_journal::now_rfc3339();
+                    journal.save(path)?;
+                }
+            }
         }
         self.coordinator.set_dns(&service, &expected)?;
         tracing::info!(
@@ -1260,6 +1499,7 @@ mod parsing_tests {
         assert!(linux_outbound_interface_is_safe("wlp2s0"));
         assert!(linux_outbound_interface_is_safe("eth0.100"));
         assert!(linux_outbound_interface_is_safe("usb-0"));
+        assert!(linux_outbound_interface_is_safe("ppp0"));
 
         for virtual_iface in [
             "lo",
@@ -1272,7 +1512,6 @@ mod parsing_tests {
             "br-abcdef1234",
             "virbr0",
             "utun4",
-            "ppp0",
         ] {
             assert!(
                 !linux_outbound_interface_is_safe(virtual_iface),

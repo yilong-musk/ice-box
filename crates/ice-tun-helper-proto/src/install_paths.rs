@@ -24,9 +24,16 @@ pub const PLIST_DEST: &str = "/etc/systemd/system/ice-box-helper.service";
 /// Linux systemd service unit name and path.
 pub const SYSTEMD_UNIT_NAME: &str = "ice-box-helper.service";
 pub const SYSTEMD_UNIT_DEST: &str = "/etc/systemd/system/ice-box-helper.service";
+/// Linux root-only environment file (`0600`) holding the helper auth token so
+/// the `0644` systemd unit file does not expose it to other local users.
+pub const HELPER_ENV_DIR: &str = "/etc/ice-box";
+pub const HELPER_ENV_DEST: &str = "/etc/ice-box/helper.env";
 /// Linux root-owned copy of bundled resources (`geoip/*.srs`) so AppImage
 /// ephemeral `/tmp/.mount_*` paths are never relied upon after exit.
 pub const RESOURCES_DEST_DIR: &str = "/usr/local/libexec/ice-box/resources";
+/// Linux root-only backup of the pre-TUN static `/etc/resolv.conf` bytes.
+pub const RESOLV_CONF_BACKUP_DEST: &str =
+    "/usr/local/libexec/ice-box/run/resolv.conf.ice-box-backup";
 
 /// Well-known helper socket path.
 #[cfg(not(target_os = "linux"))]

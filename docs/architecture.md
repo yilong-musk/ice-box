@@ -252,9 +252,13 @@ where supported, with restart as a fallback; health checks determine success.
 Failures attempt to restore the previous configuration and release capture
 when service cannot be recovered. OS proxy settings are backed up before
 mutation and restored on stop, failure, or session shutdown (on Linux,
-`ice-proxy-sys` supports GNOME `gsettings` and KDE Plasma `kreadconfig` /
-`kwriteconfig` with KIO D-Bus reload, and `session_end_unix.rs` catches
-`SIGTERM`/`SIGHUP` over a self-pipe to restore `proxy-backup.json` on logout).
+`ice-proxy-sys` supports GNOME/GTK `gsettings` — with partial effect on
+non-GNOME GTK/Wayland desktops such as XFCE, Sway, and Hyprland, where GTK,
+Chromium/Electron, and Firefox honor GSettings while apps reading only
+environment variables do not — and KDE Plasma `kreadconfig` / `kwriteconfig`
+with KIO D-Bus reload; `session_end_unix.rs` catches `SIGTERM`/`SIGHUP` over a
+self-pipe to run the graceful quit path within a bounded deadline, falling back
+to `proxy-backup.json` restore and a hard `_exit` watchdog on logout).
 Spawning the bundled core — in the
 app process and in the elevated core launchers — retries a transiently locked
 executable (an in-place update or antivirus scan still holding the freshly
@@ -270,7 +274,7 @@ hidden, the shell shows it only for a user launch, and a login start that finds
 the data-dir lock already held exits without raising the running session. The
 login item itself is a per-user OS entry — a LaunchAgent plist on macOS,
 `HKCU\...\Run` on Windows, or `${XDG_CONFIG_HOME:-~/.config}/autostart/com.yilong-musk.icebox.desktop`
-on Linux (preferring `$APPIMAGE` when launched from an AppImage) — owned by the
+on Linux (preferring `$APPIMAGE` when verified to be running from its own AppImage mount) — owned by the
 shell (`autostart.rs`), rewritten to
 the running executable on every launch, and recorded in
 `settings.json` (`launch_at_login`) only after the OS write succeeded. The
@@ -395,13 +399,15 @@ Turning the setting off is the supported opt-out; the app does not use
 plaintext third-party IP lookup fallbacks.
 
 On macOS, Windows, and Linux AppImage installs, app updates run in Rust and
-verify signed artifacts before installation. Non-AppImage Linux installs (such
-as `.deb` packages) still check GitHub Releases for newer versions, but report
-`in_app_update_supported: false` and direct the user to the release download
-page instead of replacing package-manager files in place. Android downloads the
-arm64 APK from the same GitHub release and hands it to the system installer.
-The APK and `.deb` packages are release assets and are absent from
-`latest.json`.
+verify signed artifacts before installation. Although `tauri-plugin-updater`
+supports `.deb` installs, our `latest.json` manifest currently publishes
+`linux-x86_64` and `linux-aarch64` entries pointing to AppImages only, so
+in-app installation is restricted to AppImage installs; non-AppImage Linux
+installs (such as `.deb` packages) still check GitHub Releases for newer
+versions, report `in_app_update_supported: false`, and open the release
+download page in the browser. Android downloads the arm64 APK from the same
+GitHub release and hands it to the system installer. The APK and `.deb`
+packages are release assets and are absent from `latest.json`.
 On desktop, installation uses the same capture/core shutdown path as
 Quit. Update integrity signing is separate from OS application signing;
 artifact production and distribution policy are defined in

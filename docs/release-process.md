@@ -186,7 +186,8 @@ composed `docs/images/hero.png` and `docs/images/hero.zh-CN.png`.
 Open a PR from a `release/vX.Y.Z` branch and merge into `main` (`release.sh`
 opens it for you). `main` has
 branch protection: all CI checks (`gate (linux)`, `gate + build (macOS dmg)`,
-`gate + build (Windows nsis)`) must pass and one approving review is required.
+`gate + build (Windows nsis)`, `build (Linux x64)`, `build (Linux arm64)`) must
+pass and one approving review is required.
 GitHub does not allow approving your own PR, so a solo maintainer merges with
 `gh pr merge --merge --admin` (the repository allows administrator bypass).
 `gh pr merge --auto` only queues the merge; auto-merge must be enabled in the
@@ -256,7 +257,7 @@ checks out the commit the preflight validated:
 | `tag` | ubuntu-latest | the one gate the build and publish jobs wait on (skipped in `preflight` mode); in manual `release` mode it also creates and pushes the annotated tag on the validated commit |
 | `build-macos` | macos-latest | starts right after the preflight (and tag); `tauri build --config src-tauri/tauri.updater.conf.json` (signing secrets); asserts the binary is arm64, the DMG is `ice-box_<ver>_aarch64.dmg`, and the bundle signature; uploads DMG + `*.app.tar.gz` + `.sig` |
 | `build-windows` | windows-latest | in parallel with macOS; NSIS (`npm run build:win -- --config src-tauri/tauri.updater.conf.json`, stacked on `tauri.windows.conf.json`); asserts the `ice-box_<ver>_x64-setup.exe` name and payload; uploads EXE + `.exe.sig` |
-| `build-linux` | ubuntu-24.04 (x64), ubuntu-24.04-arm (arm64) | in parallel; `.deb` + `.AppImage` (`APPIMAGE_EXTRACT_AND_RUN=1 npm run build:linux -- --config src-tauri/tauri.updater.conf.json`, stacked on `tauri.linux.conf.json`); asserts `.deb` payload (`sing-box`, `ice-helper`, `geoip`) and canonical artifact names; uploads `.deb` + `.AppImage` + `.AppImage.sig` |
+| `build-linux` | ubuntu-22.04 (x64), ubuntu-22.04-arm (arm64) | in parallel; `.deb` + `.AppImage` (`APPIMAGE_EXTRACT_AND_RUN=1 npm run build:linux -- --config src-tauri/tauri.updater.conf.json`, stacked on `tauri.linux.conf.json`); asserts `.deb` payload paths (`/usr/bin/ice-box`, `/usr/lib/ice-box/sing-box`, `/usr/lib/ice-box/ice-helper`, `/usr/lib/ice-box/geoip/geoip-cn.srs`), glibc ceiling (`<= 2.35` via `scripts/check-glibc-floor.sh`), and canonical artifact names; uploads `.deb` + `.AppImage` + `.AppImage.sig` |
 | `build-android` | ubuntu-latest | in parallel; signed `arm64-v8a` APK (`scripts/build-android-apk.sh release arm64`) → `scripts/verify-android-apk.sh --release --version <ver>` → upload `ice-box_<ver>_android_arm64.apk` |
 | `publish` | ubuntu-latest | `needs` all four build jobs; detects the release state before downloading artifacts (a published rerun is verification-only); builds the short release body; cryptographically verifies the updater signatures with minisign against the committed pubkey; writes `SHA256SUMS`; creates a **draft** release, uploads, compares the draft asset list, then publishes (pre-release when the tag has a suffix) and runs `scripts/verify-release-assets.sh` |
 
@@ -385,7 +386,8 @@ GitHub:
   hand. A signed-tag requirement rules out the manual `release` mode, because
   the workflow's tags are unsigned.
 - **Branch protection**: keep the required checks (`gate (linux)`,
-  `gate + build (macOS dmg)`, `gate + build (Windows nsis)`) on `main`.
+  `gate + build (macOS dmg)`, `gate + build (Windows nsis)`,
+  `build (Linux x64)`, `build (Linux arm64)`) on `main`.
 - **Secrets**: set `TAURI_SIGNING_PRIVATE_KEY`,
   `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, `ANDROID_KEYSTORE_BASE64`,
   `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and

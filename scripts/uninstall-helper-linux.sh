@@ -6,7 +6,14 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-DEFAULT_DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/com.yilong-musk.icebox"
+TARGET_HOME="$HOME"
+if [[ -n "${SUDO_USER:-}" ]]; then
+  SUDO_HOME="$(getent passwd "$SUDO_USER" | cut -d: -f6 || true)"
+  if [[ -n "$SUDO_HOME" ]]; then
+    TARGET_HOME="$SUDO_HOME"
+  fi
+fi
+DEFAULT_DATA_DIR="${XDG_DATA_HOME:-$TARGET_HOME/.local/share}/com.yilong-musk.icebox"
 DATA_DIR="${1:-$DEFAULT_DATA_DIR}"
 INSTALLED_HELPER="/usr/local/libexec/ice-box/ice-helper"
 
@@ -19,7 +26,13 @@ HELPER_SRC="$INSTALLED_HELPER"
 if [[ ! -x "$HELPER_SRC" ]]; then
   if [[ -x "$ROOT/apps/desktop/src-tauri/resources/ice-helper" ]]; then
     HELPER_SRC="$ROOT/apps/desktop/src-tauri/resources/ice-helper"
+  elif [[ -x "$ROOT/target/release/ice-helper" ]]; then
+    HELPER_SRC="$ROOT/target/release/ice-helper"
   else
+    if [[ "$(id -u)" -eq 0 ]]; then
+      echo "ERROR: ice-helper binary not found and refusing to run 'cargo build' as root; run without sudo or build ice-helper first (cargo build --release -p ice-helper)" >&2
+      exit 1
+    fi
     echo "== building ice-helper =="
     cargo build --release -p ice-helper --manifest-path "$ROOT/Cargo.toml"
     HELPER_SRC="$ROOT/target/release/ice-helper"
@@ -27,11 +40,16 @@ if [[ ! -x "$HELPER_SRC" ]]; then
 fi
 
 echo "== running ice-helper uninstall (root) =="
-sudo "$HELPER_SRC" uninstall "$DATA_DIR"
+if [[ "$(id -u)" -eq 0 ]]; then
+  "$HELPER_SRC" uninstall "$DATA_DIR"
+else
+  sudo "$HELPER_SRC" uninstall "$DATA_DIR"
+fi
 
 echo "== verify helper residue is gone =="
 for path in \
   "/etc/systemd/system/ice-box-helper.service" \
+  "/etc/ice-box/helper.env" \
   "/usr/local/libexec/ice-box/ice-helper" \
   "/usr/local/libexec/ice-box/sing-box" \
   "/usr/local/libexec/ice-box/resources" \

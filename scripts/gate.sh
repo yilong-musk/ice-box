@@ -112,6 +112,9 @@ if [[ "$SCOPE" == all || "$SCOPE" == frontend ]]; then
   echo "== android apk signer lines =="
   bash "$ROOT/scripts/test-verify-android-apk.sh"
 
+  echo "== glibc floor fixtures =="
+  bash "$ROOT/scripts/test-check-glibc-floor.sh"
+
   echo "== vite build =="
   (cd apps/desktop && npm run build)
   # Documentation screenshots are refreshed separately by
