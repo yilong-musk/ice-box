@@ -64,6 +64,7 @@ RELEASE_FILES=(
   Cargo.toml
   Cargo.lock
   apps/desktop/package.json
+  apps/desktop/package-lock.json
   apps/mobile/package.json
   apps/mobile/src-tauri/tauri.conf.json
   docs/images/hero.png

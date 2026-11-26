@@ -306,7 +306,7 @@ mod tests {
             proxy_applied_cache: Mutex::new(None),
             system_proxy_available,
             shutdown_requested: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            _instance_lock: crate::test_instance_lock(&paths),
+            instance_lock: crate::test_instance_lock(&paths),
             traffic: ice_core::TrafficMonitor::new(),
             capture: CaptureController::new(paths.clone(), None),
             profile_cache: Mutex::new(None),

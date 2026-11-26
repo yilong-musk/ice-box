@@ -48,6 +48,7 @@ The version lives in these places and **must stay in sync**:
 |------|-----|
 | `Cargo.toml` | `[workspace.package] version` (all crates inherit via `version.workspace = true`) |
 | `apps/desktop/package.json` | `"version"` (also displayed in the app UI and GitHub Pages marketing chrome) |
+| `apps/desktop/package-lock.json` | root `"version"` and `packages[""].version` |
 | `apps/mobile/package.json` | `"version"` |
 | `apps/mobile/src-tauri/tauri.conf.json` | `bundle.android.versionCode` |
 
@@ -106,10 +107,11 @@ would otherwise fail). Only `release.yml` merges
 the secret key (decrypting it with the password when needed) and compares its
 key id with `plugins.updater.pubkey`, so a wrong key fails before any build.
 Before publishing, the publish job also checks that every updater `.sig`
-carries the same minisign key id as the committed public key and verifies the
-signature cryptographically with `minisign -Vm` against the artifact. A
-mismatch or invalid signature fails the release instead of breaking every
-installed client.
+carries the same minisign key id as the committed public key, matches the
+release version in its signed trusted comment (`requireSignedVersion` is
+enabled in `tauri.conf.json`), and verifies the signature cryptographically
+with `minisign -Vm` against the artifact. A mismatch or invalid signature
+fails the release instead of breaking every installed client.
 
 To rotate the key without abandoning installed clients, first publish a regular
 release signed with the **old** key whose binary embeds the **new** public key
@@ -257,9 +259,9 @@ checks out the commit the preflight validated:
 | `tag` | ubuntu-latest | the one gate the build and publish jobs wait on (skipped in `preflight` mode); in manual `release` mode it also creates and pushes the annotated tag on the validated commit |
 | `build-macos` | macos-latest | starts right after the preflight (and tag); `tauri build --config src-tauri/tauri.updater.conf.json` (signing secrets); asserts the binary is arm64, the DMG is `ice-box_<ver>_aarch64.dmg`, and the bundle signature; uploads DMG + `*.app.tar.gz` + `.sig` |
 | `build-windows` | windows-latest | in parallel with macOS; NSIS (`npm run build:win -- --config src-tauri/tauri.updater.conf.json`, stacked on `tauri.windows.conf.json`); asserts the `ice-box_<ver>_x64-setup.exe` name and payload; uploads EXE + `.exe.sig` |
-| `build-linux` | ubuntu-22.04 (x64), ubuntu-22.04-arm (arm64) | in parallel; `.deb` + `.AppImage` (`APPIMAGE_EXTRACT_AND_RUN=1 npm run build:linux -- --config src-tauri/tauri.updater.conf.json`, stacked on `tauri.linux.conf.json`); asserts `.deb` payload paths (`/usr/bin/ice-box`, `/usr/lib/ice-box/sing-box`, `/usr/lib/ice-box/ice-helper`, `/usr/lib/ice-box/geoip/geoip-cn.srs`), glibc ceiling (`<= 2.35` via `scripts/check-glibc-floor.sh`), and canonical artifact names; uploads `.deb` + `.AppImage` + `.AppImage.sig` |
+| `build-linux` | ubuntu-22.04 (x64), ubuntu-22.04-arm (arm64) | in parallel; `.deb` + `.AppImage` (`APPIMAGE_EXTRACT_AND_RUN=1 npm run build:linux -- --config src-tauri/tauri.updater.conf.json`, stacked on `tauri.linux.conf.json`, with `~/.cache/tauri` cached and transient downloads retried); verifies both `.deb` and extracted `.AppImage` payload paths (`usr/bin/ice-box`, `usr/lib/ice-box/sing-box`, `usr/lib/ice-box/ice-helper`, `usr/lib/ice-box/geoip/geoip-cn.srs`, `usr/lib/ice-box/geoip/geosite-cn.srs`, plus `AppRun`), glibc ceiling (`<= 2.35`), and canonical artifact names via `scripts/verify-linux-bundles.sh`; uploads `.deb` + `.AppImage` + `.AppImage.sig` |
 | `build-android` | ubuntu-latest | in parallel; signed `arm64-v8a` APK (`scripts/build-android-apk.sh release arm64`) → `scripts/verify-android-apk.sh --release --version <ver>` → upload `ice-box_<ver>_android_arm64.apk` |
-| `publish` | ubuntu-latest | `needs` all four build jobs; detects the release state before downloading artifacts (a published rerun is verification-only); builds the short release body; cryptographically verifies the updater signatures with minisign against the committed pubkey; writes `SHA256SUMS`; creates a **draft** release, uploads, compares the draft asset list, then publishes (pre-release when the tag has a suffix) and runs `scripts/verify-release-assets.sh` |
+| `publish` | ubuntu-latest | `needs` all four build jobs; detects the release state before downloading artifacts (a published rerun is verification-only); builds the short release body; cryptographically verifies the updater signatures with minisign against the committed pubkey and release version (`--strict --version`); writes `SHA256SUMS`; creates a **draft** release, uploads, compares the draft asset list, then publishes (pre-release when the tag has a suffix) and runs `scripts/verify-release-assets.sh` |
 
 The `publish` job uses the `release` environment. Configure required reviewers
 on that environment to make publication wait for a human; see
@@ -337,9 +339,10 @@ notes stay one click away in `CHANGELOG.md`.
 `scripts/gate-local.sh`).
 
 The website deploys only after a final release for the current
-`apps/desktop/package.json` version is published, and it checks that the
-installers the site links to exist. A failed release leaves the site on the
-previous version instead of exposing download links that 404.
+`apps/desktop/package.json` version is published (ignoring `preflight` and
+`rehearse` runs of `Release`), and it checks that the installers the site links
+to exist. A failed release leaves the site on the previous version instead of
+exposing download links that 404.
 
 ## Release recovery
 
@@ -398,8 +401,8 @@ GitHub:
   see [Updater signing keys](#updater-signing-keys-one-time). Use the manual
   `Release` dry run (step 4) to validate the real secrets before tagging.
 
-The workflow has read-only permissions by default; only the `publish` job can
-write to the repository.
+The workflow has read-only permissions by default; only the `tag` and `publish`
+jobs can write to the repository.
 
 ## Local vs CI gates
 

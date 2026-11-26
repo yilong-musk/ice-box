@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Check that Tauri updater signatures use the committed pubkey's key id.
-# Usage: scripts/verify-updater-signatures.sh [--strict] [--pubkey-file <path>] <assets-dir>
+# Usage: scripts/verify-updater-signatures.sh [--strict] [--pubkey-file <path>] [--version <ver>] <assets-dir>
 #
 # <assets-dir> must contain exactly one macOS *.app.tar.gz.sig, one Windows
 # *.exe.sig, one Linux *_amd64.AppImage.sig, and one Linux *_aarch64.AppImage.sig,
@@ -10,20 +10,23 @@
 # same shape, or a decoded minisign public-key file.
 #
 # The updater verifies signatures cryptographically on the client. This check
-# catches two failures CI can prevent: a release signed with a different
-# minisign key than plugins.updater.pubkey, and a signature that does not match
-# the artifact. By default it compares key ids; --strict also runs `minisign -Vm`
-# against each artifact. release.yml installs minisign and passes --strict.
+# catches three failures CI can prevent: a release signed with a different
+# minisign key than plugins.updater.pubkey, a signature that does not match
+# the artifact, and (when --version is passed) a signed trusted comment whose
+# `version:` field does not match the release version (`requireSignedVersion`).
+# By default it compares key ids; --strict also runs `minisign -Vm` against
+# each artifact. release.yml installs minisign and passes --strict --version.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PUBKEY_FILE="$ROOT/apps/desktop/src-tauri/tauri.conf.json"
 ASSETS=""
 STRICT=0
+EXPECTED_VERSION=""
 
 usage() {
   cat >&2 <<'EOF'
-usage: scripts/verify-updater-signatures.sh [--strict] [--pubkey-file <path>] <assets-dir>
+usage: scripts/verify-updater-signatures.sh [--strict] [--pubkey-file <path>] [--version <ver>] <assets-dir>
 EOF
 }
 
@@ -39,6 +42,15 @@ while (($# > 0)); do
       echo "--pubkey-file needs a path" >&2
       exit 2
     fi
+    shift 2
+    ;;
+  --version)
+    EXPECTED_VERSION="${2:-}"
+    if [[ -z "$EXPECTED_VERSION" ]]; then
+      echo "--version needs a version" >&2
+      exit 2
+    fi
+    EXPECTED_VERSION="${EXPECTED_VERSION#v}"
     shift 2
     ;;
   -h | --help)
@@ -70,7 +82,7 @@ if [[ ! -f "$PUBKEY_FILE" ]]; then
   exit 1
 fi
 
-python3 - "$PUBKEY_FILE" "$ASSETS" "$STRICT" <<'PY'
+python3 - "$PUBKEY_FILE" "$ASSETS" "$STRICT" "$EXPECTED_VERSION" <<'PY'
 import base64
 import binascii
 import json
@@ -98,6 +110,7 @@ def decode_base64(value: str, label: str) -> bytes:
 
 
 strict = sys.argv[3] == "1"
+expected_version = sys.argv[4].strip()
 if strict and not shutil.which("minisign"):
     fail("minisign is required for --strict (install the minisign CLI)")
 
@@ -177,14 +190,38 @@ for signature in mac_sigs + win_sigs + linux_x64_sigs + linux_arm64_sigs:
             raw = decoded
 
     data_line = ""
+    trusted_comment = None
     for line in raw.splitlines():
         line = line.strip()
-        if not line or line.startswith("untrusted comment:") or line.startswith("trusted comment:"):
+        if not line or line.startswith("untrusted comment:"):
             continue
-        data_line = line
-        break
+        if line.startswith("trusted comment:"):
+            trusted_comment = line[len("trusted comment:") :].strip()
+            continue
+        if not data_line:
+            data_line = line
     if not data_line:
         fail(f"{signature.name}: no signature data")
+
+    if expected_version:
+        if trusted_comment is None:
+            fail(f"{signature.name}: missing trusted comment (expected version:{expected_version})")
+        signed_version = None
+        for field in trusted_comment.split("\t"):
+            if field.startswith("version:"):
+                signed_version = field[len("version:") :]
+                break
+        if signed_version is None:
+            fail(
+                f"{signature.name}: trusted comment has no version field "
+                f"(expected version:{expected_version})"
+            )
+        if signed_version != expected_version:
+            fail(
+                f"{signature.name}: signed version {signed_version!r} does not match "
+                f"expected version {expected_version!r}"
+            )
+        print(f"{signature.name}: signed version {signed_version} matches")
 
     blob = decode_base64(data_line, f"{signature.name}: signature")
     if len(blob) != 74:

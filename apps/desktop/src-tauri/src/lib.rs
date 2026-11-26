@@ -132,8 +132,9 @@ pub struct AppState {
     pub system_proxy_available: bool,
     /// Set by quit so an in-flight auto-start healthcheck aborts instead of blocking for the full timeout.
     pub shutdown_requested: Arc<AtomicBool>,
-    /// Held for app lifetime; releasing the file unlocks the data directory.
-    _instance_lock: std::fs::File,
+    /// Held for app lifetime; released explicitly before an updater restart so
+    /// the relaunched binary cannot race on `instance.lock`.
+    instance_lock: Mutex<Option<std::fs::File>>,
     /// Persistent Clash `/traffic` stream; survives home-page unmounts.
     pub traffic: TrafficMonitor,
     /// TUN capture runtime controller (`docs/tun.md`): owns the active backend,
@@ -168,6 +169,16 @@ pub struct AppState {
     pub launch_proxy_restore_attempted: Arc<AtomicBool>,
     /// Shared Clash group cache, Home interest flag, and the slow memory sample.
     pub(crate) live_cache: application::LiveCache,
+}
+
+impl AppState {
+    /// Drop the single-instance lock file early (before an in-app update
+    /// relaunch spawns the replacement executable).
+    pub(crate) fn release_instance_lock(&self) {
+        if let Ok(mut slot) = self.instance_lock.lock() {
+            slot.take();
+        }
+    }
 }
 
 /// Run the lightweight MCP stdio bridge used by Agent clients.
@@ -378,7 +389,7 @@ pub fn run() {
                 proxy_applied_cache: Mutex::new(None),
                 system_proxy_available,
                 shutdown_requested,
-                _instance_lock: instance_lock,
+                instance_lock: Mutex::new(Some(instance_lock)),
                 traffic: TrafficMonitor::new(),
                 capture,
                 profile_cache: Mutex::new(None),
@@ -588,9 +599,13 @@ pub fn run() {
                     state
                         .workers
                         .shutdown(std::time::Duration::from_millis(500));
+                    state.release_instance_lock();
                 }
-                // The updater already ran graceful_stop; let NSIS / the
-                // bundle replace take over instead of prevent_exit.
+                // Safeguard if an external quit event arrives while an update
+                // is installing (non-Windows normally restarts directly via
+                // `tauri::process::restart` and Windows `tauri-plugin-updater`
+                // exits via `std::process::exit(0)`). The updater already ran
+                // `graceful_stop`; let the exit proceed instead of `prevent_exit`.
                 return;
             }
             // Cmd+Q / OS logout / app.exit() path: run the same cleanup as tray
@@ -617,7 +632,7 @@ pub fn run() {
 }
 
 #[cfg(test)]
-pub(crate) fn test_instance_lock(paths: &AppPaths) -> std::fs::File {
+pub(crate) fn test_instance_lock(paths: &AppPaths) -> Mutex<Option<std::fs::File>> {
     use fs2::FileExt;
     use std::fs::OpenOptions;
     paths.ensure_dirs().expect("dirs");
@@ -628,7 +643,7 @@ pub(crate) fn test_instance_lock(paths: &AppPaths) -> std::fs::File {
         .open(paths.root().join("instance.lock"))
         .expect("lock file");
     file.try_lock_exclusive().expect("lock");
-    file
+    Mutex::new(Some(file))
 }
 
 /// A free loopback port for tests that bind real listeners.

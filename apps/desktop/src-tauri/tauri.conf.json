@@ -60,6 +60,7 @@
       "endpoints": [
         "https://github.com/yilong-musk/ice-box/releases/latest/download/latest.json"
       ],
+      "requireSignedVersion": true,
       "windows": {
         "installMode": "passive"
       }

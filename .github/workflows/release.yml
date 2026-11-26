@@ -1,4 +1,6 @@
 name: Release
+run-name: >-
+  Release (${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'release' }})${{ github.event_name == 'push' && format(' {0}', github.ref_name) || (inputs.tag != '' && format(' {0}', inputs.tag) || '') }}
 
 on:
   push:
@@ -30,7 +32,7 @@ on:
           - release
           - rehearse
 
-# Least privilege: only the publish job writes to the repository.
+# Least privilege: only the tag and publish jobs write to the repository.
 permissions:
   contents: read
 
@@ -143,10 +145,9 @@ jobs:
           bash scripts/verify-ci-status.sh "$commit"
 
           # The publish job deploys to the `release` environment from this
-          # run's ref; fail now, not after the builds, if its rules reject it.
-          if [[ "$mode" != preflight ]]; then
-            bash scripts/verify-release-environment.sh "$GITHUB_REF"
-          fi
+          # run's ref; fail now, not after the builds (including in preflight
+          # dry runs), if its rules reject it.
+          bash scripts/verify-release-environment.sh "$GITHUB_REF"
 
           # A published release is verification-only on a rerun, so it does
           # not need the signing secrets. A new or draft release still needs
@@ -411,11 +412,30 @@ jobs:
       - name: Fetch GeoIP rule-sets
         run: ./scripts/fetch-geoip.sh
 
+      # Cache the Tauri NSIS toolset and retry transient 5xx downloads on cache
+      # miss, matching ci.yml's windows-build hardening.
+      - name: Resolve Tauri CLI version
+        id: tauri-cli
+        run: echo "version=$(node -p "require('@tauri-apps/cli/package.json').version")" >> "$GITHUB_OUTPUT"
+        working-directory: apps/desktop
+
+      - name: Restore Tauri NSIS toolset
+        id: nsis-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/AppData/Local/tauri
+          key: tauri-nsis-${{ runner.os }}-${{ steps.tauri-cli.outputs.version }}
+
       - name: Build app bundle (tauri build, NSIS)
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npm run build:win -- --config src-tauri/tauri.updater.conf.json
+        run: >-
+          bash ../../scripts/retry-tauri-build.sh
+          --label "NSIS toolset"
+          --cache-hit "${{ steps.nsis-cache.outputs.cache-hit || 'false' }}"
+          --clear-cache-dir "$HOME/AppData/Local/tauri"
+          -- npm run build:win -- --config src-tauri/tauri.updater.conf.json
         working-directory: apps/desktop
 
       - name: Verify updater artifacts (Windows)
@@ -538,72 +558,42 @@ jobs:
       - name: Fetch GeoIP rule-sets
         run: ./scripts/fetch-geoip.sh
 
+      # Cache ~/.cache/tauri keyed on OS, arch, and Tauri CLI version so release
+      # builds skip transient GitHub Releases downloads (and avoid floating on
+      # linuxdeploy-plugin-appimage's `continuous` tag once cached).
+      - name: Resolve Tauri CLI version
+        id: tauri-cli
+        run: echo "version=$(node -p "require('@tauri-apps/cli/package.json').version")" >> "$GITHUB_OUTPUT"
+        working-directory: apps/desktop
+
+      - name: Restore Tauri AppImage toolset
+        id: appimage-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/tauri
+          key: tauri-appimage-${{ runner.os }}-${{ matrix.arch }}-${{ steps.tauri-cli.outputs.version }}
+
       - name: Build app bundles (tauri build, deb + AppImage)
         env:
           APPIMAGE_EXTRACT_AND_RUN: "1"
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npm run build:linux -- --config src-tauri/tauri.updater.conf.json
+        run: >-
+          bash ../../scripts/retry-tauri-build.sh
+          --label "AppImage toolset"
+          --cache-hit "${{ steps.appimage-cache.outputs.cache-hit || 'false' }}"
+          --clear-cache-dir "$HOME/.cache/tauri"
+          -- npm run build:linux -- --config src-tauri/tauri.updater.conf.json
         working-directory: apps/desktop
 
-      - name: Verify Linux bundle payload, glibc floor, and updater artifacts
+      - name: Verify Linux bundle payloads, glibc floor, and updater artifacts
         run: |
-          set -euo pipefail
-          shopt -s nullglob
-
-          debs=(target/release/bundle/deb/*.deb)
-          test "${#debs[@]}" -eq 1
-          expected_deb="ice-box_${VERSION}_${DEB_ARCH}.deb"
-          if [[ "$(basename "${debs[0]}")" != "$expected_deb" ]]; then
-            echo "unexpected .deb artifact name: ${debs[0]} (expected $expected_deb)" >&2
-            exit 1
-          fi
-          listing="$(dpkg-deb -c "${debs[0]}")"
-          echo "$listing"
-          for rel in \
-            usr/bin/ice-box \
-            usr/lib/ice-box/sing-box \
-            usr/lib/ice-box/ice-helper \
-            usr/lib/ice-box/geoip/geoip-cn.srs; do
-            regex="${rel//./\\.}"
-            echo "$listing" | grep -Eq "^-.*[[:space:]](\./|/)?${regex}$" || {
-              echo "missing /${rel} in .deb payload (${debs[0]})" >&2
-              exit 1
-            }
-          done
-          deb_extract="$(mktemp -d)"
-          trap 'rm -rf "$deb_extract"' EXIT
-          dpkg-deb -x "${debs[0]}" "$deb_extract"
-          bash scripts/check-glibc-floor.sh 2.35 \
-            "$deb_extract/usr/bin/ice-box" \
-            "$deb_extract/usr/lib/ice-box/ice-helper" \
-            "$deb_extract/usr/lib/ice-box/sing-box"
-
-          appimages=(target/release/bundle/appimage/*.AppImage)
-          sigs=(target/release/bundle/appimage/*.AppImage.sig)
-          test "${#appimages[@]}" -eq 1
-          test "${#sigs[@]}" -eq 1
-          test -s "${sigs[0]}"
-
-          expected_appimage="ice-box_${VERSION}_${APPIMAGE_ARCH}.AppImage"
-          actual_appimage="$(basename "${appimages[0]}")"
-          if [[ "$actual_appimage" != "$expected_appimage" ]]; then
-            # Some Tauri bundler versions emit `_arm64.AppImage` on aarch64.
-            # Normalize to the canonical `_aarch64.AppImage` name; minisign
-            # signs file bytes rather than the filename.
-            if [[ "$APPIMAGE_ARCH" == "aarch64" && "$actual_appimage" == "ice-box_${VERSION}_arm64.AppImage" ]]; then
-              mv "${appimages[0]}" "target/release/bundle/appimage/${expected_appimage}"
-              mv "${sigs[0]}" "target/release/bundle/appimage/${expected_appimage}.sig"
-            else
-              echo "unexpected AppImage artifact name: ${appimages[0]} (expected $expected_appimage)" >&2
-              exit 1
-            fi
-          fi
-          test -s "target/release/bundle/appimage/${expected_appimage}"
-          test -s "target/release/bundle/appimage/${expected_appimage}.sig"
-          echo "release .deb: ${debs[0]}"
-          echo "release AppImage: target/release/bundle/appimage/${expected_appimage}"
-          echo "updater signature: target/release/bundle/appimage/${expected_appimage}.sig"
+          bash scripts/verify-linux-bundles.sh \
+            --bundle-dir target/release/bundle \
+            --version "$VERSION" \
+            --deb-arch "$DEB_ARCH" \
+            --appimage-arch "$APPIMAGE_ARCH" \
+            --require-sig
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v7
@@ -809,7 +799,7 @@ jobs:
           bash scripts/release-notes.sh "$TAG" > RELEASE_NOTES.md
           test -s RELEASE_NOTES.md
 
-          bash scripts/verify-updater-signatures.sh --strict release-assets
+          bash scripts/verify-updater-signatures.sh --strict --version "$VERSION" release-assets
 
           test -s "release-assets/ice-box_${version}_aarch64.dmg"
           test -s "release-assets/ice-box_${version}_x64-setup.exe"
