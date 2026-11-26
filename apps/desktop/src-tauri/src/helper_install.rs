@@ -29,7 +29,7 @@ use ice_config::{AppError, ErrorCode};
 use ice_elevate::{ElevateError, ElevateOutcome};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::sync::OnceLock;
 use tauri::Manager;
 
@@ -149,7 +149,7 @@ fn current_uid() -> u32 {
 /// `Status` probe, short bound). Drives the Settings install/uninstall
 /// buttons and the Home permission action; never mutates the OS.
 pub fn helper_installed(state: &AppState) -> bool {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
         let data_dir = state.paths.root();
         let socket = ice_tun_sys::helper::helper_socket_path();
@@ -158,7 +158,7 @@ pub fn helper_installed(state: &AppState) -> bool {
             Err(_) => false,
         }
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         let _ = state;
         false
@@ -208,11 +208,11 @@ fn wait_for_helper_ready(data_dir: &Path) -> Result<(), AppError> {
 // macOS only; the hashing primitives stay available in tests everywhere
 // (host-free, temp-file based).
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 static BUNDLE_CORE_SHA: OnceLock<Option<String>> = OnceLock::new();
 static INSTALLED_CORE_SHA: Mutex<Option<Option<String>>> = Mutex::new(None);
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
 fn sha256_of_file(path: &Path) -> Option<String> {
     use sha2::{Digest, Sha256};
     let bytes = std::fs::read(path).ok()?;
@@ -221,7 +221,7 @@ fn sha256_of_file(path: &Path) -> Option<String> {
     Some(format!("{:x}", hasher.finalize()))
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn bundle_core_sha(resource_dir: Option<&Path>) -> Option<String> {
     BUNDLE_CORE_SHA
         .get_or_init(|| {
@@ -232,7 +232,7 @@ fn bundle_core_sha(resource_dir: Option<&Path>) -> Option<String> {
         .clone()
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn installed_core_sha() -> Option<String> {
     let mut slot = INSTALLED_CORE_SHA.lock().expect("helper sha lock");
     match slot.as_ref() {
@@ -260,11 +260,11 @@ pub fn reset_helper_core_cache() {
 /// True means the helper would still run the previous core version: TUN
 /// activation is blocked until the elevated install refreshes the copy.
 pub fn helper_core_stale(resource_dir: Option<&Path>) -> bool {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
         cores_differ(&bundle_core_sha(resource_dir), &installed_core_sha())
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         let _ = resource_dir;
         false
@@ -272,7 +272,7 @@ pub fn helper_core_stale(resource_dir: Option<&Path>) -> bool {
 }
 
 /// Host-free comparison (tested with temp files).
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
 fn cores_differ(bundle: &Option<String>, installed: &Option<String>) -> bool {
     match (bundle, installed) {
         (Some(bundle), Some(installed)) => bundle != installed,
@@ -308,10 +308,10 @@ fn after_helper_change(app: &tauri::AppHandle) {
 /// Prompts the user for their admin password; nothing is mutated before the
 /// dialog is authorized, and cancellation leaves the system untouched.
 pub fn install_helper_inner(app: &tauri::AppHandle) -> Result<(), AppError> {
-    if !cfg!(target_os = "macos") {
+    if !cfg!(any(target_os = "macos", target_os = "linux")) {
         return Err(AppError::new(
             ErrorCode::TunNotSupported,
-            "helper install is only supported on macOS",
+            "helper install is only supported on macOS and Linux",
         ));
     }
     let state = app.state::<AppState>();
@@ -347,10 +347,10 @@ pub fn install_helper_inner(app: &tauri::AppHandle) -> Result<(), AppError> {
 
 /// Uninstall the privileged helper through the system authorization dialog.
 pub fn uninstall_helper_inner(app: &tauri::AppHandle) -> Result<(), AppError> {
-    if !cfg!(target_os = "macos") {
+    if !cfg!(any(target_os = "macos", target_os = "linux")) {
         return Err(AppError::new(
             ErrorCode::TunNotSupported,
-            "helper uninstall is only supported on macOS",
+            "helper uninstall is only supported on macOS and Linux",
         ));
     }
     let state = app.state::<AppState>();

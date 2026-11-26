@@ -583,10 +583,15 @@ mod imp {
         })
     }
 
-    /// Run `networksetup -setdnsservers <service> <servers...>` as root. An
-    /// empty `servers` list clears the override ("Empty" = DHCP fallback).
-    /// Callers must run [`validate_set_dns`] first; the command uses an argv
-    /// list, never a shell.
+    /// Apply validated DNS configuration as root.
+    ///
+    /// - macOS: `networksetup -setdnsservers <service> <servers...>` (empty
+    ///   list sends `"Empty"` to restore DHCP resolvers).
+    /// - Linux: when `service == "resolv.conf"`, atomically updates a regular
+    ///   (non-symlink) `/etc/resolv.conf`; otherwise targets the named network
+    ///   interface via `resolvectl` (`dns` + `domain ~.` + `default-route true`
+    ///   when non-empty, or `revert` when empty).
+    #[cfg(target_os = "macos")]
     fn set_system_dns(service: &str, servers: &[String]) -> Result<(), TunError> {
         let mut args = vec!["-setdnsservers", service];
         if servers.is_empty() {
@@ -614,6 +619,127 @@ mod imp {
                 format!("networksetup -setdnsservers {service} failed (exit {status:?})"),
             ))
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    const LINUX_RESOLV_CONF_SERVICE: &str = "resolv.conf";
+
+    #[cfg(any(target_os = "linux", test))]
+    fn write_static_resolv_conf(path: &Path, servers: &[String]) -> Result<(), TunError> {
+        if let Ok(meta) = std::fs::symlink_metadata(path) {
+            if meta.file_type().is_symlink() {
+                return Err(TunError::new(
+                    ErrorCode::TunApplyFailed,
+                    format!(
+                        "refusing to overwrite symlink {}; manage DNS via systemd-resolved instead",
+                        path.display()
+                    ),
+                ));
+            }
+        }
+        let mut content = String::from("# Managed by ice-box TUN\n");
+        for server in servers {
+            content.push_str("nameserver ");
+            content.push_str(server);
+            content.push('\n');
+        }
+        let parent = path.parent().unwrap_or_else(|| Path::new("/etc"));
+        let tmp = parent.join(".ice-box-resolv.conf.tmp");
+        let _ = std::fs::remove_file(&tmp);
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o644)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&tmp)
+            .map_err(|err| {
+                TunError::new(
+                    ErrorCode::TunApplyFailed,
+                    format!("create {}: {err}", tmp.display()),
+                )
+            })?;
+        file.write_all(content.as_bytes()).map_err(|err| {
+            let _ = std::fs::remove_file(&tmp);
+            TunError::new(
+                ErrorCode::TunApplyFailed,
+                format!("write {}: {err}", tmp.display()),
+            )
+        })?;
+        file.sync_all().map_err(|err| {
+            let _ = std::fs::remove_file(&tmp);
+            TunError::new(
+                ErrorCode::TunApplyFailed,
+                format!("sync {}: {err}", tmp.display()),
+            )
+        })?;
+        drop(file);
+        std::fs::rename(&tmp, path).map_err(|err| {
+            let _ = std::fs::remove_file(&tmp);
+            TunError::new(
+                ErrorCode::TunApplyFailed,
+                format!("replace {}: {err}", path.display()),
+            )
+        })
+    }
+
+    #[cfg(target_os = "linux")]
+    fn run_resolvectl(args: &[&str]) -> Result<(), TunError> {
+        let output = Command::new("resolvectl")
+            .args(args)
+            .stdin(Stdio::null())
+            .output()
+            .map_err(|err| {
+                TunError::new(
+                    ErrorCode::TunApplyFailed,
+                    format!("run resolvectl {args:?}: {err}"),
+                )
+            })?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(TunError::new(
+                ErrorCode::TunApplyFailed,
+                format!(
+                    "resolvectl {args:?} failed (exit {:?}): {}",
+                    output.status.code(),
+                    String::from_utf8_lossy(&output.stderr).trim()
+                ),
+            ))
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn set_system_dns(service: &str, servers: &[String]) -> Result<(), TunError> {
+        if service == LINUX_RESOLV_CONF_SERVICE {
+            return write_static_resolv_conf(Path::new("/etc/resolv.conf"), servers);
+        }
+        if servers.is_empty() {
+            // Once the kernel destroys the TUN interface, systemd-resolved
+            // drops its per-link DNS automatically; treat a gone link as clean.
+            if !Path::new(&format!("/sys/class/net/{service}")).exists() {
+                let _ = run_resolvectl(&["flush-caches"]);
+                return Ok(());
+            }
+            run_resolvectl(&["revert", service])?;
+            let _ = run_resolvectl(&["flush-caches"]);
+            return Ok(());
+        }
+        let mut dns_args = vec!["dns", service];
+        dns_args.extend(servers.iter().map(String::as_str));
+        run_resolvectl(&dns_args)?;
+        run_resolvectl(&["domain", service, "~."])?;
+        // Best-effort: newer systemd-resolved versions support explicit default-route.
+        let _ = run_resolvectl(&["default-route", service, "true"]);
+        let _ = run_resolvectl(&["flush-caches"]);
+        Ok(())
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    fn set_system_dns(_service: &str, _servers: &[String]) -> Result<(), TunError> {
+        Err(TunError::new(
+            ErrorCode::TunNotSupported,
+            "system DNS updates are only supported on macOS and Linux",
+        ))
     }
 
     /// The core lifecycle the daemon controls. Abstracted so tests inject a
@@ -1879,6 +2005,39 @@ mod imp {
             let mode = std::fs::metadata(&sock).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o600, "socket must be 0600, got {mode:#o}");
             drop(listener);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn write_static_resolv_conf_updates_regular_file_and_rejects_symlinks() {
+            let dir = std::env::temp_dir().join(format!(
+                "ice-helper-resolv-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            let conf = dir.join("resolv.conf");
+            std::fs::write(&conf, "nameserver 192.168.1.1\n").unwrap();
+
+            write_static_resolv_conf(&conf, &["223.5.5.5".into(), "119.29.29.29".into()])
+                .expect("write regular resolv.conf");
+            let text = std::fs::read_to_string(&conf).unwrap();
+            assert!(text.contains("nameserver 223.5.5.5\n"));
+            assert!(text.contains("nameserver 119.29.29.29\n"));
+
+            let target = dir.join("real-resolv");
+            std::fs::write(&target, "nameserver 1.1.1.1\n").unwrap();
+            let link = dir.join("symlink-resolv.conf");
+            std::os::unix::fs::symlink(&target, &link).unwrap();
+            let err = write_static_resolv_conf(&link, &["223.5.5.5".into()])
+                .expect_err("symlink must be refused");
+            assert!(err.message.contains("symlink"));
+            assert_eq!(
+                std::fs::read_to_string(&target).unwrap(),
+                "nameserver 1.1.1.1\n"
+            );
             let _ = std::fs::remove_dir_all(&dir);
         }
     }

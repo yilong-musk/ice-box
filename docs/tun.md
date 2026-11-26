@@ -1,14 +1,15 @@
 # TUN capture
 
-This document is the desktop TUN path on macOS and Windows, with the bundled
-sing-box **1.14.4**. Android captures traffic through the system VPN service;
-see [architecture.md](architecture.md#clients). Desktop capture behavior,
-platform constraints, and recovery rules follow.
+This document is the desktop TUN path on macOS, Windows, and Linux, with the
+bundled sing-box **1.14.4**. Android captures traffic through the system VPN
+service; see [architecture.md](architecture.md#clients). Desktop capture
+behavior, platform constraints, and recovery rules follow.
 
 | Platform | Coverage | Setup |
 |----------|----------|-------|
 | macOS | IPv4 + IPv6, TCP and UDP | System authorization installs the privileged helper |
 | Windows | IPv4 TCP only; no UDP/QUIC, IPv6, or fake-ip | One UAC prompt creates a scheduled task; the user must already be an Administrator |
+| Linux | IPv4 + IPv6, TCP and UDP | Polkit (`pkexec`) installs the systemd `ice-helper` service |
 
 ## Product model
 
@@ -61,7 +62,7 @@ Generated configurations must match the pinned core: use `address`, not
 `inet4_address` / `inet6_address`, and route-level `action: sniff`, not inbound
 sniff fields. Sniffing precedes domain-based policy rules. The desktop TUN
 inbound pins `dns_mode` explicitly: `native` on Windows and `disabled` on
-macOS. sing-box 1.14 defaults to `hijack` when `auto_route` is enabled; on
+macOS and Linux. sing-box 1.14 defaults to `hijack` when `auto_route` is enabled; on
 Windows that installs WFP filters blocking port 53 outside the TUN, which
 would break LAN DNS because those routes are excluded from capture.
 
@@ -140,17 +141,62 @@ by the manual acceptance script in [testing.md](testing.md#live-tests).
   back to TCP instead of waiting on QUIC.
 - IPv6 stays disabled for Windows TUN even when Settings → IPv6 is on: the
   pinned core's IPv6 DNS path is broken (#4178) and the hijack rule is
-  IPv4-only. The IPv6 switches still apply to system-proxy mode; macOS and
-  Android TUN follow them.
+  IPv4-only. The IPv6 switches still apply to system-proxy mode; macOS, Linux,
+  and Android TUN follow them.
 - Re-normalize cached profiles so older DNS configurations adopt these rules.
   System proxy is the alternative capture path for applications needing traffic
   that Windows TUN cannot carry.
 
+### Linux
+
+- Both IPv4 and IPv6 addresses are supported (subject to Settings → IPv6). The
+  TUN interface name must fit `IFNAMSIZ - 1` (15 bytes, e.g., `ice0`), and
+  interface identity is locked by both the interface name and its Linux
+  `ifindex` so recovery never tears down an unrelated interface.
+- sing-box owns the kernel `tun` device and policy routes (`auto_route: true`,
+  `strict_route: true`), while the backend journals and verifies them. The TUN
+  inbound sets `dns_mode: disabled` so system DNS remains under `LinuxTunBackend`
+  and `ice-helper`, with DNS captured by the explicit `hijack-dns` route rules.
+- Before starting the elevated core, wait until `ip -4 route get 1.1.1.1`
+  resolves to a physical NIC (not a leftover TUN/loopback device) and pin that
+  name as `route.default_interface` with `auto_detect_interface: false`.
+  `process_name` bypass rules exclude `ice-box` and `sing-box` so direct origin
+  probes, subscription fetches, and update checks avoid routing loops.
+- With `dns_hijack`:
+  - When `systemd-resolved` is active, `ice-helper` configures per-link DNS on
+    the TUN interface via `resolvectl` (`dns`, `domain ~.`, `default-route true`,
+    `flush-caches`) and reverts it with `resolvectl revert <iface>` on disable
+    or recovery.
+  - Otherwise, if `/etc/resolv.conf` is a regular file (not a symlink),
+    `ice-helper` atomically writes a generated resolver file and compares its
+    current content before restoring the journaled backup, preserving external
+    edits made while TUN was active. Symlinked `/etc/resolv.conf` files without
+    `systemd-resolved` are refused rather than clobbering another network
+    manager's target.
+
+### Linux elevation
+
+The app installs and removes `ice-helper` through Polkit (`pkexec`). The
+systemd service (`/etc/systemd/system/ice-box-helper.service`) listens on
+`/run/ice-box-helper.sock`, authenticates the peer UID (`SO_PEERCRED`) and
+installation token, pins the installed binaries under
+`/usr/local/libexec/ice-box/` (`ice-helper`, `sing-box`, `run/`, `resources/`),
+and writes logs to `/var/log/ice-box-{core,helper}.log`.
+
+Because an AppImage unpacks into an ephemeral FUSE mount that root cannot rely
+on across launches, installation copies bundled `geoip/*.srs` rule-sets into
+`/usr/local/libexec/ice-box/resources/geoip` and sanitizes user configs into a
+root-owned run directory before invoking `sing-box`. Manual install/uninstall
+scripts (`scripts/install-helper-linux.sh`, `scripts/uninstall-helper-linux.sh`)
+are provided alongside the in-app Polkit flow; live acceptance scripts are
+documented in [testing.md](testing.md#live-tests).
+
 ## Validation and source
 
 Long-running stability, Wi-Fi changes, and macOS MTU 9000 over real VPN/QUIC
-paths remain unverified. Windows G9.14 Cargo acceptance on an MSVC host remains
-an open validation item. Manual commands and prerequisites live in
+paths remain unverified. Windows G9.14 Cargo acceptance on an MSVC host and
+live Linux desktop acceptance across GNOME/KDE + systemd hosts remain manual
+validation items. Manual commands and prerequisites live in
 [testing.md](testing.md#live-tests).
 
 Exact structures and platform mechanics are maintained with their source:
@@ -158,4 +204,4 @@ Exact structures and platform mechanics are maintained with their source:
 - [Capture controller](../apps/desktop/src-tauri/src/capture/mod.rs): runtime status and transitions.
 - [Journal](../crates/ice-tun-journal/src/lib.rs): persisted ownership and recovery records.
 - [Helper protocol](../crates/ice-tun-helper-proto/src/protocol.rs) and [errors](../crates/ice-types/src/error.rs): IPC contracts.
-- [macOS helper](../crates/ice-helper/src/lib.rs) and [Windows launcher](../crates/ice-tun-launcher/src/main.rs): privileged execution.
+- [macOS and Linux helper](../crates/ice-helper/src/lib.rs) and [Windows launcher](../crates/ice-tun-launcher/src/main.rs): privileged execution.

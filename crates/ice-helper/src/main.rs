@@ -19,11 +19,11 @@
 //! TUN resources; this process only runs and terminates it.
 //!
 //! Non-unix builds are a stub so the workspace gate stays green on Windows
-//! CI; the daemon is macOS-only.
+//! CI; the daemon runs on macOS (launchd) and Linux (systemd).
 
 #[cfg(not(unix))]
 fn main() {
-    eprintln!("ice-helper is a macOS-only daemon");
+    eprintln!("ice-helper is a Unix (macOS/Linux) daemon");
     std::process::exit(1);
 }
 

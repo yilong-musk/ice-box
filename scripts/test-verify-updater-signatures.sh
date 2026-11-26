@@ -61,6 +61,10 @@ def write_fixture(
         (directory / "ice-box.app.tar.gz.sig").write_text(sig_data, encoding="utf-8")
     (directory / "ice-box_0.2.6_x64-setup.exe").write_text("windows\n", encoding="utf-8")
     (directory / "ice-box_0.2.6_x64-setup.exe.sig").write_text(sig_data, encoding="utf-8")
+    (directory / "ice-box_0.2.6_amd64.AppImage").write_text("linux-x64\n", encoding="utf-8")
+    (directory / "ice-box_0.2.6_amd64.AppImage.sig").write_text(sig_data, encoding="utf-8")
+    (directory / "ice-box_0.2.6_aarch64.AppImage").write_text("linux-arm64\n", encoding="utf-8")
+    (directory / "ice-box_0.2.6_aarch64.AppImage.sig").write_text(sig_data, encoding="utf-8")
     return directory
 
 
@@ -69,6 +73,8 @@ write_fixture("plain", stored_id, wrapped=False)
 write_fixture("mismatch", bytes.fromhex("1111111111111111"))
 missing = write_fixture("missing", stored_id)
 (missing / "ice-box.app.tar.gz.sig").unlink()
+missing_linux = write_fixture("missing-linux", stored_id)
+(missing_linux / "ice-box_0.2.6_aarch64.AppImage.sig").unlink()
 malformed = write_fixture("malformed", stored_id)
 (malformed / "ice-box_0.2.6_x64-setup.exe.sig").write_text(
     "untrusted comment: signature\nnot-base64\n", encoding="utf-8"
@@ -109,6 +115,7 @@ expect_ok "plain-minisign-text" "$TMP/plain"
 echo "== failures =="
 expect_fail "mismatched-key" "does not match" "$TMP/mismatch"
 expect_fail "missing-macos-sig" "expected exactly one macOS" "$TMP/missing"
+expect_fail "missing-linux-sig" "expected exactly one Linux arm64" "$TMP/missing-linux"
 expect_fail "malformed-sig" "invalid base64" "$TMP/malformed"
 
 echo "== strict signature verification =="
@@ -117,10 +124,16 @@ if command -v minisign >/dev/null 2>&1; then
   minisign -G -p "$TMP/strict.pub" -s "$TMP/strict.key" -W >/dev/null
   printf 'darwin\n' >"$TMP/strict/ice-box.app.tar.gz"
   printf 'windows\n' >"$TMP/strict/ice-box_0.2.6_x64-setup.exe"
+  printf 'linux-x64\n' >"$TMP/strict/ice-box_0.2.6_amd64.AppImage"
+  printf 'linux-arm64\n' >"$TMP/strict/ice-box_0.2.6_aarch64.AppImage"
   minisign -S -s "$TMP/strict.key" -m "$TMP/strict/ice-box.app.tar.gz" \
     -x "$TMP/strict/ice-box.app.tar.gz.sig" >/dev/null
   minisign -S -s "$TMP/strict.key" -m "$TMP/strict/ice-box_0.2.6_x64-setup.exe" \
     -x "$TMP/strict/ice-box_0.2.6_x64-setup.exe.sig" >/dev/null
+  minisign -S -s "$TMP/strict.key" -m "$TMP/strict/ice-box_0.2.6_amd64.AppImage" \
+    -x "$TMP/strict/ice-box_0.2.6_amd64.AppImage.sig" >/dev/null
+  minisign -S -s "$TMP/strict.key" -m "$TMP/strict/ice-box_0.2.6_aarch64.AppImage" \
+    -x "$TMP/strict/ice-box_0.2.6_aarch64.AppImage.sig" >/dev/null
   if ! "$SCRIPT" --strict --pubkey-file "$TMP/strict.pub" "$TMP/strict" >/dev/null; then
     fail "strict-valid: expected success"
   fi

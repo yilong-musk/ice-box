@@ -9,15 +9,20 @@
     "dev:mac-arm64": "bash scripts/dev.sh mac-arm64",
     "dev:mac-x64": "bash scripts/dev.sh mac-x64",
     "dev:win": "bash scripts/dev.sh win",
+    "dev:linux-x64": "bash scripts/dev.sh linux-x64",
+    "dev:linux-arm64": "bash scripts/dev.sh linux-arm64",
     "tauri": "npm --prefix apps/desktop run tauri --",
     "build": "npm --prefix apps/desktop run tauri -- build",
     "build:win": "npm --prefix apps/desktop run build:win",
+    "build:linux": "npm --prefix apps/desktop run build:linux",
     "fetch-singbox": "bash scripts/fetch-singbox.sh",
     "prepare-singbox": "bash scripts/prepare-singbox-resource.sh",
     "gate": "bash scripts/gate.sh",
     "capture-home": "CAPTURE_DEMO_HOME_FORCE=1 bash scripts/capture-demo-home.sh",
     "acceptance": "bash scripts/run-acceptance-macos.sh",
     "acceptance:tun": "bash scripts/run-acceptance-macos-tun.sh",
-    "acceptance:win": "bash scripts/run-acceptance-windows.sh"
+    "acceptance:win": "bash scripts/run-acceptance-windows.sh",
+    "acceptance:linux": "bash scripts/run-acceptance-linux.sh",
+    "acceptance:linux-tun": "bash scripts/run-acceptance-linux-tun.sh"
   }
 }

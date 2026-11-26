@@ -4,8 +4,10 @@
 # Usage: scripts/merge-updater-latest.sh <assets-dir> <tag> [notes-file]
 #
 # Required artifacts in <assets-dir>:
-#   *.app.tar.gz + *.app.tar.gz.sig   (darwin-aarch64)
-#   *-setup.exe + *-setup.exe.sig     (windows-x86_64; falls back to a single *.exe)
+#   *.app.tar.gz + *.app.tar.gz.sig        (darwin-aarch64)
+#   *-setup.exe + *-setup.exe.sig          (windows-x86_64; falls back to a single *.exe)
+#   *_amd64.AppImage + .sig                (linux-x86_64)
+#   *_aarch64.AppImage + .sig              (linux-aarch64)
 #
 # The signature fields are the full .sig file text (not a path). URLs point at
 # GitHub Release assets: https://github.com/<repo>/releases/download/<tag>/<file>
@@ -90,6 +92,14 @@ if not windows:
         if p.is_file() and not p.name.endswith(".exe.sig")
     )
 windows_exe = pick_one(windows, "windows NSIS *.exe")
+linux_x64 = pick_one(
+    sorted(p for p in assets.rglob("*_amd64.AppImage") if p.is_file()),
+    "linux-x86_64 *_amd64.AppImage",
+)
+linux_arm64 = pick_one(
+    sorted(p for p in assets.rglob("*_aarch64.AppImage") if p.is_file()),
+    "linux-aarch64 *_aarch64.AppImage",
+)
 
 notes = ""
 if notes_file:
@@ -101,6 +111,8 @@ if not version:
 
 darwin_sig = read_signature(darwin)
 windows_sig = read_signature(windows_exe)
+linux_x64_sig = read_signature(linux_x64)
+linux_arm64_sig = read_signature(linux_arm64)
 base = f"https://github.com/{repo}/releases/download/{tag}"
 
 payload = {
@@ -115,6 +127,14 @@ payload = {
         "windows-x86_64": {
             "signature": windows_sig,
             "url": f"{base}/{windows_exe.name}",
+        },
+        "linux-x86_64": {
+            "signature": linux_x64_sig,
+            "url": f"{base}/{linux_x64.name}",
+        },
+        "linux-aarch64": {
+            "signature": linux_arm64_sig,
+            "url": f"{base}/{linux_arm64.name}",
         },
     },
 }

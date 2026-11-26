@@ -32,12 +32,46 @@ pub const ERR_UPDATE_INSTALL_FAILED: ErrorCode = ErrorCode::UpdateInstallFailed;
 pub const ERR_UPDATE_DISABLED: ErrorCode = ErrorCode::UpdateDisabled;
 pub const UPDATE_PROGRESS_EVENT: &str = "app-update://progress";
 
+const RELEASES_BASE_URL: &str = "https://github.com/yilong-musk/ice-box/releases";
+
 static UPDATE_INSTALLING: AtomicBool = AtomicBool::new(false);
 
 /// True while an update is being applied so `ExitRequested` can let the
 /// Windows installer take over instead of `prevent_exit()`.
 pub fn update_installing() -> bool {
     UPDATE_INSTALLING.load(Ordering::SeqCst)
+}
+
+/// Whether this runtime supports in-place updater replacement.
+///
+/// On Linux, Tauri v2's updater only replaces AppImage installs (which export
+/// `$APPIMAGE`). `.deb` and other system-package installs still check
+/// `latest.json`, then open the release download page in the browser instead.
+pub fn in_app_update_supported() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        in_app_update_supported_with(std::env::var_os("APPIMAGE").as_deref())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        true
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn in_app_update_supported_with(appimage_env: Option<&std::ffi::OsStr>) -> bool {
+    appimage_env.is_some_and(|v| !v.is_empty())
+}
+
+/// GitHub Releases URL opened when in-app installation is not supported.
+pub fn release_download_url(available_version: Option<&str>) -> String {
+    match available_version
+        .map(normalize_version)
+        .filter(|v| !v.is_empty())
+    {
+        Some(version) => format!("{RELEASES_BASE_URL}/tag/v{version}"),
+        None => format!("{RELEASES_BASE_URL}/latest"),
+    }
 }
 
 /// Persisted check / last-known-available state.
@@ -405,6 +439,12 @@ pub async fn install_app_update(app: AppHandle) -> Result<(), AppError> {
             "app updates cannot be installed from a debug / tauri dev build",
         ));
     }
+    if !in_app_update_supported() {
+        return Err(AppError::with_code(
+            ERR_UPDATE_DISABLED,
+            "in-app updates are only supported for AppImage builds on Linux; download the package from GitHub Releases",
+        ));
+    }
 
     let (settings, core_running) = {
         let state = app.state::<AppState>();
@@ -469,6 +509,25 @@ pub async fn install_app_update(app: AppHandle) -> Result<(), AppError> {
     {
         Ok(())
     }
+}
+
+/// Open the GitHub Release page for the latest (or cached available) version
+/// in the system browser. Used on Linux `.deb` installs where in-place
+/// replacement is unavailable.
+#[tauri::command]
+pub async fn open_app_download(app: AppHandle) -> Result<(), AppError> {
+    use tauri_plugin_opener::OpenerExt;
+
+    let paths = app.state::<AppState>().paths.clone();
+    let disk = load_update_check_state(&paths.update_check());
+    let version = disk
+        .available_version
+        .as_deref()
+        .filter(|v| is_newer_version(v, installed_app_version()));
+    let url = release_download_url(version);
+    app.opener()
+        .open_url(&url, None::<&str>)
+        .map_err(|err| AppError::with_code(ERR_UPDATE_INSTALL_FAILED, err.to_string()))
 }
 
 /// Persist-only when the user flipped the auto-check switch and nothing else.
@@ -725,6 +784,33 @@ mod tests {
         assert_eq!(
             check_error_code(&tauri_plugin_updater::Error::EmptyEndpoints),
             ERR_UPDATE_CHECK_FAILED
+        );
+    }
+
+    #[test]
+    fn linux_in_app_update_requires_non_empty_appimage_env() {
+        assert!(in_app_update_supported_with(Some(std::ffi::OsStr::new(
+            "/home/u/ice-box.AppImage"
+        ))));
+        assert!(!in_app_update_supported_with(Some(std::ffi::OsStr::new(
+            ""
+        ))));
+        assert!(!in_app_update_supported_with(None));
+    }
+
+    #[test]
+    fn release_download_url_targets_tag_or_latest() {
+        assert_eq!(
+            release_download_url(Some("0.5.0")),
+            "https://github.com/yilong-musk/ice-box/releases/tag/v0.5.0"
+        );
+        assert_eq!(
+            release_download_url(Some("v0.5.0")),
+            "https://github.com/yilong-musk/ice-box/releases/tag/v0.5.0"
+        );
+        assert_eq!(
+            release_download_url(None),
+            "https://github.com/yilong-musk/ice-box/releases/latest"
         );
     }
 }

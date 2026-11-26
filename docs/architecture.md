@@ -1,7 +1,7 @@
 # ice-box Architecture
 
-ice-box is a local proxy client for macOS, Windows, and Android. The desktop
-apps and the Android app share one React UI. Each native shell manages a
+ice-box is a local proxy client for macOS, Windows, Linux, and Android. The
+desktop apps and the Android app share one React UI. Each native shell manages a
 bundled sing-box core; sing-box owns protocol handling and traffic forwarding.
 This document describes the system's structure, ownership boundaries, and key
 design decisions.
@@ -32,13 +32,13 @@ through React or the application's configuration code.
 
 | Client | Shell | Core | Capture |
 |--------|-------|------|---------|
-| macOS and Windows | [`apps/desktop`](../apps/desktop) | One sing-box process. TUN starts it through a privileged runner | System proxy or [TUN](tun.md) |
+| macOS, Windows, and Linux | [`apps/desktop`](../apps/desktop) | One sing-box process. TUN starts it through a privileged runner | System proxy or [TUN](tun.md) |
 | Android | [`apps/mobile`](../apps/mobile) | libbox inside the VPN service process (`:tunnel`) | Android VPN service |
 | Website | [`apps/website`](../apps/website) | None | None. The Live Demo binds a simulated backend to the desktop and phone UIs |
 
-Only the macOS and Windows desktop shell exposes a real MCP service. Android
-neither starts nor renders that control surface; the website Live Demo renders
-it with a simulated service. See [`mcp.md`](mcp.md).
+Only the desktop shell (macOS, Windows, and Linux) exposes a real MCP service.
+Android neither starts nor renders that control surface; the website Live Demo
+renders it with a simulated service. See [`mcp.md`](mcp.md).
 
 The Android application id is `com.yilongmusk.icebox`, and `minSdk` is 34. The
 published build is one `arm64-v8a` APK. The phone UI hides desktop ports, the
@@ -251,7 +251,11 @@ Configuration changes are validated before application. Reload is preferred
 where supported, with restart as a fallback; health checks determine success.
 Failures attempt to restore the previous configuration and release capture
 when service cannot be recovered. OS proxy settings are backed up before
-mutation and restored on stop or failure. Spawning the bundled core — in the
+mutation and restored on stop, failure, or session shutdown (on Linux,
+`ice-proxy-sys` supports GNOME `gsettings` and KDE Plasma `kreadconfig` /
+`kwriteconfig` with KIO D-Bus reload, and `session_end_unix.rs` catches
+`SIGTERM`/`SIGHUP` over a self-pipe to restore `proxy-backup.json` on logout).
+Spawning the bundled core — in the
 app process and in the elevated core launchers — retries a transiently locked
 executable (an in-place update or antivirus scan still holding the freshly
 replaced binary) for about seven seconds before surfacing the spawn error
@@ -265,7 +269,9 @@ startup with the window suppressed: `tauri.conf.json` creates the window
 hidden, the shell shows it only for a user launch, and a login start that finds
 the data-dir lock already held exits without raising the running session. The
 login item itself is a per-user OS entry — a LaunchAgent plist on macOS,
-`HKCU\...\Run` on Windows — owned by the shell (`autostart.rs`), rewritten to
+`HKCU\...\Run` on Windows, or `${XDG_CONFIG_HOME:-~/.config}/autostart/com.yilong-musk.icebox.desktop`
+on Linux (preferring `$APPIMAGE` when launched from an AppImage) — owned by the
+shell (`autostart.rs`), rewritten to
 the running executable on every launch, and recorded in
 `settings.json` (`launch_at_login`) only after the OS write succeeded. The
 Settings card is rendered only where the platform can register the entry
@@ -388,11 +394,15 @@ omitted. Neither probe runs when `probe_exit_ip` is off or the core is stopped.
 Turning the setting off is the supported opt-out; the app does not use
 plaintext third-party IP lookup fallbacks.
 
-On macOS and Windows, app updates run in Rust and verify signed artifacts
-before installation. Android downloads the arm64 APK from the same GitHub
-release and hands it to the system installer. The APK is a release asset and
-is absent from `latest.json`.
-On macOS and Windows, installation uses the same capture/core shutdown path as
+On macOS, Windows, and Linux AppImage installs, app updates run in Rust and
+verify signed artifacts before installation. Non-AppImage Linux installs (such
+as `.deb` packages) still check GitHub Releases for newer versions, but report
+`in_app_update_supported: false` and direct the user to the release download
+page instead of replacing package-manager files in place. Android downloads the
+arm64 APK from the same GitHub release and hands it to the system installer.
+The APK and `.deb` packages are release assets and are absent from
+`latest.json`.
+On desktop, installation uses the same capture/core shutdown path as
 Quit. Update integrity signing is separate from OS application signing;
 artifact production and distribution policy are defined in
 [release-process.md](release-process.md).

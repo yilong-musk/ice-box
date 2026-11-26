@@ -19,9 +19,12 @@ import {
 } from "../../desktop/src/lib/theme";
 import {
   INSTALLER_PLATFORMS,
+  detectLinuxArch,
   detectPlatform,
   installerDownloadUrl,
   installerFilename,
+  linuxInstallerDownloadUrl,
+  linuxInstallerFilename,
 } from "./downloads";
 import {
   applyMarketingLanguage,
@@ -70,6 +73,7 @@ const ICONS = {
   check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
   laptop: '<rect x="4.5" y="5" width="15" height="10.5" rx="1.75"/><path d="M2.5 19h19"/>',
   monitor: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M12 16v4M8 20h8"/>',
+  terminal: '<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>',
   smartphone: '<rect x="6.5" y="2.75" width="11" height="18.5" rx="2.75"/><path d="M11 18h2"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6l1.4 1.4M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4"/>',
   moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>',
@@ -110,16 +114,42 @@ const FEATURE_GROUPS = [
   ],
 ];
 
-const PLATFORM_ICON = { macos: "laptop", windows: "monitor", android: "smartphone" };
+const PLATFORM_ICON = {
+  macos: "laptop",
+  windows: "monitor",
+  linux: "terminal",
+  android: "smartphone",
+};
+
+const LINUX_VARIANT_LINKS = [
+  ["appimage-amd64", "AppImage · x64"],
+  ["deb-amd64", ".deb · x64"],
+  ["appimage-aarch64", "AppImage · arm64"],
+  ["deb-arm64", ".deb · arm64"],
+];
 
 const windowLights = `<span class="window-lights" aria-hidden="true"><i></i><i></i><i></i></span>`;
 
 const currentPlatform = detectPlatform(navigator.userAgent, navigator.maxTouchPoints);
+const linuxPrimaryVariant =
+  detectLinuxArch(navigator.userAgent) === "arm64" ? "appimage-aarch64" : "appimage-amd64";
+
+function platformPrimaryFilename(platform) {
+  return platform === "linux"
+    ? linuxInstallerFilename(appVersion, linuxPrimaryVariant)
+    : installerFilename(appVersion, platform);
+}
+
+function platformPrimaryUrl(platform) {
+  return platform === "linux"
+    ? linuxInstallerDownloadUrl(appVersion, linuxPrimaryVariant)
+    : installerDownloadUrl(appVersion, platform);
+}
 
 /** The hero button downloads this device's installer straight away; with no
  * installer for this device it scrolls to the platform list instead. */
 const heroDownloadHref =
-  currentPlatform == null ? "#download" : installerDownloadUrl(appVersion, currentPlatform);
+  currentPlatform == null ? "#download" : platformPrimaryUrl(currentPlatform);
 
 const root = document.querySelector("#root");
 
@@ -244,7 +274,15 @@ root.innerHTML = `
           <p class="download-file"></p>
           <p class="download-requires"></p>
           <p class="download-note"></p>
-          <a class="button download-button" href="${installerDownloadUrl(appVersion, platform)}">${icon("download")}<span class="download-action"></span></a>
+          <a class="button download-button" href="${platformPrimaryUrl(platform)}">${icon("download")}<span class="download-action"></span></a>
+          ${
+            platform === "linux"
+              ? `<div class="download-variants">${LINUX_VARIANT_LINKS.map(
+                  ([variant, label]) =>
+                    `<a class="download-variant" href="${linuxInstallerDownloadUrl(appVersion, variant)}">${label}</a>`,
+                ).join("")}</div>`
+              : ""
+          }
         </li>`,
         ).join("")}
       </ul>
@@ -443,7 +481,7 @@ function applyDownloadCopy(next) {
     yoursEl.textContent = yours;
     yoursEl.hidden = !isCurrent;
     card.querySelector(".download-file").textContent =
-      `${marketingText(`download.${platform}.kind`, next)} · ${installerFilename(appVersion, platform)}`;
+      `${marketingText(`download.${platform}.kind`, next)} · ${platformPrimaryFilename(platform)}`;
     card.querySelector(".download-requires").textContent =
       marketingText(`download.${platform}.requires`, next);
     card.querySelector(".download-note").textContent = marketingText(

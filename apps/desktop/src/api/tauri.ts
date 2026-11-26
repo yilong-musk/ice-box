@@ -86,7 +86,7 @@ export const api = {
   skipAppUpdate: (version: string) =>
     invoke<void>("skip_app_update", { req: { version } }),
   installAppUpdate: () => invoke<void>("install_app_update"),
-  openAppDownload: async () => {},
+  openAppDownload: () => invoke<void>("open_app_download"),
   requestBatteryExemption: async () => {},
   openNetworkSettings: async () => {},
   openVpnSettings: async () => {},

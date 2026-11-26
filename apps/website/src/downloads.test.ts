@@ -3,9 +3,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  detectLinuxArch,
   detectPlatform,
   installerDownloadUrl,
   installerFilename,
+  linuxInstallerDownloadUrl,
+  linuxInstallerFilename,
 } from "./downloads.ts";
 
 test("installer urls are the published release assets", () => {
@@ -22,14 +25,38 @@ test("installer urls are the published release assets", () => {
     "https://github.com/yilong-musk/ice-box/releases/download/v0.1.23/ice-box_0.1.23_x64-setup.exe",
   );
   assert.equal(
+    installerDownloadUrl("0.1.23", "linux"),
+    "https://github.com/yilong-musk/ice-box/releases/download/v0.1.23/ice-box_0.1.23_amd64.AppImage",
+  );
+  assert.equal(
     installerDownloadUrl("0.1.23", "android"),
     "https://github.com/yilong-musk/ice-box/releases/download/v0.1.23/ice-box_0.1.23_android_arm64.apk",
+  );
+});
+
+test("linux installer variants match all four published release packages", () => {
+  assert.equal(
+    linuxInstallerFilename("v0.4.0", "appimage-amd64"),
+    "ice-box_0.4.0_amd64.AppImage",
+  );
+  assert.equal(
+    linuxInstallerDownloadUrl("0.4.0", "deb-amd64"),
+    "https://github.com/yilong-musk/ice-box/releases/download/v0.4.0/ice-box_0.4.0_amd64.deb",
+  );
+  assert.equal(
+    linuxInstallerDownloadUrl("0.4.0", "appimage-aarch64"),
+    "https://github.com/yilong-musk/ice-box/releases/download/v0.4.0/ice-box_0.4.0_aarch64.AppImage",
+  );
+  assert.equal(
+    linuxInstallerDownloadUrl("0.4.0", "deb-arm64"),
+    "https://github.com/yilong-musk/ice-box/releases/download/v0.4.0/ice-box_0.4.0_arm64.deb",
   );
 });
 
 test("rejects a version that could change the download path", () => {
   assert.throws(() => installerDownloadUrl("../secret", "macos"));
   assert.throws(() => installerDownloadUrl("0.1", "windows"));
+  assert.throws(() => linuxInstallerDownloadUrl("../secret", "deb-amd64"));
 });
 
 test("detectPlatform picks the installer we ship", () => {
@@ -46,12 +73,31 @@ test("detectPlatform picks the installer we ship", () => {
     "android",
   );
   assert.equal(
+    detectPlatform("Mozilla/5.0 (X11; Linux x86_64)"),
+    "linux",
+  );
+  assert.equal(
+    detectPlatform("Mozilla/5.0 (X11; Linux aarch64)"),
+    "linux",
+  );
+  assert.equal(
+    detectPlatform(
+      "Mozilla/5.0 (X11; CrOS x86_64 14541.0.0) AppleWebKit/537.36",
+    ),
+    null,
+  );
+  assert.equal(
     detectPlatform(
       "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit",
     ),
     null,
   );
-  assert.equal(detectPlatform("Mozilla/5.0 (X11; Linux x86_64)"), null);
+});
+
+test("detectLinuxArch distinguishes amd64 and arm64", () => {
+  assert.equal(detectLinuxArch("Mozilla/5.0 (X11; Linux x86_64)"), "amd64");
+  assert.equal(detectLinuxArch("Mozilla/5.0 (X11; Linux aarch64)"), "arm64");
+  assert.equal(detectLinuxArch("Mozilla/5.0 (X11; Linux arm64)"), "arm64");
 });
 
 test("detectPlatform does not take an iPad in desktop mode for a Mac", () => {

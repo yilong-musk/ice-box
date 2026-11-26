@@ -5,6 +5,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Full Linux desktop release support for both `x86_64` and `arm64`, shipping
+  `.deb` (`amd64` / `arm64`) and `.AppImage` (`amd64` / `aarch64`) packages with
+  signed `latest.json` updater entries (`linux-x86_64` and `linux-aarch64`).
+- Linux system proxy management for GNOME (`gsettings`) and KDE Plasma 5/6
+  (`kreadconfig` / `kwriteconfig` with KIO D-Bus reload), plus `SIGTERM` /
+  `SIGHUP` session-end proxy restoration.
+- Linux XDG autostart support (`~/.config/autostart/com.yilong-musk.icebox.desktop`,
+  preferring `$APPIMAGE` when launched from an AppImage), an AppImage vs `.deb`
+  updater split (in-app signed updates on AppImage, download redirect on `.deb`),
+  and an automatic Wayland + NVIDIA `WEBKIT_DISABLE_DMABUF_RENDERER=1` fallback.
+- Linux TUN mode backed by Polkit (`pkexec`) elevation, a systemd `ice-helper`
+  daemon with root-owned `geoip` resource staging for AppImage compatibility,
+  `ifindex`-locked interface recovery, and `systemd-resolved` (`resolvectl`) /
+  static `/etc/resolv.conf` DNS management.
+
 ### Changed
 
 - Nodes and Subscriptions open with their content instead of an empty card,

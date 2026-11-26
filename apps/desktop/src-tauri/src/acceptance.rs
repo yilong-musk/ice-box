@@ -885,6 +885,177 @@ mod live {
         println!("G9.11 ok: Rule -> Global -> Direct -> Rule via rebuild + reload, no restart");
     }
 
+    /// Linux TUN live gate (`docs/testing.md`).
+    /// Uses the dev `sudo` runner (`ICE_BOX_TUN_DEV_SUDO`, cached root
+    /// credential or NOPASSWD). Run via `scripts/run-acceptance-linux-tun.sh`.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "live: real sing-box + sudo (Linux TUN gate)"]
+    fn g9_12_live_tun_enable_curl_disable() {
+        use crate::capture::{CaptureController, TrafficCapture, TunStatus};
+        use ice_config::TunSettings;
+        use ice_tun_sys::{JournalState, LinuxHost, ProcessLinuxHost, TunJournal};
+
+        let dev_sudo = std::env::var("ICE_BOX_TUN_DEV_SUDO")
+            .map(|v| !v.is_empty() && v != "0")
+            .unwrap_or(false);
+        assert!(
+            dev_sudo,
+            "run via scripts/run-acceptance-linux-tun.sh (sets ICE_BOX_TUN_DEV_SUDO and preflights sudo -n)"
+        );
+
+        let paths = temp_app("tun-live-linux");
+        seed_singbox_subscription(&paths);
+        let settings = AppSettings {
+            tun: TunSettings {
+                enabled: true,
+                ..TunSettings::default()
+            },
+            ..settings()
+        };
+        let mut core = CoreController::new();
+        let proxy = create_system_proxy();
+        let bin = real_binary();
+
+        orchestrate_start(
+            &paths,
+            &settings,
+            &mut core,
+            bin.clone(),
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .expect("start diagnostic core");
+        assert_eq!(core.state().status, CoreStatus::Running);
+
+        let capture = CaptureController::new(paths.clone(), None);
+        capture
+            .enable_tun(&settings, &mut core, bin.clone())
+            .expect("enable linux tun");
+        assert_eq!(capture.active_backend(), TrafficCapture::Tun);
+        assert_eq!(capture.tun_status(), TunStatus::Enabled);
+        let status = capture.status(&settings);
+        let interface = status
+            .tun_interface
+            .as_deref()
+            .expect("tun_interface after enable");
+        let journal = TunJournal::load(&paths.tun_state())
+            .expect("journal")
+            .expect("journal file");
+        assert_eq!(journal.state, JournalState::Applied);
+
+        assert!(curl_via_mixed(MIXED_PORT), "mixed must answer during TUN");
+
+        capture
+            .disable_active_backend(&settings, &mut core, proxy.as_ref(), bin.clone(), true)
+            .expect("disable tun");
+        assert_eq!(capture.active_backend(), TrafficCapture::Inactive);
+        assert_eq!(capture.tun_status(), TunStatus::Disabled);
+        let journal = TunJournal::load(&paths.tun_state())
+            .expect("journal")
+            .expect("journal file");
+        assert_eq!(journal.state, JournalState::Clean);
+        assert!(
+            ProcessLinuxHost
+                .interface_state(interface)
+                .expect("host read")
+                .is_none(),
+            "adapter {interface} must be removed after disable"
+        );
+
+        cleanup(&paths, &mut core, proxy.as_ref());
+        println!(
+            "G9.12-linux ok: TUN enable -> mixed curl -> disable -> adapter removed ({interface})"
+        );
+    }
+
+    /// Linux TUN live gate through the production systemd `ice-helper`
+    /// (`docs/testing.md`). Run via `scripts/run-acceptance-linux-tun.sh --helper`.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "live: real sing-box + installed systemd helper (Linux TUN gate)"]
+    fn g9_13_live_tun_via_helper() {
+        use crate::capture::{CaptureController, TrafficCapture, TunStatus};
+        use ice_config::TunSettings;
+        use ice_tun_sys::{JournalState, LinuxHost, ProcessLinuxHost, TunJournal};
+
+        let data_dir = std::env::var("ICE_BOX_TUN_LIVE_DATA_DIR").unwrap_or_else(|_| {
+            let xdg = std::env::var("XDG_DATA_HOME").unwrap_or_else(|_| {
+                format!("{}/.local/share", std::env::var("HOME").expect("HOME"))
+            });
+            format!("{xdg}/com.yilong-musk.icebox")
+        });
+        assert!(
+            !ice_tun_sys::dev_sudo_runner_enabled(),
+            "G9.13 exercises the helper path; run without ICE_BOX_TUN_DEV_SUDO"
+        );
+        let paths = AppPaths::new(&data_dir);
+        paths.ensure_dirs().expect("ensure dirs");
+        assert_app_not_running(&paths);
+        seed_singbox_subscription(&paths);
+        let settings = AppSettings {
+            tun: TunSettings {
+                enabled: true,
+                ..TunSettings::default()
+            },
+            ..settings()
+        };
+        let mut core = CoreController::new();
+        let proxy = create_system_proxy();
+        let bin = real_binary();
+
+        orchestrate_start(
+            &paths,
+            &settings,
+            &mut core,
+            bin.clone(),
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .expect("start diagnostic core");
+        assert_eq!(core.state().status, CoreStatus::Running);
+
+        let capture = CaptureController::new(paths.clone(), None);
+        capture
+            .enable_tun(&settings, &mut core, bin.clone())
+            .expect("enable linux tun via helper");
+        assert_eq!(capture.active_backend(), TrafficCapture::Tun);
+        assert_eq!(capture.tun_status(), TunStatus::Enabled);
+        let status = capture.status(&settings);
+        let interface = status
+            .tun_interface
+            .as_deref()
+            .expect("tun_interface after enable");
+        let journal = TunJournal::load(&paths.tun_state())
+            .expect("journal")
+            .expect("journal file");
+        assert_eq!(journal.state, JournalState::Applied);
+
+        assert!(curl_via_mixed(MIXED_PORT), "mixed must answer during TUN");
+
+        capture
+            .disable_active_backend(&settings, &mut core, proxy.as_ref(), bin.clone(), true)
+            .expect("disable tun");
+        assert_eq!(capture.active_backend(), TrafficCapture::Inactive);
+        assert_eq!(capture.tun_status(), TunStatus::Disabled);
+        let journal = TunJournal::load(&paths.tun_state())
+            .expect("journal")
+            .expect("journal file");
+        assert_eq!(journal.state, JournalState::Clean);
+        assert!(
+            ProcessLinuxHost
+                .interface_state(interface)
+                .expect("host read")
+                .is_none(),
+            "adapter {interface} must be removed after disable"
+        );
+
+        cleanup(&paths, &mut core, proxy.as_ref());
+        println!(
+            "G9.13-linux ok: TUN via systemd helper enable -> mixed curl -> disable ({interface})"
+        );
+    }
+
     /// macOS TUN live gate (`docs/testing.md`).
     /// Uses the dev `sudo` runner (`ICE_BOX_TUN_DEV_SUDO`, cached root
     /// credential or NOPASSWD) to exercise the native-path enable →

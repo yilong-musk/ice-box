@@ -20,7 +20,13 @@ write_happy() {
   printf 'DARWIN-MINISIGN\nline-two\n' >"$dir/ice-box.app.tar.gz.sig"
   printf 'windows-installer\n' >"$dir/ice-box_0.1.5_x64-setup.exe"
   printf 'WINDOWS-MINISIGN\nline-two\n' >"$dir/ice-box_0.1.5_x64-setup.exe.sig"
+  printf 'linux-x64-appimage\n' >"$dir/ice-box_0.1.5_amd64.AppImage"
+  printf 'LINUX-X64-MINISIGN\nline-two\n' >"$dir/ice-box_0.1.5_amd64.AppImage.sig"
+  printf 'linux-arm64-appimage\n' >"$dir/ice-box_0.1.5_aarch64.AppImage"
+  printf 'LINUX-ARM64-MINISIGN\nline-two\n' >"$dir/ice-box_0.1.5_aarch64.AppImage.sig"
   printf 'decoy\n' >"$dir/ice-box_0.1.5_aarch64.dmg"
+  printf 'decoy\n' >"$dir/ice-box_0.1.5_amd64.deb"
+  printf 'decoy\n' >"$dir/ice-box_0.1.5_arm64.deb"
   printf 'Release notes for 0.1.5\n\n- auto update\n' >"$dir/notes.md"
 }
 
@@ -42,7 +48,12 @@ expect("auto update" in data.get("notes", ""), f"notes: {data.get('notes')!r}")
 platforms = data.get("platforms") or {}
 darwin = platforms.get("darwin-aarch64") or {}
 windows = platforms.get("windows-x86_64") or {}
-expect(set(platforms) == {"darwin-aarch64", "windows-x86_64"}, f"platforms: {sorted(platforms)}")
+linux_x64 = platforms.get("linux-x86_64") or {}
+linux_arm64 = platforms.get("linux-aarch64") or {}
+expect(
+    set(platforms) == {"darwin-aarch64", "windows-x86_64", "linux-x86_64", "linux-aarch64"},
+    f"platforms: {sorted(platforms)}",
+)
 expect(
     darwin.get("url")
     == "https://github.com/yilong-musk/ice-box/releases/download/v0.1.5/ice-box.app.tar.gz",
@@ -54,6 +65,16 @@ expect(
     f"windows url: {windows.get('url')!r}",
 )
 expect(
+    linux_x64.get("url")
+    == "https://github.com/yilong-musk/ice-box/releases/download/v0.1.5/ice-box_0.1.5_amd64.AppImage",
+    f"linux-x86_64 url: {linux_x64.get('url')!r}",
+)
+expect(
+    linux_arm64.get("url")
+    == "https://github.com/yilong-musk/ice-box/releases/download/v0.1.5/ice-box_0.1.5_aarch64.AppImage",
+    f"linux-aarch64 url: {linux_arm64.get('url')!r}",
+)
+expect(
     darwin.get("signature") == "DARWIN-MINISIGN\nline-two\n",
     f"darwin signature is not the full .sig text: {darwin.get('signature')!r}",
 )
@@ -61,7 +82,17 @@ expect(
     windows.get("signature") == "WINDOWS-MINISIGN\nline-two\n",
     f"windows signature is not the full .sig text: {windows.get('signature')!r}",
 )
-expect("dmg" not in json.dumps(data), "dmg decoy leaked into latest.json")
+expect(
+    linux_x64.get("signature") == "LINUX-X64-MINISIGN\nline-two\n",
+    f"linux-x86_64 signature is not the full .sig text: {linux_x64.get('signature')!r}",
+)
+expect(
+    linux_arm64.get("signature") == "LINUX-ARM64-MINISIGN\nline-two\n",
+    f"linux-aarch64 signature is not the full .sig text: {linux_arm64.get('signature')!r}",
+)
+serialized = json.dumps(data)
+expect("dmg" not in serialized, "dmg decoy leaked into latest.json")
+expect(".deb" not in serialized, "deb decoy leaked into latest.json")
 if errors:
     print("\n".join(errors), file=sys.stderr)
     sys.exit(1)
@@ -78,13 +109,19 @@ OUT="$(
 assert_json "$OUT"
 
 echo "== nested bundle dirs (CI artifact layout) =="
-mkdir -p "$TMP/nested/macos" "$TMP/nested/dmg"
+mkdir -p "$TMP/nested/macos" "$TMP/nested/dmg" "$TMP/nested/appimage" "$TMP/nested/deb"
 write_happy "$TMP/nested-flat"
 mv "$TMP/nested-flat/ice-box.app.tar.gz" "$TMP/nested/macos/"
 mv "$TMP/nested-flat/ice-box.app.tar.gz.sig" "$TMP/nested/macos/"
 mv "$TMP/nested-flat/ice-box_0.1.5_x64-setup.exe" "$TMP/nested/"
 mv "$TMP/nested-flat/ice-box_0.1.5_x64-setup.exe.sig" "$TMP/nested/"
+mv "$TMP/nested-flat/ice-box_0.1.5_amd64.AppImage" "$TMP/nested/appimage/"
+mv "$TMP/nested-flat/ice-box_0.1.5_amd64.AppImage.sig" "$TMP/nested/appimage/"
+mv "$TMP/nested-flat/ice-box_0.1.5_aarch64.AppImage" "$TMP/nested/appimage/"
+mv "$TMP/nested-flat/ice-box_0.1.5_aarch64.AppImage.sig" "$TMP/nested/appimage/"
 mv "$TMP/nested-flat/ice-box_0.1.5_aarch64.dmg" "$TMP/nested/dmg/"
+mv "$TMP/nested-flat/ice-box_0.1.5_amd64.deb" "$TMP/nested/deb/"
+mv "$TMP/nested-flat/ice-box_0.1.5_arm64.deb" "$TMP/nested/deb/"
 mv "$TMP/nested-flat/notes.md" "$TMP/nested/notes.md"
 NESTED_OUT="$(
   GITHUB_REPOSITORY="yilong-musk/ice-box" \
@@ -100,6 +137,22 @@ if bash "$SCRIPT" "$TMP/no-darwin" v0.1.5 "$TMP/no-darwin/notes.md" >"$TMP/out.j
   fail "expected failure when darwin archive is missing"
 fi
 grep -q "darwin" "$TMP/err.txt" || fail "missing-darwin error should mention darwin"
+
+echo "== missing linux x64 AppImage =="
+write_happy "$TMP/no-linux-x64"
+rm -f "$TMP/no-linux-x64/ice-box_0.1.5_amd64.AppImage" "$TMP/no-linux-x64/ice-box_0.1.5_amd64.AppImage.sig"
+if bash "$SCRIPT" "$TMP/no-linux-x64" v0.1.5 "$TMP/no-linux-x64/notes.md" >"$TMP/out.json" 2>"$TMP/err.txt"; then
+  fail "expected failure when linux x64 AppImage is missing"
+fi
+grep -q "linux-x86_64" "$TMP/err.txt" || fail "missing-linux-x64 error should mention linux-x86_64"
+
+echo "== missing linux arm64 signature =="
+write_happy "$TMP/no-linux-arm64-sig"
+rm -f "$TMP/no-linux-arm64-sig/ice-box_0.1.5_aarch64.AppImage.sig"
+if bash "$SCRIPT" "$TMP/no-linux-arm64-sig" v0.1.5 "$TMP/no-linux-arm64-sig/notes.md" >"$TMP/out.json" 2>"$TMP/err.txt"; then
+  fail "expected failure when linux arm64 .sig is missing"
+fi
+grep -qi "signature" "$TMP/err.txt" || fail "missing-linux-sig error should mention signature"
 
 echo "== missing windows signature =="
 write_happy "$TMP/no-win-sig"

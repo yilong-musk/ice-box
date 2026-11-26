@@ -22,6 +22,8 @@ mod runtime;
 mod runtime_status;
 #[cfg(target_os = "windows")]
 mod session_end;
+#[cfg(target_os = "linux")]
+mod session_end_unix;
 mod shutdown;
 mod subscription_watch;
 mod tray;
@@ -334,6 +336,10 @@ pub fn run() {
             // it the registry keeps pointing at a core that the reboot killed.
             #[cfg(target_os = "windows")]
             session_end::install(paths.proxy_backup());
+            // Restore the system proxy on Linux session logout / shutdown
+            // (`SIGTERM`/`SIGHUP`), even if GTK exits before `ExitRequested`.
+            #[cfg(target_os = "linux")]
+            session_end_unix::install(paths.proxy_backup());
             // Shown only once this process owns the data dir: a second user
             // launch leaves through `acquire_instance_lock`, and showing the
             // window first would flash a blank one before that exit.
@@ -562,6 +568,7 @@ pub fn run() {
             app_update::record_app_update_check,
             app_update::skip_app_update,
             app_update::install_app_update,
+            app_update::open_app_download,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

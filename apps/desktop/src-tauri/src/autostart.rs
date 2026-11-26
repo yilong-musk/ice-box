@@ -7,9 +7,12 @@
 //! per-user LaunchAgent plist, the same mechanism the bundled helper uses one
 //! level up for its root daemon. Windows uses the per-user
 //! `HKCU\...\CurrentVersion\Run` value, which matches the per-user NSIS
-//! install: no elevation, no machine-wide state.
+//! install: no elevation, no machine-wide state. Linux writes an XDG Autostart
+//! `.desktop` file under `${XDG_CONFIG_HOME:-$HOME/.config}/autostart/` and
+//! prefers `$APPIMAGE` when running from an AppImage so the login item does not
+//! point at an ephemeral `/tmp/.mount_*` path.
 //!
-//! Both registrations carry [`AUTOSTART_FLAG`], so the process knows it was
+//! All registrations carry [`AUTOSTART_FLAG`], so the process knows it was
 //! started by the login item and stays in the tray instead of opening the
 //! window. The registered command line points at the running executable, which
 //! can move between installs and versions, so the shell rewrites the entry on
@@ -26,7 +29,11 @@ pub const AUTOSTART_FLAG: &str = "--autostart";
 
 /// Whether this build can register an OS login item. The Settings card is
 /// hidden where it cannot, so the switch is never an error-only control.
-pub const SUPPORTED: bool = cfg!(any(target_os = "macos", target_os = "windows"));
+pub const SUPPORTED: bool = cfg!(any(
+    target_os = "macos",
+    target_os = "windows",
+    target_os = "linux"
+));
 
 /// Whether this process was started by the login item.
 pub fn is_autostart_launch() -> bool {
@@ -45,10 +52,32 @@ where
         .any(|arg| arg.as_ref() == std::ffi::OsStr::new(AUTOSTART_FLAG))
 }
 
+/// Resolve the stable executable path to record in the login item.
+///
+/// On Linux AppImage launches, `current_exe()` points inside the ephemeral
+/// `/tmp/.mount_*` FUSE mount that vanishes on exit; `$APPIMAGE` carries the
+/// real `.AppImage` file path on disk.
+#[cfg(any(target_os = "linux", test))]
+fn resolve_linux_executable(
+    appimage_env: Option<&std::ffi::OsStr>,
+    current_exe: &Path,
+) -> std::path::PathBuf {
+    if let Some(appimage) = appimage_env {
+        if !appimage.is_empty() {
+            return std::path::PathBuf::from(appimage);
+        }
+    }
+    current_exe.to_path_buf()
+}
+
 /// Register (or drop) the login item for this process's executable.
 pub fn set_enabled(enabled: bool) -> Result<(), String> {
-    let exe =
+    let current =
         std::env::current_exe().map_err(|err| format!("resolve the running executable: {err}"))?;
+    #[cfg(target_os = "linux")]
+    let exe = resolve_linux_executable(std::env::var_os("APPIMAGE").as_deref(), &current);
+    #[cfg(not(target_os = "linux"))]
+    let exe = current;
     imp::set_enabled(&exe, enabled)
 }
 
@@ -288,12 +317,125 @@ mod imp {
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+/// Desktop entry file stem matching the app's reverse-DNS bundle identifier.
+#[cfg(any(target_os = "linux", test))]
+const XDG_DESKTOP_ENTRY_ID: &str = "com.yilong-musk.icebox";
+
+/// Resolve `${XDG_CONFIG_HOME:-$HOME/.config}/autostart/<id>.desktop`.
+///
+/// Per the XDG Base Directory Specification, a relative or empty
+/// `XDG_CONFIG_HOME` is ignored in favour of `$HOME/.config`.
+#[cfg(any(target_os = "linux", test))]
+fn xdg_autostart_path(
+    xdg_config_home: Option<&Path>,
+    home: Option<&Path>,
+) -> Result<std::path::PathBuf, String> {
+    let config_root = match xdg_config_home {
+        Some(path) if path.is_absolute() => path.to_path_buf(),
+        _ => home
+            .ok_or_else(|| "HOME is not set".to_string())?
+            .join(".config"),
+    };
+    Ok(config_root
+        .join("autostart")
+        .join(format!("{XDG_DESKTOP_ENTRY_ID}.desktop")))
+}
+
+/// Escape an executable path for a double-quoted argument in a `.desktop`
+/// `Exec=` key according to the FreeDesktop Desktop Entry Specification.
+#[cfg(any(target_os = "linux", test))]
+fn desktop_exec_escape(value: &str) -> String {
+    // 1. Exec quoting inside `"..."` reserves `"`, `` ` ``, `$`, `\` and `%`.
+    let mut exec_quoted = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '\\' | '"' | '`' | '$' => {
+                exec_quoted.push('\\');
+                exec_quoted.push(ch);
+            }
+            '%' => exec_quoted.push_str("%%"),
+            _ => exec_quoted.push(ch),
+        }
+    }
+    // 2. Desktop Entry string-value escaping runs before Exec parsing.
+    let mut out = String::with_capacity(exec_quoted.len());
+    for ch in exec_quoted.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// Render an XDG Autostart `.desktop` entry that launches `exe` with
+/// [`AUTOSTART_FLAG`].
+#[cfg(any(target_os = "linux", test))]
+fn render_desktop_entry(exe: &Path) -> String {
+    format!(
+        "[Desktop Entry]\n\
+         Type=Application\n\
+         Version=1.0\n\
+         Name=ice-box\n\
+         Comment=Lightweight sing-box proxy client\n\
+         Exec=\"{}\" {AUTOSTART_FLAG}\n\
+         Icon=ice-box\n\
+         Terminal=false\n\
+         StartupNotify=false\n\
+         X-GNOME-Autostart-enabled=true\n",
+        desktop_exec_escape(&exe.display().to_string())
+    )
+}
+
+#[cfg(target_os = "linux")]
+mod imp {
+    use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+
+    pub fn set_enabled_at(path: &Path, exe: &Path, enabled: bool) -> Result<(), String> {
+        if !enabled {
+            return match fs::remove_file(path) {
+                Ok(()) => Ok(()),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(err) => Err(format!("remove {}: {err}", path.display())),
+            };
+        }
+        let dir = path
+            .parent()
+            .ok_or_else(|| format!("no parent directory for {}", path.display()))?;
+        fs::create_dir_all(dir).map_err(|err| format!("create {}: {err}", dir.display()))?;
+        let staging = path.with_extension("desktop.tmp");
+        fs::write(&staging, render_desktop_entry(exe))
+            .map_err(|err| format!("write {}: {err}", staging.display()))?;
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&staging, fs::Permissions::from_mode(0o644))
+                .map_err(|err| format!("chmod {}: {err}", staging.display()))?;
+        }
+        fs::rename(&staging, path).map_err(|err| {
+            let _ = fs::remove_file(&staging);
+            format!("install {}: {err}", path.display())
+        })
+    }
+
+    pub fn set_enabled(exe: &Path, enabled: bool) -> Result<(), String> {
+        let xdg = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from);
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let path = xdg_autostart_path(xdg.as_deref(), home.as_deref())?;
+        set_enabled_at(&path, exe, enabled)
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 mod imp {
     use super::*;
 
     pub fn set_enabled(_exe: &Path, _enabled: bool) -> Result<(), String> {
-        Err("launch at login is only supported on macOS and Windows".to_string())
+        Err("launch at login is only supported on macOS, Windows, and Linux".to_string())
     }
 }
 
@@ -388,5 +530,72 @@ mod tests {
             err.contains("/Applications"),
             "the refusal must say where to install: {err}"
         );
+    }
+
+    #[test]
+    fn linux_executable_prefers_appimage_env_over_ephemeral_mount() {
+        let current = Path::new("/tmp/.mount_ice-bo1234/usr/bin/ice-box");
+        assert_eq!(
+            resolve_linux_executable(
+                Some(std::ffi::OsStr::new("/home/u/Apps/ice-box.AppImage")),
+                current
+            ),
+            PathBuf::from("/home/u/Apps/ice-box.AppImage")
+        );
+        assert_eq!(
+            resolve_linux_executable(Some(std::ffi::OsStr::new("")), current),
+            current
+        );
+        assert_eq!(resolve_linux_executable(None, current), current);
+    }
+
+    #[test]
+    fn xdg_autostart_path_honors_absolute_xdg_config_home_and_falls_back_to_home() {
+        assert_eq!(
+            xdg_autostart_path(Some(Path::new("/custom/cfg")), Some(Path::new("/home/u"))).unwrap(),
+            PathBuf::from("/custom/cfg/autostart/com.yilong-musk.icebox.desktop")
+        );
+        assert_eq!(
+            xdg_autostart_path(Some(Path::new("relative/cfg")), Some(Path::new("/home/u")))
+                .unwrap(),
+            PathBuf::from("/home/u/.config/autostart/com.yilong-musk.icebox.desktop")
+        );
+        assert_eq!(
+            xdg_autostart_path(None, Some(Path::new("/home/u"))).unwrap(),
+            PathBuf::from("/home/u/.config/autostart/com.yilong-musk.icebox.desktop")
+        );
+        assert!(xdg_autostart_path(None, None).is_err());
+    }
+
+    #[test]
+    fn desktop_entry_renders_and_escapes_special_characters() {
+        let entry = render_desktop_entry(Path::new("/home/u/My Apps/ice$box%1.AppImage"));
+        assert!(entry.contains("[Desktop Entry]"));
+        assert!(entry.contains("Exec=\"/home/u/My Apps/ice\\\\$box%%1.AppImage\" --autostart"));
+        assert!(entry.contains("X-GNOME-Autostart-enabled=true"));
+        assert!(entry.contains("Terminal=false"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_set_enabled_at_writes_and_removes_desktop_entry() {
+        let dir = std::env::temp_dir().join(format!(
+            "ice-box-autostart-linux-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let path = dir.join("autostart/com.yilong-musk.icebox.desktop");
+        let exe = Path::new("/usr/bin/ice-box");
+
+        imp::set_enabled_at(&path, exe, true).expect("enable");
+        let content = std::fs::read_to_string(&path).expect("read");
+        assert!(content.contains("Exec=\"/usr/bin/ice-box\" --autostart"));
+
+        imp::set_enabled_at(&path, exe, false).expect("disable");
+        assert!(!path.exists());
+        imp::set_enabled_at(&path, exe, false).expect("disable idempotent");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

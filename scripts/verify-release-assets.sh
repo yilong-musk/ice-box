@@ -142,6 +142,12 @@ expected = {
     "ice-box.app.tar.gz.sig",
     f"ice-box_{version}_x64-setup.exe",
     f"ice-box_{version}_x64-setup.exe.sig",
+    f"ice-box_{version}_amd64.deb",
+    f"ice-box_{version}_amd64.AppImage",
+    f"ice-box_{version}_amd64.AppImage.sig",
+    f"ice-box_{version}_arm64.deb",
+    f"ice-box_{version}_aarch64.AppImage",
+    f"ice-box_{version}_aarch64.AppImage.sig",
     f"ice-box_{version}_android_arm64.apk",
     "SHA256SUMS",
     "LICENSE",
@@ -240,13 +246,14 @@ else:
     if not payload or payload.get("version") != version:
         fail(f"{source} does not report version {version}")
     platforms = payload.get("platforms") or {}
-    for name in ("darwin-aarch64", "windows-x86_64"):
+    expected_platforms = ("darwin-aarch64", "windows-x86_64", "linux-x86_64", "linux-aarch64")
+    for name in expected_platforms:
         platform = platforms.get(name) or {}
         if not (platform.get("signature") or "").strip():
             fail(f"latest.json {name} signature is empty")
         if f"/{tag}/" not in (platform.get("url") or ""):
             fail(f"latest.json {name} url does not point at {tag}")
-    print(f"latest.json reports {version} for darwin-aarch64 and windows-x86_64 ({source})")
+    print(f"latest.json reports {version} for {', '.join(expected_platforms)} ({source})")
 
 print(f"verify-release-assets: OK ({tag})")
 PY

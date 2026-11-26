@@ -2325,8 +2325,8 @@ fn tun_gate_status_is_stable_per_platform() {
     assert_eq!(windows.reason, None);
 
     let linux = tun_gate_for(HostPlatform::Linux);
-    assert!(!linux.ready, "Linux has no TUN backend");
-    assert!(linux.reason.is_some());
+    assert!(linux.ready, "linux_tun_ready is green");
+    assert_eq!(linux.reason, None);
 
     assert!(tun_gate_for(HostPlatform::Android).ready);
     assert!(tun_gate_for(HostPlatform::Ios).ready);
@@ -2599,18 +2599,16 @@ fn tun_config_rejects_invalid_mtu_and_address_at_build_time() {
 }
 
 #[test]
-fn tun_intent_is_rejected_on_platforms_without_a_green_gate() {
-    // Linux / other hosts: Tun generation must fail closed with the stable
-    // unavailable error, never emit a tun inbound.
+fn tun_intent_generates_linux_tun_inbound_with_green_gate() {
     let template = LocalTemplate {
         tun: TunSettings {
             enabled: true,
-            interface_name: Some("utun420".into()),
+            interface_name: Some("icebox0".into()),
             ..TunSettings::default()
         },
         ..LocalTemplate::default()
     };
-    let err = build_runtime_config(&BuildInput {
+    let built = build_runtime_config(&BuildInput {
         template: template.clone(),
         profile: Arc::new(NormalizedProfile::from_nodes_only(vec![socks("a")])),
         selected_tag: None,
@@ -2623,9 +2621,17 @@ fn tun_intent_is_rejected_on_platforms_without_a_green_gate() {
         shared_root: None,
         platform: HostPlatform::Linux,
     })
-    .expect_err("tun gate not green");
-    assert!(matches!(err, ConfigError::TunUnavailable(_)));
-    assert!(build_direct_only_config(&template, CaptureIntent::Tun, HostPlatform::Linux).is_err());
+    .expect("linux tun gate is green");
+    let built_json = serde_json::to_value(&built).unwrap();
+    let tun = built_json["inbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["type"] == "tun")
+        .expect("linux tun inbound");
+    assert_eq!(tun["interface_name"], "icebox0");
+    assert_eq!(tun["dns_mode"], "disabled");
+    assert!(build_direct_only_config(&template, CaptureIntent::Tun, HostPlatform::Linux).is_ok());
 }
 
 #[test]

@@ -45,6 +45,12 @@ printf 'tar\n' >"$RELEASE/ice-box.app.tar.gz"
 printf 'sig\n' >"$RELEASE/ice-box.app.tar.gz.sig"
 printf 'exe\n' >"$RELEASE/ice-box_0.2.6_x64-setup.exe"
 printf 'sig\n' >"$RELEASE/ice-box_0.2.6_x64-setup.exe.sig"
+printf 'deb-x64\n' >"$RELEASE/ice-box_0.2.6_amd64.deb"
+printf 'appimage-x64\n' >"$RELEASE/ice-box_0.2.6_amd64.AppImage"
+printf 'sig\n' >"$RELEASE/ice-box_0.2.6_amd64.AppImage.sig"
+printf 'deb-arm64\n' >"$RELEASE/ice-box_0.2.6_arm64.deb"
+printf 'appimage-arm64\n' >"$RELEASE/ice-box_0.2.6_aarch64.AppImage"
+printf 'sig\n' >"$RELEASE/ice-box_0.2.6_aarch64.AppImage.sig"
 printf 'apk\n' >"$RELEASE/ice-box_0.2.6_android_arm64.apk"
 printf 'license\n' >"$RELEASE/LICENSE"
 printf 'notice\n' >"$RELEASE/NOTICE"
@@ -60,6 +66,14 @@ cat >"$RELEASE/latest.json" <<'EOF'
     "windows-x86_64": {
       "signature": "sig",
       "url": "https://github.com/fixture/repo/releases/download/v0.2.6/ice-box_0.2.6_x64-setup.exe"
+    },
+    "linux-x86_64": {
+      "signature": "sig",
+      "url": "https://github.com/fixture/repo/releases/download/v0.2.6/ice-box_0.2.6_amd64.AppImage"
+    },
+    "linux-aarch64": {
+      "signature": "sig",
+      "url": "https://github.com/fixture/repo/releases/download/v0.2.6/ice-box_0.2.6_aarch64.AppImage"
     }
   }
 }

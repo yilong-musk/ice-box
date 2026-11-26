@@ -1162,7 +1162,12 @@ fn create_backend_capability_matches_the_platform_gate() {
         );
         assert!(capability.reason.is_none());
     }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(target_os = "linux")]
+    {
+        assert!(capability.supported, "linux_tun_ready: gate green");
+        assert!(capability.reason.is_none());
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         assert!(!capability.supported, "unsupported host: fail closed");
         assert!(capability.reason.is_some());

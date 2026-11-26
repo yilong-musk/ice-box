@@ -8,13 +8,13 @@
 
 **最好的 sing-box GUI。**
 
-面向 macOS、Windows 与 Android 的轻量代理客户端。<br>
+面向 macOS、Windows、Linux 与 Android 的轻量代理客户端。<br>
 上手简单、启动迅速、运行安静，并对 Agent 友好——基于 [sing-box](https://github.com/SagerNet/sing-box) 内核。
 
 [![Release](https://img.shields.io/github/v/release/yilong-musk/ice-box?style=flat-square&label=release)](https://github.com/yilong-musk/ice-box/releases/latest)
 [![CI](https://img.shields.io/github/actions/workflow/status/yilong-musk/ice-box/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/yilong-musk/ice-box/actions/workflows/ci.yml)
 [![Downloads](https://img.shields.io/github/downloads/yilong-musk/ice-box/total?style=flat-square)](https://github.com/yilong-musk/ice-box/releases)
-[![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Android-007ec6?style=flat-square)](#安装)
+[![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux%20%7C%20Android-007ec6?style=flat-square)](#安装)
 [![Core](https://img.shields.io/badge/sing--box-1.14.4-6f42c1?style=flat-square)](https://github.com/SagerNet/sing-box)
 [![License](https://img.shields.io/github/license/yilong-musk/ice-box?style=flat-square)](LICENSE)
 
@@ -37,8 +37,8 @@
 - **订阅。** 自动识别 sing-box JSON、Clash 和分享链接列表，也可以导入本地的 sing-box 配置文件。桌面端可开启自动更新；Android 在导入或手动刷新时更新。机场上报的流量与到期信息显示在每条订阅上。
 - **分流。** **规则**、**全局**、**直连** 三种模式，订阅规则可逐条开关，还可以叠加自定义规则。
 - **节点。** 按策略组选择出口，单个或批量测延迟，并可收藏常用节点。
-- **连接。** macOS 与 Windows 上可查看每一条活动连接：目标地址、命中的规则、使用的出口与累计流量；支持搜索、排序，以及关闭单个或全部连接。
-- **流量接管。** macOS 与 Windows 上使用系统代理或 TUN；Android 使用系统 VPN，并支持按应用分流（跟随规则、代理、直连或拦截）。
+- **连接。** 桌面端（macOS、Windows、Linux）上可查看每一条活动连接：目标地址、命中的规则、使用的出口与累计流量；支持搜索、排序，以及关闭单个或全部连接。
+- **流量接管。** 桌面端使用系统代理或 TUN；Android 使用系统 VPN，并支持按应用分流（跟随规则、代理、直连或拦截）。
 - **托盘。** 不打开窗口即可启停代理服务，切换模式、订阅和出口节点。macOS 的菜单栏项还会显示实时网速，菜单内可以测延迟。
 - **Agent 接入。** 可选的本地 MCP 服务，让 Agent 操作同一个正在运行的会话。
 - **省心。** 开机自启、经签名校验的应用内更新、主页上的实时流量与内存读数、中英文界面、浅色与深色主题。
@@ -51,9 +51,10 @@
 |---|---|---|---|
 | **macOS**（Apple Silicon） | macOS 12 及以上 | `ice-box_<version>_aarch64.dmg` | 仅有 ad-hoc 签名（无 Developer ID、未公证），首次打开会提示「身份不明的开发者」。可在 **系统设置 → 隐私与安全性** 中点「仍要打开」（macOS 15+）、右键选择 **打开**（较早版本），或执行 `xattr -dr com.apple.quarantine /Applications/ice-box.app`。 |
 | **Windows**（x64） | Windows 10 及以上 | `ice-box_<version>_x64-setup.exe` | 按用户安装的 NSIS 安装包，无需管理员权限。安装包没有 Authenticode 签名，SmartScreen 可能会要求确认。 |
+| **Linux**（x64 / arm64） | Ubuntu 22.04+ 等主流发行版 | `ice-box_<version>_amd64.AppImage` / `aarch64.AppImage`<br>`ice-box_<version>_amd64.deb` / `arm64.deb` | AppImage 需先赋予可执行权限（`chmod +x`）；`.deb` 可用 `sudo apt install ./ice-box_*.deb` 安装。GNOME 托盘图标需要 AppIndicator 扩展（`gnome-shell-extension-appindicator`）。在 Wayland + NVIDIA 环境下，若未手动设置，应用会自动启用 `WEBKIT_DISABLE_DMABUF_RENDERER=1`。 |
 | **Android**（arm64） | Android 14 及以上 | `ice-box_<version>_android_arm64.apk` | 使用项目密钥签名。没有 Google Play 上架；首次安装时，Android 会要求允许从此来源安装应用。 |
 
-**更新。** 在 macOS 与 Windows 上（0.1.5+），ice-box 会在后台检查 GitHub Releases，并在 **设置 → 应用更新** 中安装经签名校验的更新；更早版本需要先手动升级一次。在 Android 上，**设置 → 应用更新** 检查同一份目录，在应用内下载 arm64 APK，再交给系统安装器确认。
+**更新。** 在 macOS、Windows（0.1.5+）以及 Linux AppImage 上，ice-box 会在后台检查 GitHub Releases，并在 **设置 → 应用更新** 中安装经签名校验的更新；更早的 macOS/Windows 版本需要先手动升级一次。Linux `.deb` 安装同样会检查新版本，并引导前往发布页下载更新以由 `apt` / `dpkg` 管理。在 Android 上，**设置 → 应用更新** 会在应用内下载 arm64 APK，再交给系统安装器确认。
 
 ## 快速上手
 
@@ -65,19 +66,19 @@
 
 ## 开机自启
 
-在 macOS 与 Windows 上，打开 **设置 → 启动 → 开机自启**。自启时窗口不弹出，只进入托盘；内核照常启动，并恢复上次的代理状态。
+在 macOS、Windows 与 Linux 上，打开 **设置 → 启动 → 开机自启**。自启时窗口不弹出，只进入托盘；内核照常启动，并恢复上次的代理状态。
 
-关闭时也用这个开关：在 macOS 的 **登录项** 里关闭不会清除应用内设置。启用前请先安装应用，直接从磁盘映像运行会被拒绝。
+关闭时也用这个开关：在 macOS 的 **登录项** 里关闭不会清除应用内设置。macOS 上启用前请先安装应用，直接从磁盘映像运行会被拒绝。Linux 上会在 `~/.config/autostart/com.yilong-musk.icebox.desktop` 写入桌面项（AppImage 运行时优先记录 `$APPIMAGE` 路径）。
 
 Android 没有登录项。**设置 → 系统** 说明电池优化豁免、严格私人 DNS，以及始终开启 VPN。
 
 ## TUN 模式
 
-在 macOS 与 Windows 上，TUN 在网络层接管流量，不读取系统代理的应用也能覆盖。Windows 的 TUN 只接管 IPv4 TCP（不支持 UDP/QUIC 和 IPv6），并且需要管理员账户；这些场景可以改用系统代理。启用方式、开关行为、平台覆盖范围和限制统一见 [`docs/tun.md`](docs/tun.md)。Android 使用系统 VPN，见 [`docs/architecture.md`](docs/architecture.md#clients)。
+在 macOS、Windows 与 Linux 上，TUN 在网络层接管流量，不读取系统代理的应用也能覆盖。Windows 的 TUN 只接管 IPv4 TCP（不支持 UDP/QUIC 和 IPv6），并且需要管理员账户；这些场景可以改用系统代理。Linux 的 TUN 通过 Polkit（`pkexec`）安装 systemd `ice-helper` 守护进程，并由 `systemd-resolved`（`resolvectl`）或静态 `/etc/resolv.conf` 管理 DNS。启用方式、开关行为、平台覆盖范围和限制统一见 [`docs/tun.md`](docs/tun.md)。Android 使用系统 VPN，见 [`docs/architecture.md`](docs/architecture.md#clients)。
 
 ## Agent 通过 MCP 访问
 
-macOS 与 Windows 桌面端提供可选的本地 MCP 服务。打开位于 **连接** 和 **设置** 之间的 **MCP** 页面，启用服务并复制生成的客户端配置。Agent 与 GUI 共享当前会话的设置、订阅、数据、内核和代理状态，不会另起一个运行时。
+桌面端（macOS、Windows 与 Linux）提供可选的本地 MCP 服务。打开位于 **连接** 和 **设置** 之间的 **MCP** 页面，启用服务并复制生成的客户端配置。Agent 与 GUI 共享当前会话的设置、订阅、数据、内核和代理状态，不会另起一个运行时。
 
 - **完整的工具集。** 覆盖状态、设置、流量、订阅、节点与分组、规则、实时连接、日志、诊断、代理控制和受保护的 TUN 恢复；当结果为对象时附带结构化内容，并保留应用错误码。
 - **安全的默认值。** MCP 仅在回环地址上监听，并要求随机控制令牌认证，且复制的客户端配置中不包含该令牌。
@@ -87,7 +88,7 @@ MCP 仅限桌面端：Android 不提供 MCP，网站演示使用模拟服务。�
 
 ## 开发
 
-Rust（版本固定在 `rust-toolchain.toml`，rustup 首次使用时自动安装）、Node.js 22，macOS 上还需要 Xcode Command Line Tools。构建 Android 还需要 JDK 17、Go，以及已设置 `ANDROID_HOME` 的 Android SDK（包由 `scripts/ci-install-android-sdk.sh` 安装）。
+Rust（版本固定在 `rust-toolchain.toml`，rustup 首次使用时自动安装）、Node.js 22，macOS 上需要 Xcode Command Line Tools，Linux 上需要 GTK/WebKit 开发包（`libwebkit2gtk-4.1-dev`、`libgtk-3-dev`、`libayatana-appindicator3-dev`、`librsvg2-dev`、`libssl-dev`）。构建 Android 还需要 JDK 17、Go，以及已设置 `ANDROID_HOME` 的 Android SDK（包由 `scripts/ci-install-android-sdk.sh` 安装）。
 
 ```bash
 cd apps/desktop && npm install && cd ../..
@@ -98,16 +99,17 @@ npm run dev
 
 | 命令 | 用途 |
 |---|---|
-| `npm run dev:mac-arm64` / `dev:mac-x64` / `dev:win` | 按指定主机目标运行 |
+| `npm run dev:mac-arm64` / `dev:mac-x64` / `dev:win` / `dev:linux-x64` / `dev:linux-arm64` | 按指定主机目标运行 |
 | `npm run gate` | 完整工作区门禁：fmt、clippy、Rust 测试、类型检查、构建、smoke 测试、fixtures |
 | `npm run fetch-singbox && npm run build` | 构建 macOS `.dmg` |
 | `npm run fetch-singbox -- win && npm run build:win` | 构建 Windows NSIS 安装包 |
-| `npm run acceptance` / `acceptance:tun` / `acceptance:win` | 在真实主机上运行的验收门禁 |
+| `npm run fetch-singbox -- linux-x64 && npm run build:linux` | 构建 Linux `.deb` 与 `.AppImage`（arm64 主机请使用 `linux-arm64`） |
+| `npm run acceptance` / `acceptance:tun` / `acceptance:win` / `acceptance:linux` / `acceptance:linux-tun` | 在真实主机上运行的验收门禁 |
 | `bash scripts/build-android-apk.sh debug arm64` | 用于 arm64 设备的调试 APK |
 | `bash scripts/build-android-apk.sh debug amd64` | 用于模拟器的调试 APK |
 
 ```
-apps/desktop    macOS 与 Windows 的 React 界面 + Tauri 外壳
+apps/desktop    macOS、Windows 与 Linux 的 React 界面 + Tauri 外壳
 apps/mobile     Android 外壳，复用桌面端界面
 apps/website    GitHub Pages 站点与在线演示
 crates/         Rust 工作区（主要 crate）：ice-app、ice-config、ice-core、ice-engine、ice-subscription、ice-proxy-sys、ice-tun-sys、ice-elevate、ice-helper、ice-types 等

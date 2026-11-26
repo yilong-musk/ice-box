@@ -84,6 +84,10 @@ jobs:
           missing=0
           for name in "ice-box_${version}_aarch64.dmg" \
             "ice-box_${version}_x64-setup.exe" \
+            "ice-box_${version}_amd64.deb" \
+            "ice-box_${version}_amd64.AppImage" \
+            "ice-box_${version}_arm64.deb" \
+            "ice-box_${version}_aarch64.AppImage" \
             "ice-box_${version}_android_arm64.apk"; do
             if ! grep -qxF "$name" <<< "$assets"; then
               echo "release v$version is missing $name" >&2

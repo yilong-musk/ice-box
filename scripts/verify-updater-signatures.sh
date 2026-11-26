@@ -3,8 +3,9 @@
 # Check that Tauri updater signatures use the committed pubkey's key id.
 # Usage: scripts/verify-updater-signatures.sh [--strict] [--pubkey-file <path>] <assets-dir>
 #
-# <assets-dir> must contain exactly one macOS *.app.tar.gz.sig and one Windows
-# *.exe.sig, plus their artifacts. The default pubkey source is the committed
+# <assets-dir> must contain exactly one macOS *.app.tar.gz.sig, one Windows
+# *.exe.sig, one Linux *_amd64.AppImage.sig, and one Linux *_aarch64.AppImage.sig,
+# plus their artifacts. The default pubkey source is the committed
 # apps/desktop/src-tauri/tauri.conf.json; a fixture may pass a JSON file with the
 # same shape, or a decoded minisign public-key file.
 #
@@ -139,12 +140,24 @@ if comment_id and comment_id not in (key_id, display_id):
 
 mac_sigs = sorted(p for p in assets.glob("*.app.tar.gz.sig") if p.is_file())
 win_sigs = sorted(p for p in assets.glob("*.exe.sig") if p.is_file())
+linux_x64_sigs = sorted(p for p in assets.glob("*_amd64.AppImage.sig") if p.is_file())
+linux_arm64_sigs = sorted(p for p in assets.glob("*_aarch64.AppImage.sig") if p.is_file())
 if len(mac_sigs) != 1:
     fail(f"expected exactly one macOS .app.tar.gz.sig in {assets}, found {len(mac_sigs)}")
 if len(win_sigs) != 1:
     fail(f"expected exactly one Windows .exe.sig in {assets}, found {len(win_sigs)}")
+if len(linux_x64_sigs) != 1:
+    fail(
+        f"expected exactly one Linux x86_64 *_amd64.AppImage.sig in {assets}, "
+        f"found {len(linux_x64_sigs)}"
+    )
+if len(linux_arm64_sigs) != 1:
+    fail(
+        f"expected exactly one Linux arm64 *_aarch64.AppImage.sig in {assets}, "
+        f"found {len(linux_arm64_sigs)}"
+    )
 
-for signature in mac_sigs + win_sigs:
+for signature in mac_sigs + win_sigs + linux_x64_sigs + linux_arm64_sigs:
     artifact = Path(str(signature)[: -len(".sig")])
     if not artifact.is_file():
         fail(f"{signature.name}: missing artifact {artifact.name}")

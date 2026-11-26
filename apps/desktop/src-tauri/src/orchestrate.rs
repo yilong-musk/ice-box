@@ -188,9 +188,9 @@ fn runtime_template(
     Ok(template)
 }
 
-/// Protected sing-box copies started by the macOS helper / Windows launcher.
+/// Protected sing-box copies started by the macOS/Linux helper or Windows launcher.
 pub(crate) fn elevated_core_binaries() -> Vec<std::path::PathBuf> {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
         vec![std::path::PathBuf::from(
             ice_tun_sys::install_paths::CORE_BIN_DEST,
@@ -200,7 +200,7 @@ pub(crate) fn elevated_core_binaries() -> Vec<std::path::PathBuf> {
     {
         vec![ice_tun_sys::protected_bin_dir(&ice_tun_sys::program_files_dir()).join("sing-box.exe")]
     }
-    #[cfg(not(any(target_os = "macos", windows)))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
     Vec::new()
 }
 
@@ -931,7 +931,7 @@ mod tests {
     use ice_engine::{
         write_subscription_success, SubscriptionFormat, SubscriptionMeta, SubscriptionPaths,
     };
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     use ice_proxy_sys::create_system_proxy;
     use ice_proxy_sys::{NoopSystemProxy, ProxyBackup, ProxyBackupFile, ProxySysError};
     use std::cell::Cell;
@@ -1410,7 +1410,7 @@ mod tests {
         let _ = fs::remove_dir_all(paths.root());
     }
 
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     #[test]
     fn real_backend_can_backup_without_mutating() {
         create_system_proxy()

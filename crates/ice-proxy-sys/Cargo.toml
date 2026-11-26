@@ -3,7 +3,7 @@ name = "ice-proxy-sys"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "System HTTP/SOCKS proxy set/clear for macOS and Windows"
+description = "System HTTP/SOCKS proxy set/clear for macOS, Windows, and Linux"
 
 [dependencies]
 serde = { workspace = true }
