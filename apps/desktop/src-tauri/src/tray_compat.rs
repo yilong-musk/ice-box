@@ -20,13 +20,15 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
 use tauri::{AppHandle, PhysicalPosition, PhysicalSize, Rect};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, S_OK, WPARAM};
 use windows_sys::Win32::UI::Shell::{
-    DefSubclassProc, SetWindowSubclass, Shell_NotifyIconGetRect, NOTIFYICONIDENTIFIER,
+    DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass, Shell_NotifyIconGetRect,
+    NOTIFYICONIDENTIFIER,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetCursorPos, WM_CONTEXTMENU, WM_LBUTTONUP, WM_RBUTTONUP,
+    GetCursorPos, WM_CONTEXTMENU, WM_LBUTTONUP, WM_NCDESTROY, WM_RBUTTONUP,
 };
 
-/// Callback message `tray-icon` registers (`WM_USER_TRAYICON`).
+/// Callback message `tray-icon` registers (`WM_USER_TRAYICON`, internal to the
+/// `tray-icon` crate on Windows; verify if upgrading `tray-icon`).
 const TRAY_CALLBACK_MSG: u32 = 6002;
 /// Unique subclass id for ice-box (`"ICEB"`).
 const SUBCLASS_ID: usize = 0x4943_4542;
@@ -64,25 +66,35 @@ unsafe extern "system" fn subclass_proc(
     msg: u32,
     wparam: WPARAM,
     lparam: LPARAM,
-    _id: usize,
+    id: usize,
     _data: usize,
 ) -> LRESULT {
     match msg {
-        TRAY_CALLBACK_MSG if matches!(lparam as u32, WM_LBUTTONUP | WM_RBUTTONUP) => {
-            let button = if lparam as u32 == WM_LBUTTONUP {
-                MouseButton::Left
-            } else {
-                MouseButton::Right
-            };
-            if icon_rect_available(hwnd, wparam as u32) {
-                if button == MouseButton::Right {
-                    claim_right_click();
+        WM_NCDESTROY => {
+            // SAFETY: Win32 `SetWindowSubclass` contract requires removing
+            // the subclass before the window finishes destruction.
+            RemoveWindowSubclass(hwnd, Some(subclass_proc), id);
+        }
+        TRAY_CALLBACK_MSG => {
+            // Mask to LOWORD so both legacy and `NOTIFYICON_VERSION_4`
+            // callbacks match the mouse message cleanly.
+            let mouse_msg = (lparam as u32) & 0xffff;
+            if matches!(mouse_msg, WM_LBUTTONUP | WM_RBUTTONUP) {
+                let button = if mouse_msg == WM_LBUTTONUP {
+                    MouseButton::Left
+                } else {
+                    MouseButton::Right
+                };
+                if icon_rect_available(hwnd, wparam as u32) {
+                    if button == MouseButton::Right {
+                        claim_right_click();
+                    }
+                } else {
+                    if button == MouseButton::Left || claim_right_click() {
+                        post_click(button);
+                    }
+                    return 0;
                 }
-            } else {
-                if button == MouseButton::Left || claim_right_click() {
-                    post_click(button);
-                }
-                return 0;
             }
         }
         WM_CONTEXTMENU => {

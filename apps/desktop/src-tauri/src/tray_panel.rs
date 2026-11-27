@@ -24,9 +24,7 @@
 //! platform requires updating the other in the same change.
 
 use serde::{Deserialize, Serialize};
-#[cfg(target_os = "windows")]
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
@@ -163,7 +161,6 @@ pub struct PanelLayout {
 }
 
 static ANCHOR: Mutex<Option<Anchor>> = Mutex::new(None);
-#[cfg(target_os = "windows")]
 static SEQ: AtomicU64 = AtomicU64::new(0);
 static PENDING_REVEAL: AtomicBool = AtomicBool::new(false);
 #[cfg(target_os = "windows")]
@@ -267,6 +264,17 @@ fn compute_outer_rect(
         right: x + (frame.width * scale).round() as i32 + right_border,
         bottom: y + (frame.height * scale).round() as i32 + bottom_border,
     }
+}
+
+/// Physical top-left point inside the target monitor's work area used to move
+/// the hidden panel onto that monitor before the frontend measures layout, so
+/// mixed-DPI setups receive `WM_DPICHANGED` up front.
+#[cfg(any(target_os = "windows", test))]
+fn preposition_origin(work: Area, scale: f64) -> (i32, i32) {
+    (
+        ((work.left + SCREEN_MARGIN) * scale).round() as i32,
+        ((work.top + SCREEN_MARGIN) * scale).round() as i32,
+    )
 }
 
 /// Convert visible logical `cards` into physical GDI region rectangles offset
@@ -377,7 +385,12 @@ fn create_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
 }
 
 fn hide_window(window: &WebviewWindow) {
+    // Advance `SEQ` and clear `ANCHOR` so any layout already queued onto the
+    // main thread for this popup session becomes stale and is dropped.
+    SEQ.fetch_add(1, Ordering::AcqRel);
     PENDING_REVEAL.store(false, Ordering::Release);
+    *lock_recover(&ANCHOR) = None;
+    *lock_recover(&APPLIED_FRAME) = None;
     let _ = window.hide();
     let _ = window.emit_to(PANEL_LABEL, HIDE_EVENT, ());
     #[cfg(target_os = "windows")]
@@ -391,8 +404,14 @@ pub fn hide_panel(app: &AppHandle) {
 }
 
 #[cfg(target_os = "windows")]
-fn reveal(window: &WebviewWindow) {
-    if !PENDING_REVEAL.swap(false, Ordering::AcqRel) {
+fn is_current_active_seq(seq: u64, window: &WebviewWindow) -> bool {
+    SEQ.load(Ordering::Acquire) == seq
+        && (PENDING_REVEAL.load(Ordering::Acquire) || window.is_visible().unwrap_or(false))
+}
+
+#[cfg(target_os = "windows")]
+fn reveal(window: &WebviewWindow, seq: u64) {
+    if SEQ.load(Ordering::Acquire) != seq || !PENDING_REVEAL.swap(false, Ordering::AcqRel) {
         return;
     }
     let _ = window.show();
@@ -413,6 +432,8 @@ fn show_at(app: &AppHandle, window: &WebviewWindow, icon: (f64, f64, f64, f64)) 
         seq,
         scale,
     );
+    let (pre_x, pre_y) = preposition_origin(work, scale);
+    platform::preposition_hidden(window, pre_x, pre_y);
     *lock_recover(&ANCHOR) = Some(Anchor {
         x,
         y,
@@ -504,8 +525,33 @@ mod platform {
     };
     use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetClientRect, GetWindowRect, SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER,
+        GetClientRect, GetWindowRect, SetWindowPos, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
     };
+
+    /// Move the still-hidden window onto the target monitor so Windows updates
+    /// its DPI (`WM_DPICHANGED`) before the frontend measures the popup layout.
+    pub fn preposition_hidden(window: &WebviewWindow, x: i32, y: i32) {
+        if window.is_visible().unwrap_or(true) {
+            return;
+        }
+        let Ok(hwnd) = window.hwnd() else {
+            return;
+        };
+        // SAFETY: `hwnd` is a live hidden window on the UI thread; moving it
+        // with `SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE` neither shows nor
+        // activates it.
+        unsafe {
+            SetWindowPos(
+                hwnd.0 as HWND,
+                std::ptr::null_mut(),
+                x,
+                y,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+    }
 
     fn to_phys(rect: RECT) -> PhysicalRect {
         PhysicalRect {
@@ -622,9 +668,20 @@ mod platform {
 
     /// Position the window once per popup (re-calibrating across DPI changes)
     /// and update the clipped card region, revealing only once clipped.
-    pub fn apply(window: &WebviewWindow, frame: Option<Frame>, scale: f64, cards: Vec<CardRect>) {
+    pub fn apply(
+        window: &WebviewWindow,
+        seq: u64,
+        frame: Option<Frame>,
+        scale: f64,
+        cards: Vec<CardRect>,
+    ) {
         let target = window.clone();
         let _ = window.run_on_main_thread(move || {
+            // Skip layouts superseded by a hide or a newer popup session while
+            // this closure waited in the main-thread queue.
+            if !super::is_current_active_seq(seq, &target) {
+                return;
+            }
             let Ok(hwnd) = target.hwnd() else {
                 return;
             };
@@ -642,7 +699,7 @@ mod platform {
                 }
             }
             if set_cards_region(raw, scale, &cards) {
-                super::reveal(&target);
+                super::reveal(&target, seq);
             }
         });
     }
@@ -665,6 +722,7 @@ mod platform {
 
     pub fn apply(
         _window: &WebviewWindow,
+        _seq: u64,
         _frame: Option<Frame>,
         _scale: f64,
         _cards: Vec<CardRect>,
@@ -702,7 +760,11 @@ pub fn tray_panel_layout(app: AppHandle, layout: PanelLayout) {
     let Some(anchor) = lock_recover(&ANCHOR).clone() else {
         return;
     };
-    if layout.seq != anchor.placement.seq || layout.width <= 0.0 || layout.height <= 0.0 {
+    if layout.seq != SEQ.load(Ordering::Acquire)
+        || layout.seq != anchor.placement.seq
+        || layout.width <= 0.0
+        || layout.height <= 0.0
+    {
         return;
     }
     let Some(window) = panel_window(&app) else {
@@ -729,6 +791,7 @@ pub fn tray_panel_layout(app: AppHandle, layout: PanelLayout) {
     };
     platform::apply(
         &window,
+        layout.seq,
         move_window.then_some(frame),
         anchor.scale,
         layout.cards,
@@ -915,5 +978,17 @@ mod tests {
                 bottom: 1 + 858 + 1,
             }
         );
+    }
+
+    #[test]
+    fn preposition_origin_maps_inside_target_monitor_including_negative_coords() {
+        assert_eq!(preposition_origin(WIN_WORK, 1.5), (12, 12));
+        let left_monitor = Area {
+            left: -1280.0,
+            top: 0.0,
+            right: 0.0,
+            bottom: 720.0,
+        };
+        assert_eq!(preposition_origin(left_monitor, 1.25), (-1590, 10));
     }
 }

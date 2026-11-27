@@ -2067,9 +2067,17 @@ fn build_panel_model(
 
 /// Derive the custom tray panel snapshot from live runtime state.
 pub(crate) fn collect_panel_model(app: &AppHandle) -> PanelModel {
-    let view = current_view(app).unwrap_or_default();
+    let live_view = current_view(app);
+    let view = live_view.unwrap_or_default();
     let (language, service_busy, mcp_busy, update_wanted) =
         if let Some(runtime) = app.try_state::<TrayRuntimeState>() {
+            // Keep `runtime.service_on` aligned with the live view rendered
+            // into the panel so clicking the service row matches its label
+            // even if OS proxy or core state changed between watchdog ticks.
+            #[cfg(target_os = "windows")]
+            if let Some(live) = live_view {
+                runtime.apply_view(live);
+            }
             (
                 runtime.language(),
                 runtime.service_busy(),

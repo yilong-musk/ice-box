@@ -43,7 +43,27 @@ const HOVER_OPEN_MS = 45;
 const AIM_RECHECK_MS = 120;
 /** Wait briefly on first cold open so the initial reveal already carries live items. */
 const COLD_DATA_WAIT_MS = 120;
+/** Short wait on warm reopen so fresh state lands before reveal without stalling. */
+const WARM_DATA_WAIT_MS = 50;
 const OTHER_ITEM = "";
+
+function clearDelayBadges(prev: PanelModel): PanelModel {
+  return {
+    ...prev,
+    nodeEntries: prev.nodeEntries.map((entry) =>
+      entry.kind === "item"
+        ? { ...entry, delay: null }
+        : {
+            ...entry,
+            delay: null,
+            members: entry.members.map((member) => ({
+              ...member,
+              delay: null,
+            })),
+          },
+    ),
+  };
+}
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), Math.max(min, max));
@@ -114,10 +134,15 @@ export function TrayPanel() {
   const subHovered = useRef<string | null>(null);
 
   const lastModelKey = useRef("");
+  const hasModelRef = useRef(false);
   const lastLayoutKey = useRef("");
   const visibleRef = useRef(false);
   const layoutFrame = useRef<number | undefined>(undefined);
+  const pendingLayoutRef = useRef<Parameters<typeof trayPanelApi.layout>[0] | null>(
+    null,
+  );
   const shownSeq = useRef(0);
+  const sessionRef = useRef(0);
 
   const placementRef = useRef(placement);
   placementRef.current = placement;
@@ -148,15 +173,18 @@ export function TrayPanel() {
     return () => window.removeEventListener("mousemove", onMove);
   }, []);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (): Promise<boolean> => {
     try {
       const next = await trayPanelApi.state();
+      hasModelRef.current = true;
       const key = JSON.stringify(next);
-      if (key === lastModelKey.current) return;
+      if (key === lastModelKey.current) return true;
       lastModelKey.current = key;
       setModel(next);
+      return true;
     } catch (error) {
       console.error("[tray-panel] failed to fetch tray panel state", error);
+      return false;
     }
   }, []);
 
@@ -167,21 +195,48 @@ export function TrayPanel() {
     leafTimer.current = undefined;
   }, []);
 
+  const cancelPendingLayout = useCallback(() => {
+    if (layoutFrame.current !== undefined) {
+      window.cancelAnimationFrame(layoutFrame.current);
+      layoutFrame.current = undefined;
+    }
+    pendingLayoutRef.current = null;
+  }, []);
+
   const begin = useCallback(
     async (next: PanelPlacement) => {
       if (next.seq <= shownSeq.current) return;
       shownSeq.current = next.seq;
+      const session = ++sessionRef.current;
       clearTimers();
+      cancelPendingLayout();
       setOpenSub(null);
       setOpenGroupTag(null);
-      const cold = !lastModelKey.current;
+      const cold = !hasModelRef.current;
       const loading = load();
-      if (cold) {
-        await Promise.race([
-          loading,
-          new Promise((resolve) => window.setTimeout(resolve, COLD_DATA_WAIT_MS)),
-        ]);
-        if (shownSeq.current !== next.seq) return;
+      const outcome = await Promise.race([
+        loading.then((ok) => (ok ? ("ok" as const) : ("error" as const))),
+        new Promise<"timeout">((resolve) =>
+          window.setTimeout(
+            () => resolve("timeout"),
+            cold ? COLD_DATA_WAIT_MS : WARM_DATA_WAIT_MS,
+          ),
+        ),
+      ]);
+      // Ignore completion if `HIDE_EVENT` or a newer `SHOW_EVENT` superseded
+      // this open while waiting for state.
+      if (sessionRef.current !== session) return;
+      if (cold && outcome === "error" && !hasModelRef.current) {
+        void trayPanelApi.hide();
+        return;
+      }
+      if (cold && outcome === "timeout") {
+        // Release backend `PENDING_REVEAL` if a slow cold fetch later fails.
+        void loading.then((ok) => {
+          if (!ok && !hasModelRef.current && sessionRef.current === session) {
+            void trayPanelApi.hide();
+          }
+        });
       }
       lastLayoutKey.current = "";
       visibleRef.current = true;
@@ -189,7 +244,7 @@ export function TrayPanel() {
       setPixelRatio(window.devicePixelRatio || 1);
       setNativePlacement(next);
     },
-    [clearTimers, load],
+    [cancelPendingLayout, clearTimers, load],
   );
 
   useEffect(() => {
@@ -200,10 +255,17 @@ export function TrayPanel() {
         void begin(event.payload);
       });
       const offHide = await listen(HIDE_EVENT, () => {
+        sessionRef.current += 1;
         visibleRef.current = false;
         clearTimers();
+        cancelPendingLayout();
         setOpenSub(null);
         setOpenGroupTag(null);
+        // Drop delay badges cached from the dismissed session so a fast warm
+        // reopen never flashes numbers that `tray_delay::cancel_and_drop` threw
+        // away while hidden.
+        lastModelKey.current = "";
+        setModel((prev) => (prev ? clearDelayBadges(prev) : null));
       });
       const offChanged = await listen(CHANGED_EVENT, () => {
         void load();
@@ -223,9 +285,10 @@ export function TrayPanel() {
     return () => {
       disposed = true;
       clearTimers();
+      cancelPendingLayout();
       offs.forEach((off) => off());
     };
-  }, [begin, clearTimers, load]);
+  }, [begin, cancelPendingLayout, clearTimers, load]);
 
   // Resolve currently open strategy group (if still present after a live reload).
   const openGroup = useMemo(() => {
@@ -378,34 +441,39 @@ export function TrayPanel() {
     if (key === lastLayoutKey.current) return;
     const firstLayout = lastLayoutKey.current === "";
     lastLayoutKey.current = key;
-    if (layoutFrame.current !== undefined) {
-      window.cancelAnimationFrame(layoutFrame.current);
+    pendingLayoutRef.current = layout;
+    // Coalesce rapid layout changes (e.g. continuous wheel scrolling) onto the
+    // already-scheduled animation frame instead of cancelling and starving
+    // `SetWindowRgn` updates.
+    if (layoutFrame.current !== undefined) return;
+    let scheduled = true;
+    const flush = () => {
+      scheduled = false;
       layoutFrame.current = undefined;
-    }
-    if (!firstLayout) {
-      // Wait two animation frames so WebView2 paints newly opened or moved
-      // cards onto the fixed canvas before Win32 updates SetWindowRgn.
-      layoutFrame.current = window.requestAnimationFrame(() => {
-        layoutFrame.current = window.requestAnimationFrame(() => {
-          layoutFrame.current = undefined;
-          if (visibleRef.current) {
-            void trayPanelApi.layout(layout);
+      const latest = pendingLayoutRef.current;
+      pendingLayoutRef.current = null;
+      if (visibleRef.current && latest) {
+        void trayPanelApi.layout(latest);
+      }
+    };
+    const frameId = firstLayout
+      ? // Wait one frame so WebView2 commits the new session's DOM/theme before
+        // Win32 reveals the window.
+        window.requestAnimationFrame(flush)
+      : // Wait two frames so WebView2 paints newly opened or moved cards onto
+        // the fixed canvas before Win32 updates SetWindowRgn.
+        window.requestAnimationFrame(() => {
+          const secondId = window.requestAnimationFrame(flush);
+          if (scheduled) {
+            layoutFrame.current = secondId;
           }
         });
-      });
-    } else {
-      void trayPanelApi.layout(layout);
+    if (scheduled) {
+      layoutFrame.current = frameId;
     }
   }, [activeSubWidth, canvasMetrics, coordinateScale, theme.explicit]);
 
-  useEffect(
-    () => () => {
-      if (layoutFrame.current !== undefined) {
-        window.cancelAnimationFrame(layoutFrame.current);
-      }
-    },
-    [],
-  );
+  useEffect(() => cancelPendingLayout, [cancelPendingLayout]);
 
   useLayoutEffect(() => {
     relayout();
@@ -698,6 +766,7 @@ export function TrayPanel() {
               data-gutter="true"
               disabled={!model.update.enabled}
               onMouseEnter={hoverMainPlain}
+              onMouseLeave={leaveMainRow}
               onClick={() => triggerAction(model.update!.id)}
             >
               <span className="tp-gutter tp-update-arrow" aria-hidden="true">
@@ -715,6 +784,7 @@ export function TrayPanel() {
             className="tp-item"
             disabled={!model.service.enabled}
             onMouseEnter={hoverMainPlain}
+            onMouseLeave={leaveMainRow}
             onClick={() => triggerAction(model.service.id)}
           >
             <span className="min-w-0 flex-1 truncate">
@@ -788,6 +858,7 @@ export function TrayPanel() {
             className="tp-item"
             disabled={!model.copyCliProxy.enabled}
             onMouseEnter={hoverMainPlain}
+            onMouseLeave={leaveMainRow}
             onClick={() => triggerAction(model.copyCliProxy.id)}
           >
             <span className="min-w-0 flex-1 truncate">
@@ -801,6 +872,7 @@ export function TrayPanel() {
             className="tp-item"
             disabled={!model.openCliProxy.enabled}
             onMouseEnter={hoverMainPlain}
+            onMouseLeave={leaveMainRow}
             onClick={() => triggerAction(model.openCliProxy.id)}
           >
             <span className="min-w-0 flex-1 truncate">
@@ -816,6 +888,7 @@ export function TrayPanel() {
             className="tp-item"
             disabled={!model.mcp.enabled}
             onMouseEnter={hoverMainPlain}
+            onMouseLeave={leaveMainRow}
             onClick={() => triggerAction(model.mcp.id)}
           >
             <span className="min-w-0 flex-1 truncate">{model.mcp.label}</span>
@@ -827,6 +900,7 @@ export function TrayPanel() {
             className="tp-item"
             disabled={!model.copyMcpConfig.enabled}
             onMouseEnter={hoverMainPlain}
+            onMouseLeave={leaveMainRow}
             onClick={() => triggerAction(model.copyMcpConfig.id)}
           >
             <span className="min-w-0 flex-1 truncate">
@@ -842,6 +916,7 @@ export function TrayPanel() {
             className="tp-item"
             disabled={!model.show.enabled}
             onMouseEnter={hoverMainPlain}
+            onMouseLeave={leaveMainRow}
             onClick={() => triggerAction(model.show.id)}
           >
             <span className="min-w-0 flex-1 truncate">{model.show.label}</span>
@@ -853,6 +928,7 @@ export function TrayPanel() {
             className="tp-item"
             disabled={!model.quit.enabled}
             onMouseEnter={hoverMainPlain}
+            onMouseLeave={leaveMainRow}
             onClick={() => triggerAction(model.quit.id)}
           >
             <span className="min-w-0 flex-1 truncate">{model.quit.label}</span>
@@ -937,6 +1013,7 @@ export function TrayPanel() {
                     }
                     disabled={!model.nodesDelay.enabled}
                     onMouseEnter={hoverNodePlain}
+                    onMouseLeave={leaveNodeRow}
                     onClick={() => triggerAction(model.nodesDelay!.id)}
                   >
                     {model.nodeEntries.some(
@@ -961,6 +1038,7 @@ export function TrayPanel() {
                       data-gutter="true"
                       disabled={!entry.enabled}
                       onMouseEnter={hoverNodePlain}
+                      onMouseLeave={leaveNodeRow}
                       onClick={() => triggerAction(entry.id)}
                     >
                       <span className="tp-gutter" aria-hidden="true">

@@ -504,10 +504,29 @@ fn run(app: AppHandle, scope: DelayScope) {
     };
     if tags.is_empty() {
         RUN_ACTIVE.store(false, Ordering::SeqCst);
+        CANCEL_REQUESTED.store(false, Ordering::SeqCst);
+        return;
+    }
+    // Check cancellation under the state lock before calling `begin`: if the
+    // menu or panel closed while `collect_nodes` was running, calling `begin`
+    // would populate `Testing` entries that a cancelled `run_probes` never
+    // clears.
+    let cancelled_early = {
+        let mut guard = lock_state();
+        if CANCEL_REQUESTED.load(Ordering::SeqCst) {
+            true
+        } else {
+            guard.begin(scope.clone(), tags.clone());
+            false
+        }
+    };
+    if cancelled_early {
+        RUN_ACTIVE.store(false, Ordering::SeqCst);
+        CANCEL_REQUESTED.store(false, Ordering::SeqCst);
+        tracing::info!(scope = ?scope, "tray delay: cancelled before probes started");
         return;
     }
     tracing::info!(scope = ?scope, probes = tags.len(), "tray delay: run started");
-    lock_state().begin(scope, tags.clone());
     // Show `…` and the progress right away: the menu is open (the click came
     // from it) and must not still show the idle labels.
     crate::tray::sync_menu(&app);

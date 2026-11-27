@@ -372,4 +372,111 @@ describe("TrayPanel", () => {
     const digest = createHash("sha256").update(match![1], "utf8").digest("base64");
     expect(tauriConf.app.security.csp).toContain(`'sha256-${digest}'`);
   });
+
+  it("ignores a cold-open state resolution if HIDE_EVENT arrives mid-load", async () => {
+    let resolveState!: (model: PanelModel) => void;
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "tray_panel_state") {
+        return new Promise<PanelModel>((resolve) => {
+          resolveState = resolve;
+        });
+      }
+      if (cmd === "tray_panel_placement") return Promise.resolve(null);
+      return Promise.resolve(undefined);
+    });
+
+    render(<TrayPanel />);
+    await waitFor(() => expect(listeners.has(SHOW_EVENT)).toBe(true));
+
+    await act(async () => {
+      listeners.get(SHOW_EVENT)?.({ payload: PLACEMENT });
+    });
+    await act(async () => {
+      listeners.get(HIDE_EVENT)?.({ payload: undefined });
+    });
+    await act(async () => {
+      resolveState(currentModel);
+      await Promise.resolve();
+    });
+
+    expect(
+      invokeMock.mock.calls.filter(([cmd]) => cmd === "tray_panel_layout"),
+    ).toHaveLength(0);
+  });
+
+  it("hides the panel if the initial cold state fetch fails", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "tray_panel_state") {
+        return Promise.reject(new Error("boom"));
+      }
+      if (cmd === "tray_panel_placement") return Promise.resolve(null);
+      return Promise.resolve(undefined);
+    });
+
+    render(<TrayPanel />);
+    await waitFor(() => expect(listeners.has(SHOW_EVENT)).toBe(true));
+
+    await act(async () => {
+      listeners.get(SHOW_EVENT)?.({ payload: PLACEMENT });
+    });
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("tray_panel_hide"),
+    );
+    errorSpy.mockRestore();
+  });
+
+  it("strips cached delay badges on hide so warm reopen does not flash stale results", async () => {
+    currentModel = makeModel({
+      nodeEntries: [
+        {
+          kind: "group",
+          tag: "节点选择",
+          label: "节点选择 → 日本 02",
+          delay: { text: "45 ms", tone: "ok" },
+          delayButton: {
+            id: '["delay","group","节点选择"]',
+            label: "延迟测试",
+            enabled: true,
+          },
+          members: [
+            {
+              id: '["member","节点选择","香港 01"]',
+              label: "香港 01",
+              enabled: true,
+              checked: false,
+              delay: { text: "45 ms", tone: "ok" },
+            },
+          ],
+        },
+      ],
+    });
+
+    render(<TrayPanel />);
+    await waitFor(() => expect(listeners.has(SHOW_EVENT)).toBe(true));
+    await act(async () => {
+      listeners.get(SHOW_EVENT)?.({ payload: PLACEMENT });
+    });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "节点" }));
+    expect(screen.getByText(/45 ms/)).toBeInTheDocument();
+
+    await act(async () => {
+      listeners.get(HIDE_EVENT)?.({ payload: undefined });
+    });
+
+    // Simulate a slow state fetch (> WARM_DATA_WAIT_MS) on reopen.
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "tray_panel_state") return new Promise(() => {});
+      if (cmd === "tray_panel_placement") return Promise.resolve(null);
+      return Promise.resolve(undefined);
+    });
+    await act(async () => {
+      listeners.get(SHOW_EVENT)?.({ payload: { ...PLACEMENT, seq: 2 } });
+      await new Promise((resolve) => setTimeout(resolve, 70));
+    });
+
+    fireEvent.click(await screen.findByRole("menuitem", { name: "节点" }));
+    expect(screen.queryByText(/45 ms/)).not.toBeInTheDocument();
+  });
 });
