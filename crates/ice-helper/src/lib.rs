@@ -1251,9 +1251,13 @@ mod imp {
             .output()
         {
             Ok(output) if output.status.success() => output,
-            _ => return true, // cannot determine; assume still running
+            // `ps -p <pid>` exits non-zero when the process vanished between
+            // `pid_alive` and `ps`; re-check liveness instead of assuming live.
+            _ => return pid_alive(pid),
         };
-        !String::from_utf8_lossy(&output.stdout).trim().contains('Z')
+        let stat = String::from_utf8_lossy(&output.stdout);
+        let stat = stat.trim();
+        !stat.is_empty() && !stat.contains('Z')
     }
 
     /// Whether `pid`'s executable image is this installation's bundled core.
@@ -2099,11 +2103,21 @@ mod imp {
             let mut config = fixture_config("tok", &dir);
             config.core_bin = fake_bin.clone();
 
-            // Simulate a leftover core from a previous daemon session: it runs
-            // as a detached process whose handle is gone (daemon restarted).
-            let child = std::process::Command::new(&fake_bin).spawn().unwrap();
+            // Simulate a leftover core from a previous daemon session: the
+            // runner holds no child handle (daemon restarted).
+            let mut child = std::process::Command::new(&fake_bin).spawn().unwrap();
             let pid = child.id();
-            drop(child);
+            // Wait until the spawned shebang script finishes `execve` and its
+            // image/argv are visible to `pid_matches_core` (macOS can lag
+            // slightly behind `spawn()` under parallel load).
+            let ready_deadline = Instant::now() + Duration::from_secs(2);
+            while !pid_matches_core(pid, &fake_bin) && Instant::now() < ready_deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert!(
+                pid_matches_core(pid, &fake_bin),
+                "spawned fake core must report matching executable identity before stop"
+            );
             std::fs::write(dir.join("sing-box.pid"), pid.to_string()).unwrap();
 
             // A fresh runner holds no handle; Stop must reclaim via the pid file.
@@ -2114,6 +2128,7 @@ mod imp {
                 "orphan core must be reclaimed via the pid file"
             );
 
+            let _ = child.wait();
             std::fs::remove_dir_all(&dir).unwrap();
         }
 

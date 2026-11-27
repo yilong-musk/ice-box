@@ -1,0 +1,268 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! Background auto-update of subscriptions flagged with `auto_update`.
+
+use crate::application;
+use crate::orchestrate::current_settings;
+use crate::AppState;
+use ice_engine::{AutoUpdateInterval, SubscriptionMeta};
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::time::Duration;
+use time::OffsetDateTime;
+use uuid::Uuid;
+
+/// How often the watchdog wakes up to check for due auto-update subscriptions.
+pub const AUTO_UPDATE_TICK: Duration = Duration::from_secs(60 * 60);
+
+/// Grace period before the first due-check pass: lets the core auto-start and
+/// startup recovery finish so a network refresh never races app initialization.
+const STARTUP_GRACE: Duration = Duration::from_secs(30);
+
+/// Startup retry window for the first due-check pass: a user action holding the
+/// orchestrate lock briefly defers the pass, which retries a few times before
+/// settling into the hourly loop.
+const STARTUP_RETRIES: usize = 6;
+const STARTUP_RETRY_DELAY: Duration = Duration::from_secs(10);
+
+fn interval_of(meta: &SubscriptionMeta) -> Duration {
+    meta.auto_update_interval
+        .map(AutoUpdateInterval::duration)
+        .unwrap_or_else(AutoUpdateInterval::default_duration)
+}
+
+/// A subscription is due when it has never been refreshed or its last refresh
+/// is older than its configured [`AutoUpdateInterval`].
+fn is_due(last_updated: Option<OffsetDateTime>, now: OffsetDateTime, interval: Duration) -> bool {
+    match last_updated {
+        None => true,
+        Some(at) => {
+            let interval = time::Duration::try_from(interval).unwrap_or(time::Duration::ZERO);
+            now - at >= interval
+        }
+    }
+}
+
+/// Ids of the auto-update subscriptions that are due for a refresh.
+pub(crate) fn due_auto_update_ids(items: &[SubscriptionMeta], now: OffsetDateTime) -> Vec<Uuid> {
+    items
+        .iter()
+        .filter(|m| m.auto_update && is_due(m.last_updated, now, interval_of(m)))
+        .map(|m| m.id)
+        .collect()
+}
+
+/// Refresh every due auto-update subscription. Fetches (parallel, up to one
+/// `FETCH_TOTAL_TIMEOUT`) run without the orchestrate lock so the background pass never
+/// queues Start/Stop/Settings behind it; the lock is taken with `try_lock` for
+/// the disk phase + Apply so a busy user operation simply defers the refresh.
+/// Returns `false` when the pass was deferred (orchestrate busy or the
+/// subscription manager could not be opened); the caller may retry shortly.
+pub fn auto_update_due(state: &AppState, host: &impl application::AppHost) -> bool {
+    if state.workers.is_paused_or_stopping() {
+        return true;
+    }
+    let mgr = match application::subscription_manager(state) {
+        Ok(mgr) => mgr,
+        Err(err) => {
+            // `subscription_manager` already falls back to a direct manager when
+            // the system proxy endpoint is malformed. This only fires when even
+            // the direct fallback fails (for example a broken TLS trust store);
+            // defer so the startup loop retries instead of skipping an hour.
+            tracing::warn!(
+                error = %err.message,
+                "auto-update: open subscription manager failed; deferring pass"
+            );
+            return false;
+        }
+    };
+    let items = match mgr.list() {
+        Ok(items) => items,
+        Err(err) => {
+            tracing::warn!(error = %err, "auto-update: load index failed");
+            return true;
+        }
+    };
+    let due = due_auto_update_ids(&items, OffsetDateTime::now_utc());
+    if due.is_empty() {
+        return true;
+    }
+    let fetched = mgr.fetch_ids(due);
+    if !mgr.fetch_workers_alive() {
+        tracing::error!("subscription fetch workers died; a later tick starts a fresh pool");
+    }
+    let Ok(_orch) = state.orchestrate.try_lock() else {
+        tracing::debug!("auto-update: orchestrate busy, deferring apply");
+        return false;
+    };
+    // A quit may have started during network I/O; never apply after teardown.
+    if state.workers.is_paused_or_stopping() {
+        return true;
+    }
+    let results = mgr.apply_all(fetched);
+    let updated = results.iter().filter(|(_, r)| r.is_ok()).count();
+    let failed = results.len() - updated;
+    // Rule-sets follow subscription updates, in the background.
+    crate::rule_set_watch::request_refresh(if updated > 0 {
+        ice_engine::RuleSetRefreshMode::All
+    } else {
+        ice_engine::RuleSetRefreshMode::Missing
+    });
+    for (id, result) in &results {
+        if let Err(err) = result {
+            tracing::warn!(
+                id = %id,
+                error = %err.redacted_display(),
+                code = %err.code().as_str(),
+                "auto-update: subscription failed"
+            );
+        }
+    }
+    tracing::info!(updated, failed, "auto-update subscriptions");
+    let settings = current_settings(&state.paths).unwrap_or_default();
+    if let Some(warning) = application::apply_after_subscription_change(host, state, &settings) {
+        tracing::warn!(
+            code = %warning.code,
+            error = %warning.message,
+            "auto-update: apply warning"
+        );
+    }
+    drop(_orch);
+    application::broadcast_state_change(host);
+    true
+}
+
+/// Poll due auto-update subscriptions for the app lifetime (independent of
+/// frontend tab visibility). The first pass runs shortly after launch (after a
+/// startup grace period) so subscriptions that went stale while the app was
+/// closed refresh promptly instead of waiting for the first hourly tick.
+pub fn spawn_subscription_watchdog<H: application::AppHost + Send + Sync + 'static>(
+    state: Arc<AppState>,
+    host: Arc<H>,
+) {
+    struct Liveness(std::sync::Arc<std::sync::atomic::AtomicBool>);
+    impl Drop for Liveness {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::SeqCst);
+        }
+    }
+    let workers = state.workers.clone();
+    workers.spawn("subscription-update", move |cancel| {
+        let alive = state.subscription_watchdog_alive.clone();
+        alive.store(true, Ordering::SeqCst);
+        let _liveness = Liveness(alive);
+        run_subscription_watchdog_loop(&state, host.as_ref(), &cancel);
+    });
+}
+
+fn run_subscription_watchdog_loop(
+    state: &AppState,
+    host: &impl application::AppHost,
+    cancel: &crate::workers::WorkerToken,
+) {
+    if !cancel.wait(STARTUP_GRACE) {
+        return;
+    }
+    for _ in 0..STARTUP_RETRIES {
+        let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            auto_update_due(state, host)
+        }));
+        match ok {
+            Ok(true) => break,
+            Ok(false) => {
+                if !cancel.wait(STARTUP_RETRY_DELAY) {
+                    return;
+                }
+            }
+            Err(_) => {
+                tracing::error!("auto-update pass panicked; retrying");
+                if !cancel.wait(STARTUP_RETRY_DELAY) {
+                    return;
+                }
+            }
+        }
+    }
+    loop {
+        if !cancel.wait(AUTO_UPDATE_TICK) {
+            break;
+        }
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            auto_update_due(state, host);
+        }))
+        .is_err()
+        {
+            tracing::error!("auto-update pass panicked");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use time::OffsetDateTime;
+
+    fn meta(
+        auto_update: bool,
+        last_updated: Option<OffsetDateTime>,
+        interval: Option<AutoUpdateInterval>,
+    ) -> SubscriptionMeta {
+        SubscriptionMeta {
+            id: Uuid::new_v4(),
+            name: "t".into(),
+            url: "https://example.com/s".into(),
+            active: false,
+            format: ice_engine::SubscriptionFormat::SingBox,
+            node_count: 1,
+            group_count: 0,
+            rule_count: 0,
+            has_dns: false,
+            parse_warnings: vec![],
+            last_updated,
+            last_error: None,
+            etag: None,
+            last_modified: None,
+            fetched_as: None,
+            userinfo: None,
+            provider_info: vec![],
+            auto_update,
+            auto_update_interval: interval,
+            source: ice_engine::SubscriptionSource::Remote,
+        }
+    }
+
+    #[test]
+    fn due_ids_skip_disabled_and_fresh_subscriptions() {
+        let now = OffsetDateTime::now_utc();
+        let fresh = meta(true, Some(now), None);
+        let stale = meta(true, Some(now - time::Duration::hours(2)), None);
+        let never = meta(true, None, None);
+        let disabled = meta(false, Some(now - time::Duration::hours(2)), None);
+        let items = vec![fresh, stale.clone(), never.clone(), disabled];
+
+        let due = due_auto_update_ids(&items, now);
+        assert_eq!(due, vec![stale.id, never.id]);
+    }
+
+    #[test]
+    fn due_ids_respect_each_subscriptions_interval() {
+        let now = OffsetDateTime::now_utc();
+        // 24h cadence, only 2h old: not due yet despite auto_update.
+        let slow = meta(
+            true,
+            Some(now - time::Duration::hours(2)),
+            Some(AutoUpdateInterval::TwentyFourHours),
+        );
+        // 1h cadence, 2h old: due.
+        let fast = meta(
+            true,
+            Some(now - time::Duration::hours(2)),
+            Some(AutoUpdateInterval::OneHour),
+        );
+        // Legacy flag without a stored interval falls back to the default.
+        let legacy = meta(true, Some(now - time::Duration::hours(2)), None);
+        let items = vec![slow, fast.clone(), legacy.clone()];
+
+        let due = due_auto_update_ids(&items, now);
+        assert_eq!(due, vec![fast.id, legacy.id]);
+    }
+}

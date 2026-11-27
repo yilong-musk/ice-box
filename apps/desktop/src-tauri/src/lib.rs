@@ -1,31 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-mod acceptance;
 mod app_host;
 mod app_update;
-mod application;
-mod autostart;
-mod capture;
 mod commands;
-mod core_snapshot;
-mod core_watch;
-mod helper_install;
-mod instance;
-mod log_tail;
-mod log_view;
-mod mcp;
-mod orchestrate;
-mod proc_memory;
-mod proxy_terminal;
-mod rule_set_watch;
-mod runtime;
-mod runtime_status;
-#[cfg(target_os = "windows")]
-mod session_end;
 #[cfg(target_os = "linux")]
 mod session_end_unix;
 mod shutdown;
-mod subscription_watch;
 mod tray;
 #[cfg(target_os = "windows")]
 mod tray_compat;
@@ -41,144 +21,26 @@ mod tray_delay_view;
 mod tray_panel;
 #[cfg(target_os = "macos")]
 mod tray_speed;
-mod windows_elevation;
-mod workers;
 
-use crate::capture::CaptureController;
-use crate::core_snapshot::{wrap_core, CoreSnapshotHub};
+#[cfg(target_os = "windows")]
+pub use ice_runtime::session_end;
+pub use ice_runtime::{
+    application, autostart, capture, core_snapshot, core_watch, helper_install, instance, log_tail,
+    log_view, mcp, orchestrate, proc_memory, proxy_terminal, rule_set_watch, runtime,
+    runtime_status, subscription_watch, windows_elevation, workers,
+};
+
+use crate::app_host::{mcp_context, tauri_host, TauriHost};
 use crate::orchestrate::current_settings;
-use crate::runtime::init_logging;
 use crate::shutdown::{request_tray_quit, QuitOutcome};
-use ice_config::{load_settings_detailed, AppPaths, ErrorCode};
-use ice_core::{purge_invalid_pid_file, CoreController, CoreHandle, TrafficMonitor};
-use ice_proxy_sys::{create_system_proxy, ProxyEndpoints, SystemProxy};
-use std::io::Write;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Instant;
+use ice_config::AppPaths;
+use ice_runtime::{install_panic_hook, set_panic_log_path, HostCapabilities};
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 
-/// Shared poisoned-mutex error for command, capture, and shutdown paths.
-pub(crate) fn lock_poisoned(context: &str) -> ice_config::AppError {
-    ice_config::AppError::new(
-        ice_config::ErrorCode::LockPoisoned,
-        format!("internal lock poisoned: {context}"),
-    )
-}
-
-/// RFC 3339 timestamp for "now", used in log lines and pending records.
-/// The epoch stands in if the system clock is outside RFC 3339's year range.
-pub(crate) fn now_rfc3339() -> String {
-    time::OffsetDateTime::now_utc()
-        .format(&time::format_description::well_known::Rfc3339)
-        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_owned())
-}
-
-/// Panic log path, resolved after `AppPaths` is available in `setup`. Panics are
-/// written here so a crash on Windows (where the release binary has no console and
-/// stderr is discarded) still leaves a trace in `ice-box.log`.
-static PANIC_LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
-
-/// Route panics to stderr (if any) and append them to the app log file.
-fn install_panic_hook() {
-    std::panic::set_hook(Box::new(|info| {
-        let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
-            (*s).to_string()
-        } else if let Some(s) = info.payload().downcast_ref::<String>() {
-            s.clone()
-        } else {
-            "unknown panic payload".to_string()
-        };
-        let location = info
-            .location()
-            .map(|l| format!("{}:{}", l.file(), l.line()))
-            .unwrap_or_default();
-        let line = format!("{payload} (at {location})");
-        let _ = writeln!(std::io::stderr(), "ice-box PANIC: {line}");
-        if let Some(path) = PANIC_LOG_PATH.get() {
-            if let Some(parent) = path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            if let Ok(mut file) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)
-            {
-                let _ = writeln!(file, "{} PANIC {line}", now_rfc3339());
-            }
-        }
-    }));
-}
-
-pub struct AppState {
-    pub paths: AppPaths,
-    pub core: Mutex<Box<dyn CoreHandle>>,
-    /// Published on every core transition; `collect_status` never takes `core`.
-    pub core_snapshot: Arc<CoreSnapshotHub>,
-    pub runtime_status: runtime_status::RuntimeReadModel,
-    pub workers: workers::WorkerSupervisor,
-    pub proxy: Mutex<Box<dyn SystemProxy>>,
-    /// Serializes config mutations (subscriptions, settings, start/stop, node select).
-    pub orchestrate: Mutex<()>,
-    /// Shown in UI when startup proxy crash recovery failed.
-    pub proxy_recovery_warning: Mutex<Vec<ice_config::UiMessage>>,
-    /// Memoized `is_proxy_live_applied` result (endpoints, checked-at, value); avoids a
-    /// `networksetup` subprocess storm from 2s status polling. Invalidated by the
-    /// `start` command and on endpoints change (cache key).
-    pub proxy_applied_cache: Mutex<Option<(ProxyEndpoints, Instant, bool)>>,
-    /// Platform backend capability; set once at process start (`Noop` is false).
-    pub system_proxy_available: bool,
-    /// Set by quit so an in-flight auto-start healthcheck aborts instead of blocking for the full timeout.
-    pub shutdown_requested: Arc<AtomicBool>,
-    /// Held for app lifetime; released explicitly before an updater restart so
-    /// the relaunched binary cannot race on `instance.lock`.
-    instance_lock: Mutex<Option<std::fs::File>>,
-    /// Persistent Clash `/traffic` stream; survives home-page unmounts.
-    pub traffic: TrafficMonitor,
-    /// TUN capture runtime controller (`docs/tun.md`): owns the active backend,
-    /// the capture state machine, and the recovery journal.
-    pub capture: CaptureController,
-    /// mtime-keyed cache of the active profile's nodes and groups. Rules, DNS,
-    /// and outbound connection fields are not kept here; read paths poll every
-    /// 2-5s and must not re-parse a multi-MB profile each time. Invalidated
-    /// implicitly: the key changes when the active subscription, its profile,
-    /// or settings change on disk.
-    pub profile_cache: Mutex<Option<application::ProfileCacheEntry>>,
-    /// ice-subscription parse cache (SUB-6). Shared with CaptureController.
-    pub profile_parse_cache: Arc<ice_engine::ProfileCache>,
-    /// Subscription auto-update watchdog liveness (SUB-4). False while the
-    /// outer loop is restarting after a panic.
-    pub subscription_watchdog_alive: Arc<AtomicBool>,
-    /// Memoized helper-daemon reachability probe (TTL'd, invalidated by
-    /// install/uninstall); avoids a socket roundtrip on every status poll.
-    pub helper_probe_cache: Mutex<Option<(Instant, bool)>>,
-    /// Memoized Windows TUN scheduled-task pin probe (TTL'd, invalidated
-    /// by ensure/remove); `schtasks /Query /XML` would otherwise spawn once per
-    /// status poll.
-    pub tun_task_cache: Mutex<Option<(Instant, bool)>>,
-    /// Whether the running core supports live mode switches via the Clash API
-    /// (`PATCH /configs`). The pinned sing-box never honors it; the probe is
-    /// attempted once and the failure is remembered so later mode switches
-    /// skip the two wasted HTTP roundtrips (forward-compatible: a core that
-    /// honors the PATCH keeps the fast path).
-    pub clash_live_mode_cache: Mutex<bool>,
-    /// The UI's post-paint capture restore runs once per process (StrictMode
-    /// remounts must not enable system proxy / TUN twice).
-    pub launch_proxy_restore_attempted: Arc<AtomicBool>,
-    /// Shared Clash group cache, Home interest flag, and the slow memory sample.
-    pub(crate) live_cache: application::LiveCache,
-}
-
-impl AppState {
-    /// Drop the single-instance lock file early (before an in-app update
-    /// relaunch spawns the replacement executable).
-    pub(crate) fn release_instance_lock(&self) {
-        if let Ok(mut slot) = self.instance_lock.lock() {
-            slot.take();
-        }
-    }
-}
+/// Desktop Tauri-managed runtime state handle.
+pub type AppState = Arc<ice_runtime::AppState>;
 
 /// Run the lightweight MCP stdio bridge used by Agent clients.
 ///
@@ -186,7 +48,7 @@ impl AppState {
 /// the running desktop process so the GUI and Agent share one data directory,
 /// one core, and one OS capture session.
 pub fn run_mcp_stdio_bridge(args: impl IntoIterator<Item = std::ffi::OsString>) -> i32 {
-    mcp::run_stdio_bridge(args)
+    ice_runtime::run_mcp_stdio_bridge(args)
 }
 
 fn acquire_instance_lock(paths: &AppPaths, request_focus: bool) -> Result<std::fs::File, String> {
@@ -210,16 +72,6 @@ fn show_main_window(app: &tauri::AppHandle) {
 }
 
 /// Draw the bundled artwork in the Dock with no system plate behind it.
-///
-/// macOS 26 puts a light plate behind a bundled icon that does not fill the
-/// squircle. Dev never shows that plate: Tauri calls
-/// `-[NSApplication setApplicationIconImage:]` with `icons/icon.icns`, and it
-/// only does so under `cfg(dev)`. A packaged app keeps the bundle icon, so
-/// the Dock shows the plate until we set the same image. The call replaces
-/// the running Dock tile. Finder and Launchpad keep the bundle icon.
-///
-/// `RunEvent::Ready` is on the main thread, which the setter requires. A
-/// missing image is skipped: a bad decode must not take the process down.
 #[cfg(target_os = "macos")]
 fn apply_plain_dock_icon() {
     use objc2::{AllocAnyThread, MainThreadMarker};
@@ -243,21 +95,7 @@ fn apply_plain_dock_icon() {
     unsafe { app.setApplicationIconImage(Some(&image)) };
 }
 
-/// Give the window the system's rounded corners (Apple-style on every
-/// desktop).
-///
-/// macOS rounds a titled window on its own, so there is nothing to do there.
-///
-/// Windows 11: the window is undecorated, but tao keeps `WS_CAPTION` and
-/// `WS_SIZEBOX` so DWM draws the system shadow, and DWM rounds that frame.
-/// `DWMWCP_ROUND` asks for the standard rounded corners explicitly, so the
-/// result does not depend on DWM's heuristics for undecorated windows.
-/// Windows 10 rejects the attribute; its windows stay square and the error is
-/// ignored.
-///
-/// `hwnd()` has to run on the UI thread: `run_on_main_thread` runs the closure
-/// before returning when the caller is already there and queues it otherwise
-/// (Tray Quit's failure path calls this from a `spawn_blocking` worker).
+/// Give the window the system's rounded corners (Apple-style on every desktop).
 pub(crate) fn round_window_corners<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
     #[cfg(windows)]
     {
@@ -280,16 +118,12 @@ fn apply_round_window_corners<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
     let Ok(handle) = window.hwnd() else {
         return;
     };
-    // Tauri's `HWND` is the `windows` crate's public tuple around the same
-    // pointer `windows-sys` takes.
     let hwnd = handle.0;
     if hwnd.is_null() {
         return;
     }
     let preference = DWMWCP_ROUND;
-    // SAFETY: `hwnd` is this webview's live top-level window. The call only
-    // stores a DWM corner preference. Windows 10 does not recognize the
-    // attribute and returns an error, leaving its square window as it is.
+    // SAFETY: `hwnd` is this webview's live top-level window.
     let _ = unsafe {
         DwmSetWindowAttribute(
             hwnd,
@@ -298,27 +132,6 @@ fn apply_round_window_corners<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
             std::mem::size_of_val(&preference) as u32,
         )
     };
-}
-
-fn bootstrap_data_dir(
-    paths: &AppPaths,
-    shutdown_requested: Arc<AtomicBool>,
-) -> Result<Box<dyn CoreHandle>, String> {
-    paths
-        .ensure_dirs()
-        .map_err(|e| format!("ensure data dirs: {e}"))?;
-
-    if let Err(err) = init_logging(Some(&paths.app_log())) {
-        eprintln!("ice-box: logging init: {err}");
-    }
-
-    if let Err(err) = purge_invalid_pid_file(&paths.pid()) {
-        tracing::warn!(error = %err, "failed to purge invalid pid file");
-    }
-
-    let mut core = CoreController::new();
-    core.set_health_cancel(shutdown_requested);
-    Ok(Box::new(core))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -336,124 +149,69 @@ pub fn run() {
                 .app_data_dir()
                 .map_err(|e| format!("resolve app_data_dir: {e}"))?;
             let paths = AppPaths::new(root);
-            let _ = PANIC_LOG_PATH.set(paths.app_log());
-            // A login-item launch that finds a session already running (the
-            // user opened the app first) exits silently: stealing focus from
-            // the desktop at login is the one thing this start must not do.
+            set_panic_log_path(paths.app_log());
             let instance_lock = acquire_instance_lock(&paths, !login_item_launch)?;
-            // Restore the system proxy when Windows ends the session, even if
-            // the main thread is too busy or hung to run the quit path. Without
-            // it the registry keeps pointing at a core that the reboot killed.
             #[cfg(target_os = "windows")]
             session_end::install(paths.proxy_backup());
-            // Run graceful shutdown (stopping core/TUN and restoring the system
-            // proxy) on Linux session logout / shutdown (`SIGTERM`/`SIGHUP`),
-            // falling back to proxy-backup restore if the quit path stalls.
             #[cfg(target_os = "linux")]
             session_end_unix::install(app.handle().clone(), paths.proxy_backup());
-            // Shown only once this process owns the data dir: a second user
-            // launch leaves through `acquire_instance_lock`, and showing the
-            // window first would flash a blank one before that exit.
             if !login_item_launch {
                 show_main_window(app.handle());
             }
             let paths_for_focus = paths.clone();
-            let shutdown_requested = Arc::new(AtomicBool::new(false));
-            let core = bootstrap_data_dir(&paths, shutdown_requested.clone())?;
-            let (core, core_snapshot) = wrap_core(core);
-            let settings_reset_warning: Vec<ice_config::UiMessage> =
-                load_settings_detailed(&paths.settings())
-                    .reset_reason
-                    .map(|reason| ErrorCode::SettingsReset.ui_message_detail(reason))
-                    .into_iter()
-                    .collect();
-            let proxy = create_system_proxy();
-            let system_proxy_available = proxy.is_available();
             let resource_dir = app.path().resource_dir().ok();
-            let profile_parse_cache = Arc::new(ice_engine::ProfileCache::new());
-            let capture = CaptureController::with_profile_cache(
-                paths.clone(),
-                resource_dir.clone(),
-                Arc::clone(&profile_parse_cache),
-            );
-            app.manage(AppState {
+            let capabilities = HostCapabilities::desktop(app_update::in_app_update_supported());
+            let runtime_state = ice_runtime::AppState::bootstrap(
                 paths,
-                core,
-                core_snapshot,
-                runtime_status: runtime_status::RuntimeReadModel::default(),
-                workers: workers::WorkerSupervisor::default(),
-                proxy: Mutex::new(proxy),
-                orchestrate: Mutex::new(()),
-                proxy_recovery_warning: Mutex::new(settings_reset_warning),
-                proxy_applied_cache: Mutex::new(None),
-                system_proxy_available,
-                shutdown_requested,
-                instance_lock: Mutex::new(Some(instance_lock)),
-                traffic: TrafficMonitor::new(),
-                capture,
-                profile_cache: Mutex::new(None),
-                profile_parse_cache,
-                subscription_watchdog_alive: std::sync::Arc::new(
-                    std::sync::atomic::AtomicBool::new(true),
-                ),
-                helper_probe_cache: Mutex::new(None),
-                tun_task_cache: Mutex::new(None),
-                clash_live_mode_cache: Mutex::new(true),
-                launch_proxy_restore_attempted: Arc::new(AtomicBool::new(false)),
-                live_cache: application::LiveCache::default(),
-            });
+                instance_lock,
+                resource_dir.clone(),
+                capabilities,
+            )?;
+            app.manage(Arc::clone(&runtime_state));
             {
                 let handle = app.handle().clone();
-                let state = app.state::<AppState>();
-                state.core_snapshot.bind_emitter(handle.clone());
+                runtime_state.core_snapshot.bind_emitter({
+                    let handle = handle.clone();
+                    move |snapshot| {
+                        let _ = handle.emit(core_snapshot::CORE_STATUS_CHANGED, snapshot);
+                    }
+                });
                 // Establish a committed read before startup takes the write lock.
-                let _ = application::collect_status(state.inner());
-                state.traffic.set_on_sample({
+                let _ = application::collect_status(&runtime_state);
+                runtime_state.traffic.set_on_sample({
                     let handle = handle.clone();
                     move |sample| {
-                        let _ = handle.emit(crate::core_snapshot::TRAFFIC_SAMPLE, sample);
+                        let _ = handle.emit(core_snapshot::TRAFFIC_SAMPLE, sample);
                     }
                 });
             }
-            let mcp_paths = app.state::<AppState>().paths.root().to_path_buf();
+            let mcp_paths = runtime_state.paths.root().to_path_buf();
             app.manage(mcp::McpService::new(mcp_paths));
-            // Overlap geoip copy and the bundled-core SHA-256 with leftover
-            // reclaim / TUN recovery and the first UI status poll.
             {
-                let warmup_paths = app.state::<AppState>().paths.clone();
+                let warmup_paths = runtime_state.paths.clone();
                 let warmup_resource = resource_dir.clone();
                 std::thread::spawn(move || {
-                    let _ = crate::orchestrate::ensure_geoip_rule_sets(
+                    let _ = orchestrate::ensure_geoip_rule_sets(
                         &warmup_paths,
                         warmup_resource.as_deref(),
                     );
-                    let _ = crate::helper_install::helper_core_stale(warmup_resource.as_deref());
+                    let _ = helper_install::helper_core_stale(warmup_resource.as_deref());
                 });
             }
-            // Product: opening the app starts the core immediately. Capture is
-            // restored after the first UI frame (`restore_launch_proxy`) so
-            // system proxy / TUN do not contend with first paint.
-            //
-            // Orphan reclaim, system-proxy crash recovery, and TUN journal
-            // recovery share this worker and the orchestrate lock so they
-            // still run before `start_core`, without blocking `setup` (and
-            // the window) on `ps` / helper / `networksetup`. The handshake
-            // waits only until the worker holds the lock, so Home `start`
-            // cannot slip in ahead of reclaim. Tray / watchdog setup then
-            // overlaps with the reclaim work.
-            let handle = app.handle().clone();
+            let startup_host = tauri_host(app.handle());
+            let startup_state = Arc::clone(&runtime_state);
             let (orch_tx, orch_rx) = std::sync::mpsc::sync_channel(1);
             std::thread::spawn(move || {
-                let state = handle.state::<AppState>();
-                if let Err(err) = application::auto_start_on_launch(&handle, &state, Some(orch_tx))
+                if let Err(err) =
+                    application::auto_start_on_launch(&startup_host, &startup_state, Some(orch_tx))
                 {
-                    if state.shutdown_requested.load(Ordering::SeqCst) {
+                    if startup_state.shutdown_requested.load(Ordering::SeqCst) {
                         tracing::info!(error = %err, "auto-start aborted by quit");
                         return;
                     }
                     tracing::error!(error = %err, "auto-start failed");
-                    crate::application::append_recovery_warning(
-                        &state,
+                    application::append_recovery_warning(
+                        &startup_state,
                         ice_config::UiMessage::new("recover.autoStartFailed")
                             .with("detail", err.to_string()),
                     );
@@ -462,20 +220,10 @@ pub fn run() {
             if orch_rx.recv().is_err() {
                 tracing::warn!("startup worker exited before acquiring orchestrate lock");
             }
-            // Publish MCP only after the startup worker holds `orchestrate`.
-            // Any Agent runtime mutation that acquires the listener now queues
-            // behind orphan reclaim and launch recovery instead of starting a
-            // core that the recovery worker can immediately reclaim.
-            let mcp_handle = app.handle().clone();
-            app.state::<mcp::McpService>().start_if_enabled(&mcp_handle);
-            // Reconcile the OS login item with `settings.json` on every launch.
-            // On: the entry stores an absolute path and the app moves between
-            // installs (DMG → /Applications, NSIS upgrades), so it is rewritten
-            // to this executable. Off: a leftover entry (a reset settings file,
-            // a hand-edited flag) is dropped instead of starting the app at the
-            // next login. Best-effort — the Settings switch is where a failed
-            // write is reported; `settings.json` stays authoritative.
-            let login_item = current_settings(&app.state::<AppState>().paths)
+            if let Some(ctx) = mcp_context(app.handle()) {
+                app.state::<mcp::McpService>().start_if_enabled(&ctx);
+            }
+            let login_item = current_settings(&runtime_state.paths)
                 .map(|settings| settings.launch_at_login)
                 .unwrap_or(false);
             std::thread::spawn(move || {
@@ -487,21 +235,47 @@ pub fn run() {
                     }
                 }
             });
-            instance::spawn_focus_watchdog(app.handle().clone(), paths_for_focus);
-            let tray_language = {
-                let state = app.state::<AppState>();
-                current_settings(&state.paths)
-                    .map(|settings| tray::TrayLanguage::from(settings.language))
-                    .unwrap_or(tray::TrayLanguage::En)
-            };
+            {
+                let focus_handle = app.handle().clone();
+                instance::spawn_focus_watchdog(
+                    runtime_state.workers.clone(),
+                    paths_for_focus,
+                    move || {
+                        let app_for_ui = focus_handle.clone();
+                        let _ = focus_handle.run_on_main_thread(move || {
+                            if let Some(win) = app_for_ui.get_webview_window("main") {
+                                let _ = win.unminimize();
+                                let _ = win.show();
+                                let _ = win.set_focus();
+                                round_window_corners(&win);
+                            }
+                        });
+                    },
+                );
+            }
+            let tray_language = current_settings(&runtime_state.paths)
+                .map(|settings| tray::TrayLanguage::from(settings.language))
+                .unwrap_or(tray::TrayLanguage::En);
             tray::setup_tray(app.handle(), tray_language)?;
             #[cfg(target_os = "macos")]
             tray_speed::spawn_watchdog(app.handle().clone());
             tray::spawn_state_watchdog(app.handle().clone());
-            core_watch::spawn_core_watchdog(app.handle().clone());
-            runtime_status::spawn_probe_watchdog(app.handle().clone());
-            subscription_watch::spawn_subscription_watchdog(app.handle().clone());
-            rule_set_watch::spawn_rule_set_watchdog(app.handle().clone());
+            core_watch::spawn_core_watchdog(Arc::clone(&runtime_state));
+            {
+                let probe_handle = app.handle().clone();
+                runtime_status::spawn_probe_watchdog(
+                    Arc::clone(&runtime_state),
+                    Arc::new(move || {
+                        let _ = probe_handle.emit(core_snapshot::APP_STATE_CHANGED, ());
+                    }),
+                );
+            }
+            let shared_host = Arc::new(TauriHost(app.handle().clone()));
+            subscription_watch::spawn_subscription_watchdog(
+                Arc::clone(&runtime_state),
+                Arc::clone(&shared_host),
+            );
+            rule_set_watch::spawn_rule_set_watchdog(Arc::clone(&runtime_state), shared_host);
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -514,14 +288,14 @@ pub fn run() {
                 WindowEvent::CloseRequested { api, .. } => {
                     api.prevent_close();
                     let _ = window.hide();
-                    let _ = window.emit(crate::core_snapshot::WINDOW_HIDDEN, ());
+                    let _ = window.emit(core_snapshot::WINDOW_HIDDEN, ());
                 }
                 WindowEvent::Focused(focused) => {
                     if *focused {
                         if let Some(state) = window.app_handle().try_state::<AppState>() {
                             application::request_runtime_probe_refresh(state.inner());
                         }
-                        let _ = window.emit(crate::core_snapshot::WINDOW_SHOWN, ());
+                        let _ = window.emit(core_snapshot::WINDOW_SHOWN, ());
                     }
                 }
                 _ => {}
@@ -613,173 +387,21 @@ pub fn run() {
                         .shutdown(std::time::Duration::from_millis(500));
                     state.release_instance_lock();
                 }
-                // Safeguard if an external quit event arrives while an update
-                // is installing (non-Windows normally restarts directly via
-                // `tauri::process::restart` and Windows `tauri-plugin-updater`
-                // exits via `std::process::exit(0)`). The updater already ran
-                // `graceful_stop`; let the exit proceed instead of `prevent_exit`.
                 return;
             }
-            // Cmd+Q / OS logout / app.exit() path: run the same cleanup as tray
-            // Quit (stop core + restore system proxy) before the process dies,
-            // instead of orphaning sing-box and leaving the proxy applied until
-            // the next launch. The stop runs off the main thread — it can take
-            // seconds with TUN active (teardown waits + core stop +
-            // `networksetup` restore) — and the process exits from the worker
-            // once the state is consistent.
             api.prevent_exit();
             let handle = app_handle.clone();
-            tauri::async_runtime::spawn_blocking(move || {
-                match request_tray_quit(&handle) {
-                    QuitOutcome::Stopped => std::process::exit(0),
-                    QuitOutcome::LockPoisoned => std::process::exit(1),
-                    QuitOutcome::ProxyRestoreFailed | QuitOutcome::StopFailed => {
-                        // Stay running so the user can retry from the UI; the
-                        // warning is surfaced on the next get_status poll.
-                    }
-                }
+            tauri::async_runtime::spawn_blocking(move || match request_tray_quit(&handle) {
+                QuitOutcome::Stopped => std::process::exit(0),
+                QuitOutcome::LockPoisoned => std::process::exit(1),
+                QuitOutcome::ProxyRestoreFailed | QuitOutcome::StopFailed => {}
             });
         }
     });
 }
 
 #[cfg(test)]
-pub(crate) fn test_instance_lock(paths: &AppPaths) -> Mutex<Option<std::fs::File>> {
-    use fs2::FileExt;
-    use std::fs::OpenOptions;
-    paths.ensure_dirs().expect("dirs");
-    let file = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(paths.root().join("instance.lock"))
-        .expect("lock file");
-    file.try_lock_exclusive().expect("lock");
-    Mutex::new(Some(file))
-}
-
-/// A free loopback port for tests that bind real listeners.
-///
-/// Ports come from a suite-wide counter in a fixed range below the OS
-/// ephemeral range (Linux default 32768+, macOS / Windows 49152+), so a
-/// concurrent test's `bind("127.0.0.1:0")` (e.g. `MockClashApi`) can never
-/// land on one. The counter is serialized by a global mutex, so parallel
-/// tests never pick the same port. Each candidate is probed and skipped when
-/// an external process already holds it (e.g. a dev instance of the app on
-/// the fixed defaults 17890 / 19150), so the suite never depends on host
-/// state. The gap between picking a port and actually binding it remains
-/// racy against *external* holders only — nothing inside the suite can take
-/// a counter port.
-#[cfg(test)]
-pub(crate) fn free_loopback_port() -> u16 {
-    const RANGE_START: u32 = 20_000;
-    const RANGE_END: u32 = 23_000;
-    static NEXT: std::sync::Mutex<u32> = std::sync::Mutex::new(RANGE_START);
-    let mut next = NEXT.lock().expect("port counter lock");
-    for _ in RANGE_START..RANGE_END {
-        let port = *next as u16;
-        *next = if *next + 1 >= RANGE_END {
-            RANGE_START
-        } else {
-            *next + 1
-        };
-        if !ice_core::tcp_port_is_in_use("127.0.0.1", port) {
-            return port;
-        }
-    }
-    panic!("no free loopback port in {RANGE_START}..{RANGE_END}");
-}
-
-/// Default settings with random free loopback ports for the mixed and clash
-/// API inbounds. Tests that start a (mock) core run the real port probe, so
-/// the fixed defaults would fail whenever another program holds them.
-#[cfg(test)]
-pub(crate) fn test_settings() -> ice_config::AppSettings {
-    ice_config::AppSettings {
-        mixed_port: free_loopback_port(),
-        clash_api_port: free_loopback_port(),
-        ..ice_config::AppSettings::default()
-    }
-}
-
-#[cfg(test)]
 mod tests {
-    use super::*;
-    use ice_config::write_json_atomic;
-    use ice_proxy_sys::{
-        recover_if_applied, ProxyBackup, ProxyBackupFile, ProxyEndpoints, ProxySysError,
-        SystemProxy,
-    };
-    use std::cell::Cell;
-    use std::fs;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    #[derive(Default)]
-    struct CountingProxy {
-        restore_calls: Cell<usize>,
-        apply_calls: Cell<usize>,
-    }
-
-    impl SystemProxy for CountingProxy {
-        fn backup(&self) -> Result<ProxyBackup, ProxySysError> {
-            Ok(ProxyBackup::default())
-        }
-
-        fn apply(&self, _endpoints: &ProxyEndpoints) -> Result<(), ProxySysError> {
-            self.apply_calls.set(self.apply_calls.get() + 1);
-            Ok(())
-        }
-
-        fn restore(&self, _backup: &ProxyBackup) -> Result<(), ProxySysError> {
-            self.restore_calls.set(self.restore_calls.get() + 1);
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn bootstrap_purges_invalid_pid_and_recovers_applied_proxy() {
-        let dir = std::env::temp_dir().join(format!(
-            "ice-box-bootstrap-{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("time")
-                .as_nanos()
-        ));
-        let paths = AppPaths::new(&dir);
-        paths.ensure_dirs().expect("dirs");
-        fs::write(paths.pid(), b"not-a-pid").expect("pid");
-
-        let record = ProxyBackupFile {
-            applied: true,
-            pending_apply: false,
-            applied_at: None,
-            endpoints: ProxyEndpoints {
-                http_host: "127.0.0.1".into(),
-                http_port: 17890,
-                socks_host: None,
-                socks_port: None,
-            },
-            backup: ProxyBackup::default(),
-        };
-        write_json_atomic(&paths.proxy_backup(), &record).expect("backup");
-
-        purge_invalid_pid_file(&paths.pid()).expect("purge");
-        assert!(!paths.pid().exists());
-
-        let proxy = CountingProxy::default();
-        let did = recover_if_applied(&paths.proxy_backup(), &proxy).expect("recover");
-        assert!(did);
-        assert_eq!(proxy.restore_calls.get(), 1);
-        assert_eq!(proxy.apply_calls.get(), 0);
-
-        let after: ProxyBackupFile =
-            serde_json::from_str(&fs::read_to_string(paths.proxy_backup()).unwrap()).unwrap();
-        assert!(!after.applied);
-        assert!(paths.proxy_backup().exists());
-
-        let _ = fs::remove_dir_all(&dir);
-    }
-
     #[test]
     fn error_codes_ts_matches_rust() {
         let ts = include_str!("../../src/api/errorCodes.ts");

@@ -23,16 +23,10 @@ ice-core = { workspace = true }
 ice-proxy-sys = { workspace = true }
 ice-engine = { workspace = true }
 ice-config = { workspace = true }
-ice-tun-sys = { workspace = true }
-ice-elevate = { workspace = true }
-sha2 = "0.10"
+ice-runtime = { workspace = true }
 libc = "0.2"
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-tracing-appender = { workspace = true }
 time = { workspace = true }
-ureq = { workspace = true }
-fs2 = "0.4"
 tauri-plugin-updater = "2.14.1"
 tauri-plugin-process = "2.3.1"
 url = "2.5.8"
@@ -48,11 +42,6 @@ windows-sys = { version = "0.59", features = [
     "Win32_Globalization",
     "Win32_Graphics_Dwm",
     "Win32_Graphics_Gdi",
-    "Win32_Security",
-    "Win32_System_LibraryLoader",
-    "Win32_System_ProcessStatus",
-    "Win32_System_Registry",
-    "Win32_System_Threading",
     "Win32_UI_HiDpi",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",

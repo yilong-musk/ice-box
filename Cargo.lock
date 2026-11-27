@@ -1788,20 +1788,17 @@ version = "0.4.1"
 dependencies = [
  "block2",
  "dispatch2",
- "fs2",
  "ice-config",
  "ice-core",
- "ice-elevate",
  "ice-engine",
  "ice-proxy-sys",
- "ice-tun-sys",
+ "ice-runtime",
  "libc",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
  "serde",
  "serde_json",
- "sha2 0.10.9",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -1810,9 +1807,6 @@ dependencies = [
  "tauri-plugin-updater",
  "time",
  "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "ureq",
  "url",
  "uuid",
  "windows-sys 0.59.0",
@@ -1838,6 +1832,23 @@ dependencies = [
  "tauri-plugin-tunnel",
  "time",
  "uuid",
+]
+
+[[package]]
+name = "ice-cli"
+version = "0.4.1"
+dependencies = [
+ "ice-config",
+ "ice-core",
+ "ice-engine",
+ "ice-proxy-sys",
+ "ice-runtime",
+ "libc",
+ "serde",
+ "serde_json",
+ "tracing",
+ "uuid",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1941,6 +1952,31 @@ dependencies = [
  "flate2",
  "regex-syntax",
  "serde_json",
+]
+
+[[package]]
+name = "ice-runtime"
+version = "0.4.1"
+dependencies = [
+ "fs2",
+ "ice-config",
+ "ice-core",
+ "ice-elevate",
+ "ice-engine",
+ "ice-proxy-sys",
+ "ice-tun-sys",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "time",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "ureq",
+ "url",
+ "uuid",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

@@ -167,10 +167,14 @@ fn stop_waiting_for_slow_core_does_not_time_out() {
     write_allowed_config(&config_path);
     let socket = dir.join("helper.sock");
     let core_bin = dir.join("fake-core");
+    let ready_marker = dir.join("trap-ready");
     use std::os::unix::fs::PermissionsExt;
     std::fs::write(
         &core_bin,
-        "#!/bin/sh\ntrap 'sleep 3.5; exit 0' TERM\nwhile :; do sleep 0.2; done\n",
+        format!(
+            "#!/bin/sh\ntrap 'sleep 3.5; exit 0' TERM\n: > '{}'\nwhile :; do sleep 0.2; done\n",
+            ready_marker.display()
+        ),
     )
     .unwrap();
     std::fs::set_permissions(&core_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -189,6 +193,20 @@ fn stop_waiting_for_slow_core_does_not_time_out() {
     coordinator
         .start_with_config(&config_path)
         .expect("start via helper");
+
+    // Wait until the shell fixture has installed its SIGTERM trap; otherwise a
+    // fast Stop can kill `/bin/sh` with the default TERM handler before line 2
+    // executes.
+    for _ in 0..100 {
+        if ready_marker.exists() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        ready_marker.exists(),
+        "fake slow core did not install its SIGTERM trap in time"
+    );
 
     // The core does not exit for ~3.5 s after SIGTERM; the Stop roundtrip
     // must stay open past the generic IPC timeout and wait for the daemon's

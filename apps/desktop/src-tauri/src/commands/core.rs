@@ -7,7 +7,8 @@ use super::*;
 pub async fn start(app: AppHandle) -> Result<(), AppError> {
     run_blocking("start", move || {
         let state = app.state::<AppState>();
-        start_service(&app, &state)
+        let host = tauri_host(&app);
+        start_service(&host, state.inner())
     })
     .await
 }
@@ -18,7 +19,8 @@ pub async fn start(app: AppHandle) -> Result<(), AppError> {
 pub async fn restore_launch_proxy(app: AppHandle) -> Result<(), AppError> {
     run_blocking("restore_launch_proxy", move || {
         let state = app.state::<AppState>();
-        restore_proxy_service_on_launch(&app, &state)
+        let host = tauri_host(&app);
+        restore_proxy_service_on_launch(&host, state.inner())
     })
     .await
 }
@@ -27,8 +29,9 @@ pub async fn restore_launch_proxy(app: AppHandle) -> Result<(), AppError> {
 pub async fn stop(app: AppHandle) -> Result<(), AppError> {
     run_blocking("stop", move || {
         let state = app.state::<AppState>();
-        let binary = binary_for(&app)?;
-        graceful_stop(&state, binary)
+        let host = tauri_host(&app);
+        let binary = binary_for(&host)?;
+        crate::shutdown::graceful_stop(state.inner(), binary)
     })
     .await
 }

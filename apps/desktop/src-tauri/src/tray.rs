@@ -3321,16 +3321,19 @@ fn toggle_mcp(app: &AppHandle) {
             return;
         };
         let enabled = !mcp.status().enabled;
-        if let Err(err) = mcp.set_enabled(&app, enabled) {
-            tracing::warn!(
-                code = %err.code,
-                error = %err.message,
-                enabled,
-                "tray MCP service switch failed"
-            );
+        if let Some(ctx) = crate::app_host::mcp_context(&app) {
+            if let Err(err) = mcp.set_enabled(&ctx, enabled) {
+                tracing::warn!(
+                    code = %err.code,
+                    error = %err.message,
+                    enabled,
+                    "tray MCP service switch failed"
+                );
+            }
         }
         // Refresh the Home row and the MCP page as well as the menu.
-        broadcast_state_change(&app);
+        let host = crate::app_host::tauri_host(&app);
+        broadcast_state_change(&host);
     });
 }
 
@@ -3428,10 +3431,11 @@ fn toggle_service(app: &AppHandle) {
         let Some(state) = app.try_state::<AppState>() else {
             return;
         };
+        let host = crate::app_host::tauri_host(&app);
         let result = if engaged {
-            disable_active_backend_inner(&app, state.inner())
+            disable_active_backend_inner(&host, state.inner())
         } else {
-            start_service(&app, state.inner())
+            start_service(&host, state.inner())
         };
         if let Err(err) = result {
             tracing::warn!(
@@ -3464,10 +3468,11 @@ fn switch_node(app: &AppHandle, action: NodeAction) {
         let Some(state) = app.try_state::<AppState>() else {
             return;
         };
+        let host = crate::app_host::tauri_host(&app);
         let result = lock_orchestrate(state.inner()).and_then(|_orch| match &action {
-            NodeAction::SelectNode(tag) => select_node(&app, state.inner(), tag),
+            NodeAction::SelectNode(tag) => select_node(&host, state.inner(), tag),
             NodeAction::SelectMember { group, member } => {
-                select_group_member(&app, state.inner(), group, member).map(|_| ())
+                select_group_member(&host, state.inner(), group, member).map(|_| ())
             }
         });
         if let Err(err) = result {
@@ -3481,7 +3486,7 @@ fn switch_node(app: &AppHandle, action: NodeAction) {
         // Re-sync the menu and let the window re-read status/settings. Always
         // announced: a failed switch can still leave a different state, and the
         // group the platform unchecked on click must be re-derived from reality.
-        broadcast_state_change(&app);
+        broadcast_state_change(&host);
     });
 }
 
@@ -3502,12 +3507,13 @@ fn switch_subscription(app: &AppHandle, id: Uuid) {
         let Some(state) = app.try_state::<AppState>() else {
             return;
         };
+        let host = crate::app_host::tauri_host(&app);
         let result = (|| -> Result<(), AppError> {
             let _orch = lock_orchestrate(state.inner())?;
             let paths = SubscriptionPaths::from_app(&state.paths);
             set_active(&paths, id, true).map_err(AppError::from)?;
             let settings = current_settings(&state.paths)?;
-            if let Some(err) = apply_after_subscription_change(&app, state.inner(), &settings) {
+            if let Some(err) = apply_after_subscription_change(&host, state.inner(), &settings) {
                 tracing::warn!(
                     code = %err.code,
                     error = %err.message,
@@ -3527,7 +3533,7 @@ fn switch_subscription(app: &AppHandle, id: Uuid) {
         // Re-sync the menu and let the window re-read status/settings. Always
         // announced: a failed switch can still leave a different state, and the
         // group the platform checked on click must be re-derived from reality.
-        broadcast_state_change(&app);
+        broadcast_state_change(&host);
     });
 }
 
@@ -3549,7 +3555,8 @@ fn switch_mode(app: &AppHandle, mode: ProxyMode) {
         let Some(state) = app.try_state::<AppState>() else {
             return;
         };
-        if let Err(err) = apply_proxy_mode(&app, state.inner(), mode) {
+        let host = crate::app_host::tauri_host(&app);
+        if let Err(err) = apply_proxy_mode(&host, state.inner(), mode) {
             tracing::warn!(
                 code = %err.code,
                 error = %err.message,

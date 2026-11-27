@@ -84,8 +84,8 @@ for rel in (
     "apps/desktop/package.json",
     "apps/desktop/src/pages/Home.tsx",
     "apps/desktop/src/pages/Settings.test.tsx",
-    "apps/desktop/src-tauri/src/autostart.rs",
-    "apps/desktop/src-tauri/src/application/common.rs",
+    "apps/desktop/src-tauri/src/app_update.rs",
+    "crates/ice-runtime/src/application/common.rs",
     "apps/website/src/downloads.ts",
     "apps/website/src/main.js",
     "apps/mobile/src/App.tsx",
@@ -119,25 +119,25 @@ out="$(run_dry)"
 assert_contains "docs-only" "$out" "fmt, toolchain pins, doc versions only"
 reset_worktree
 
-echo "== rust crate scoping: leaf crate (ice-elevate) =="
+echo "== rust crate scoping: leaf crate (ice-elevate -> ice-runtime -> ice-cli) =="
 printf '// edit\n' >>"$REPO/crates/ice-elevate/src/lib.rs"
 out="$(run_dry)"
-assert_contains "leaf-crate" "$out" "rust(ice-elevate)"
+assert_contains "leaf-crate" "$out" "rust(ice-cli ice-elevate ice-runtime)"
 assert_not_contains "leaf-crate" "$out" "ice-config"
 assert_not_contains "leaf-crate" "$out" "frontend("
 assert_not_contains "leaf-crate" "$out" "fixtures"
 reset_worktree
 
-echo "== rust crate scoping: reverse deps (ice-helper -> ice-tun-sys) =="
+echo "== rust crate scoping: reverse deps (ice-helper -> ice-tun-sys -> ice-runtime -> ice-cli) =="
 printf '// edit\n' >>"$REPO/crates/ice-helper/src/lib.rs"
 out="$(run_dry)"
-assert_contains "helper-revdeps" "$out" "rust(ice-helper ice-tun-sys)"
+assert_contains "helper-revdeps" "$out" "rust(ice-cli ice-helper ice-runtime ice-tun-sys)"
 assert_not_contains "helper-revdeps" "$out" "ice-config"
 assert_not_contains "helper-revdeps" "$out" "shells("
 reset_worktree
 
-echo "== rust shell-only change (apps/desktop/src-tauri/src/autostart.rs) =="
-printf '// edit\n' >>"$REPO/apps/desktop/src-tauri/src/autostart.rs"
+echo "== rust shell-only change (apps/desktop/src-tauri/src/app_update.rs) =="
+printf '// edit\n' >>"$REPO/apps/desktop/src-tauri/src/app_update.rs"
 out="$(run_dry)"
 assert_contains "shell-only" "$out" "shells(ice-box"
 assert_not_contains "shell-only" "$out" "rust("
@@ -145,9 +145,9 @@ assert_not_contains "shell-only" "$out" "frontend("
 reset_worktree
 
 echo "== rust application boundary triggers fast arch-vitest, not full vitest =="
-printf '// edit\n' >>"$REPO/apps/desktop/src-tauri/src/application/common.rs"
+printf '// edit\n' >>"$REPO/crates/ice-runtime/src/application/common.rs"
 out="$(run_dry)"
-assert_contains "app-boundary" "$out" "shells(ice-box"
+assert_contains "app-boundary" "$out" "rust(ice-cli ice-runtime)"
 assert_contains "app-boundary" "$out" "frontend(arch-vitest)"
 assert_not_contains "app-boundary" "$out" "mobile-demo"
 assert_not_contains "app-boundary" "$out" "frontend(typecheck"
@@ -190,14 +190,14 @@ assert_contains "clean-branch" "$out_clean" "fixtures"
 printf '// follow-up rust edit\n' >>"$REPO/crates/ice-elevate/src/lib.rs"
 out_wt="$(run_dry)"
 assert_contains "wt-vs-head" "$out_wt" "diff = working tree vs HEAD"
-assert_contains "wt-vs-head" "$out_wt" "rust(ice-elevate)"
+assert_contains "wt-vs-head" "$out_wt" "rust(ice-cli ice-elevate ice-runtime)"
 assert_not_contains "wt-vs-head" "$out_wt" "frontend("
 assert_not_contains "wt-vs-head" "$out_wt" "fixtures"
 
 # Explicit --branch includes both earlier branch commits and working tree edit.
 out_branch="$(run_dry --branch)"
 assert_contains "explicit-branch" "$out_branch" "diff = branch vs main"
-assert_contains "explicit-branch" "$out_branch" "rust(ice-elevate)"
+assert_contains "explicit-branch" "$out_branch" "rust(ice-cli ice-elevate ice-runtime)"
 assert_contains "explicit-branch" "$out_branch" "frontend(typecheck website-test mobile-demo)"
 assert_contains "explicit-branch" "$out_branch" "fixtures"
 reset_worktree
@@ -296,12 +296,12 @@ printf '// edit\n' >>"$REPO/crates/ice-elevate/src/lib.rs"
 printf '// edit\n' >>"$REPO/crates/ice-spawn/src/lib.rs"
 CARGO_LOG="$CARGO_LOG" run_exec >/dev/null
 cargo_calls="$(cat "$CARGO_LOG")"
-assert_contains "multi-crate-exec" "$cargo_calls" "clippy -p ice-core -p ice-elevate"
+assert_contains "multi-crate-exec" "$cargo_calls" "clippy -p ice-cli -p ice-core -p ice-elevate"
 reset_worktree
 
 CARGO_LOG="$TMP/ws-one-shell.log"
 printf '\n' >>"$REPO/Cargo.toml"
-printf '// edit\n' >>"$REPO/apps/desktop/src-tauri/src/autostart.rs"
+printf '// edit\n' >>"$REPO/apps/desktop/src-tauri/src/app_update.rs"
 CARGO_LOG="$CARGO_LOG" run_exec >/dev/null
 cargo_calls="$(cat "$CARGO_LOG")"
 assert_contains "ws-one-shell-exec" "$cargo_calls" "clippy --workspace --all-targets"

@@ -45,6 +45,7 @@ build_fixture() {
   local include_latest="$4"
   local meta_out="$5"
   local prerelease_flag="$6"
+  local include_cli="${7:-0}"
 
   mkdir -p "$dir"
   printf 'dmg\n' >"$dir/ice-box_${version}_aarch64.dmg"
@@ -59,6 +60,12 @@ build_fixture() {
     printf 'deb-arm64\n' >"$dir/ice-box_${version}_arm64.deb"
     printf 'appimage-arm64\n' >"$dir/ice-box_${version}_aarch64.AppImage"
     printf 'sig\n' >"$dir/ice-box_${version}_aarch64.AppImage.sig"
+  fi
+  if [[ "$include_cli" == "1" ]]; then
+    printf 'cli-mac\n' >"$dir/ice-box-cli_${version}_darwin_aarch64.tar.gz"
+    printf 'cli-win\n' >"$dir/ice-box-cli_${version}_windows_x86_64.zip"
+    printf 'cli-lin-x64\n' >"$dir/ice-box-cli_${version}_linux_x86_64.tar.gz"
+    printf 'cli-lin-arm64\n' >"$dir/ice-box-cli_${version}_linux_aarch64.tar.gz"
   fi
   printf 'apk\n' >"$dir/ice-box_${version}_android_arm64.apk"
   printf 'license\n' >"$dir/LICENSE"
@@ -127,20 +134,22 @@ meta_out.write_text(
 PY
 }
 
-# Linux-era final and pre-release fixtures (version > 0.4.0).
+# CLI + Linux-era final and pre-release fixtures (version > 0.4.1).
 RELEASE="$TMP/release-0.5.0"
-build_fixture "$RELEASE" "0.5.0" 1 1 "$TMP/meta-final.json" 0
-build_fixture "$TMP/prerelease-0.5.0" "0.5.0" 1 0 "$TMP/meta-prerelease.json" 1
-build_fixture "$TMP/prerelease-0.4.1-rc.1" "0.4.1-rc.1" 1 0 "$TMP/meta-0.4.1-rc.1.json" 1
+build_fixture "$RELEASE" "0.5.0" 1 1 "$TMP/meta-final.json" 0 1
+build_fixture "$TMP/prerelease-0.5.0" "0.5.0" 1 0 "$TMP/meta-prerelease.json" 1 1
+# Linux-era, pre-CLI fixture (0.4.1).
+build_fixture "$TMP/prerelease-0.4.1-rc.1" "0.4.1-rc.1" 1 0 "$TMP/meta-0.4.1-rc.1.json" 1 0
 
-# Linux-era release missing Linux assets (must fail).
-build_fixture "$TMP/release-0.5.0-no-linux" "0.5.0" 0 1 "$TMP/meta-0.5.0-no-linux.json" 0
-build_fixture "$TMP/prerelease-0.4.1-rc.1-no-linux" "0.4.1-rc.1" 0 0 "$TMP/meta-0.4.1-rc.1-no-linux.json" 1
+# Missing Linux or CLI assets (must fail).
+build_fixture "$TMP/release-0.5.0-no-linux" "0.5.0" 0 1 "$TMP/meta-0.5.0-no-linux.json" 0 1
+build_fixture "$TMP/release-0.5.0-no-cli" "0.5.0" 1 1 "$TMP/meta-0.5.0-no-cli.json" 0 0
+build_fixture "$TMP/prerelease-0.4.1-rc.1-no-linux" "0.4.1-rc.1" 0 0 "$TMP/meta-0.4.1-rc.1-no-linux.json" 1 0
 
-# Pre-Linux fixtures (version <= 0.4.0): no Linux assets, macOS+Windows latest.json.
-build_fixture "$TMP/release-0.4.0" "0.4.0" 0 1 "$TMP/meta-0.4.0.json" 0
-build_fixture "$TMP/prerelease-0.4.0-rc.1" "0.4.0-rc.1" 0 0 "$TMP/meta-0.4.0-rc.1.json" 1
-build_fixture "$TMP/release-0.4.0-with-linux" "0.4.0" 1 1 "$TMP/meta-0.4.0-with-linux.json" 0
+# Pre-Linux fixtures (version <= 0.4.0): no Linux or CLI assets, macOS+Windows latest.json.
+build_fixture "$TMP/release-0.4.0" "0.4.0" 0 1 "$TMP/meta-0.4.0.json" 0 0
+build_fixture "$TMP/prerelease-0.4.0-rc.1" "0.4.0-rc.1" 0 0 "$TMP/meta-0.4.0-rc.1.json" 1 0
+build_fixture "$TMP/release-0.4.0-with-linux" "0.4.0" 1 1 "$TMP/meta-0.4.0-with-linux.json" 0 0
 
 python3 - "$TMP/meta-final.json" "$TMP/meta-prerelease-with-latest.json" \
   "$TMP/meta-extra.json" <<'PY'
@@ -226,6 +235,8 @@ expect_ok "pre-linux-0.4.0-rc.1" verify "$TMP/prerelease-0.4.0-rc.1" "$TMP/meta-
 echo "== failures =="
 expect_fail "linux-era-missing-linux-assets" "ice-box_0.5.0_amd64.deb" \
   verify "$TMP/release-0.5.0-no-linux" "$TMP/meta-0.5.0-no-linux.json" v0.5.0 v0.5.0
+expect_fail "cli-era-missing-cli-assets" "ice-box-cli_0.5.0_linux_x86_64.tar.gz" \
+  verify "$TMP/release-0.5.0-no-cli" "$TMP/meta-0.5.0-no-cli.json" v0.5.0 v0.5.0
 expect_fail "linux-era-prerelease-missing-linux" "ice-box_0.4.1-rc.1_aarch64.AppImage.sig" \
   verify "$TMP/prerelease-0.4.1-rc.1-no-linux" "$TMP/meta-0.4.1-rc.1-no-linux.json" v0.4.0 --prerelease v0.4.1-rc.1
 expect_fail "pre-linux-unexpected-linux-assets" "unexpected assets" \

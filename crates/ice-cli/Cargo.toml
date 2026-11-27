@@ -1,0 +1,35 @@
+[package]
+name = "ice-cli"
+version.workspace = true
+description = "Cross-platform headless CLI and daemon for ice-box"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ice-box-cli"
+path = "src/main.rs"
+
+[dependencies]
+ice-runtime = { workspace = true }
+ice-config = { workspace = true }
+ice-core = { workspace = true }
+ice-engine = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_System_Console",
+] }
+
+[dev-dependencies]
+ice-config = { workspace = true, features = ["test-hooks"] }
+ice-core = { workspace = true, features = ["test-hooks"] }
+ice-proxy-sys = { workspace = true }

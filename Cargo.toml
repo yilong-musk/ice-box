@@ -12,6 +12,8 @@ members = [
   "crates/ice-subscription",
   "crates/ice-engine",
   "crates/ice-app",
+  "crates/ice-runtime",
+  "crates/ice-cli",
   "crates/ice-tun-sys",
   "crates/ice-tun-helper-proto",
   "crates/ice-tun-journal",
@@ -54,6 +56,7 @@ ice-config-guard = { path = "crates/ice-config-guard" }
 ice-subscription = { path = "crates/ice-subscription" }
 ice-engine = { path = "crates/ice-engine" }
 ice-app = { path = "crates/ice-app" }
+ice-runtime = { path = "crates/ice-runtime" }
 ice-tun-sys = { path = "crates/ice-tun-sys" }
 ice-tun-helper-proto = { path = "crates/ice-tun-helper-proto" }
 ice-tun-journal = { path = "crates/ice-tun-journal" }

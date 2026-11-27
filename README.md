@@ -72,6 +72,7 @@ npm run dev
 | `npm run fetch-singbox -- win && npm run build:win` | Build Windows installer |
 | `npm run fetch-singbox -- linux-x64 && npm run build:linux` | Build Linux `.deb` & `.AppImage` (`linux-arm64` on arm64) |
 | `npm run acceptance` / `acceptance:tun` / `acceptance:win` / `acceptance:linux` / `acceptance:linux-tun` | Live host acceptance gates |
+| `bash scripts/package-cli.sh` | Build and verify the cross-platform headless CLI archive for this host |
 | `bash scripts/build-android-apk.sh debug arm64` | Build Android debug APK (`amd64` for emulator) |
 
 ```text
@@ -86,6 +87,7 @@ crates/         Rust workspace (ice-app, ice-config, ice-core, ice-engine, ice-s
 | Document | Scope |
 |---|---|
 | [`docs/architecture.md`](docs/architecture.md) | Architecture, module boundaries, and data flow |
+| [`docs/cli.md`](docs/cli.md) | Cross-platform headless CLI, daemon, and Agent automation |
 | [`docs/mcp.md`](docs/mcp.md) | Desktop MCP setup, tools, and security model |
 | [`docs/tun.md`](docs/tun.md) | TUN capture, elevation, recovery, and platform limits |
 | [`docs/testing.md`](docs/testing.md) | Local/CI gates and manual live tests |

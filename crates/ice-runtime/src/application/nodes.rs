@@ -1,0 +1,1233 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+use super::*;
+
+#[derive(Serialize)]
+pub struct NodeInfo {
+    pub tag: String,
+    pub outbound_type: String,
+    /// Live member currently used by a strategy group (Clash API `now`), when core running.
+    pub group_now: Option<String>,
+    /// Live member tags of a strategy group, when core running.
+    pub group_all: Option<Vec<String>>,
+    /// Whether the tag is favorited in the active subscription.
+    pub favorite: bool,
+    /// Position in the active subscription's favorites (`0` = newest).
+    pub favorite_rank: Option<usize>,
+}
+
+/// Node list with the live group state. Shared by the `list_nodes` command and
+/// the tray node menu (which re-derives it on every sync tick).
+pub fn collect_nodes(state: &AppState) -> Result<Vec<NodeInfo>, AppError> {
+    let Some(entry) = cached_profile(state)? else {
+        return Ok(vec![]);
+    };
+    let settings = current_settings(&state.paths)?;
+    let selections = load_group_selections(&state.paths.group_selections());
+    let favorites = load_node_favorites(&state.paths.node_favorites());
+    let core = state.core_snapshot.load();
+    let core_running = core.state.status == CoreStatus::Running;
+    let live = if core_running {
+        let endpoints = clash_endpoints(&state.paths, &settings)?;
+        load_proxy_groups(&state.live_cache, &endpoints, core.generation, true)
+    } else {
+        None
+    };
+    // Member tags come from the profile. The live sample only carries `now`,
+    // so a refresh does not keep a second copy of every group member.
+    let live_now: std::collections::HashMap<&str, &str> = live
+        .as_ref()
+        .map(|groups| {
+            groups
+                .iter()
+                .map(|group| (group.tag.as_str(), group.now.as_str()))
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(entry
+        .profile
+        .groups
+        .iter()
+        .chain(entry.profile.nodes.iter())
+        .map(|o| {
+            let ty = o
+                .outbound
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let is_group = ["selector", "urltest", "fallback", "loadbalance"]
+                .iter()
+                .any(|g| g == &ty);
+            let static_members: Vec<String> = o
+                .outbound
+                .get("outbounds")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|m| m.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let static_now = static_group_now(o, &ty, &selections);
+            let listed = |tag: &str| static_members.iter().any(|member| member == tag);
+            let favorite_rank = favorites.favorite_rank(entry.subscription, &o.tag);
+            NodeInfo {
+                tag: o.tag.clone(),
+                outbound_type: ty,
+                group_now: live_now
+                    .get(o.tag.as_str())
+                    .copied()
+                    .filter(|now| !now.is_empty() && listed(now))
+                    .map(str::to_string)
+                    .or(static_now)
+                    .filter(|_| is_group),
+                group_all: if is_group { Some(static_members) } else { None },
+                favorite: favorite_rank.is_some(),
+                favorite_rank,
+            }
+        })
+        .collect())
+}
+
+const STRATEGY_GROUPS: &[&str] = &["selector", "urltest", "fallback", "loadbalance"];
+
+fn outbound_type_name(outbound: &NormalizedOutbound) -> String {
+    outbound
+        .outbound
+        .get("type")
+        .and_then(|value| value.as_str())
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+fn static_group_now(
+    outbound: &NormalizedOutbound,
+    ty: &str,
+    selections: &std::collections::HashMap<String, String>,
+) -> Option<String> {
+    if ty != "selector" {
+        return None;
+    }
+    selections
+        .get(&outbound.tag)
+        .filter(|selected| lists_member(outbound, selected))
+        .cloned()
+        .or_else(|| {
+            outbound
+                .outbound
+                .get("default")
+                .and_then(|value| value.as_str())
+                .filter(|value| lists_member(outbound, value))
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            outbound
+                .outbound
+                .get("outbounds")
+                .and_then(|value| value.as_array())
+                .and_then(|members| members.first())
+                .and_then(|member| member.as_str())
+                .map(str::to_string)
+        })
+}
+
+fn lists_member(outbound: &NormalizedOutbound, tag: &str) -> bool {
+    outbound
+        .outbound
+        .get("outbounds")
+        .and_then(|value| value.as_array())
+        .is_some_and(|members| members.iter().any(|member| member.as_str() == Some(tag)))
+}
+
+/// Missing settings must fail closed: when the user's preference cannot be
+/// read, do not contact the third-party exit probe endpoint.
+pub fn probe_exit_ip_enabled(settings: Option<&AppSettings>) -> bool {
+    settings.is_some_and(|settings| settings.probe_exit_ip)
+}
+
+/// Include every state that can change the route or the inbound used for the
+/// probe. `outbound.tag` and `group_now` alone miss Rule/Global/Direct switches
+/// and Mixed endpoint edits, which would otherwise show a stale landing IP
+/// until the 30-second sample expires.
+pub fn exit_probe_cache_key(
+    settings: &AppSettings,
+    proxy_url: &str,
+    outbound_tag: &str,
+    group_now: Option<&str>,
+) -> String {
+    format!(
+        "{}|{}:{}|{}|{}|{}",
+        ice_config::clash_mode_name(settings.proxy_mode),
+        settings.mixed_listen,
+        settings.mixed_port,
+        proxy_url,
+        outbound_tag,
+        group_now.unwrap_or("")
+    )
+}
+
+/// Home's one-line exit. Does not clone strategy-group member lists.
+pub fn outbound_summary(
+    state: &AppState,
+    settings: Option<&AppSettings>,
+    running: bool,
+) -> (bool, Option<SelectedOutbound>) {
+    let Ok(Some(entry)) = cached_profile(state) else {
+        return (false, None);
+    };
+    let outbounds: Vec<&NormalizedOutbound> = entry
+        .profile
+        .groups
+        .iter()
+        .chain(entry.profile.nodes.iter())
+        .collect();
+    if outbounds.is_empty() {
+        return (false, None);
+    }
+    let selected = settings
+        .and_then(|settings| settings.selected_tag.as_deref())
+        .and_then(|tag| {
+            outbounds
+                .iter()
+                .copied()
+                .find(|outbound| outbound.tag == tag)
+        })
+        .or_else(|| outbounds.first().copied());
+    let Some(outbound) = selected else {
+        return (false, None);
+    };
+    let ty = outbound_type_name(outbound);
+    let is_group = STRATEGY_GROUPS.iter().any(|group| *group == ty);
+    let selections = load_group_selections(&state.paths.group_selections());
+    let mut group_now = static_group_now(outbound, &ty, &selections);
+    if running && is_group {
+        if let Some(settings) = settings {
+            if let Ok(endpoints) = clash_endpoints(&state.paths, settings) {
+                let core = state.core_snapshot.load();
+                let refresh = state.live_cache.home_interest();
+                if let Some(now) = load_selected_now(
+                    &state.live_cache,
+                    &endpoints,
+                    core.generation,
+                    &outbound.tag,
+                    refresh,
+                )
+                .filter(|now| lists_member(outbound, now))
+                {
+                    group_now = Some(now);
+                }
+            }
+        }
+    }
+    let shown_now = group_now.filter(|_| is_group);
+    // Exit probes hit a third-party HTTPS endpoint through the mixed inbound.
+    // Off by settings (`probe_exit_ip`) or when the core is stopped.
+    let (landing_ip, landing_country) = if running && probe_exit_ip_enabled(settings) {
+        match (settings, exit_proxy_url(state, settings)) {
+            (Some(settings), Some(proxy)) => {
+                let key =
+                    exit_probe_cache_key(settings, &proxy, &outbound.tag, shown_now.as_deref());
+                match super::exit_probe::observe(&key, &proxy) {
+                    Some(sample) => (Some(sample.ip), sample.country),
+                    None => (None, None),
+                }
+            }
+            _ => (None, None),
+        }
+    } else {
+        super::exit_probe::clear();
+        (None, None)
+    };
+    // The user's own origin, measured directly (see `observe_origin`). Same
+    // gate as the landing probe; `clear` above drops it when that is off.
+    let (origin_ip, origin_country) = if running && probe_exit_ip_enabled(settings) {
+        match super::exit_probe::observe_origin() {
+            Some(sample) => (Some(sample.ip), sample.country),
+            None => (None, None),
+        }
+    } else {
+        (None, None)
+    };
+    (
+        true,
+        Some(SelectedOutbound {
+            tag: outbound.tag.clone(),
+            outbound_type: ty,
+            group_now: shown_now,
+            landing_ip,
+            landing_country,
+            origin_ip,
+            origin_country,
+        }),
+    )
+}
+
+/// Loopback HTTP proxy URL for the mixed inbound. A non-loopback listen
+/// (LAN share) is still reached through 127.0.0.1.
+fn exit_proxy_url(state: &AppState, settings: Option<&AppSettings>) -> Option<String> {
+    let core = state.core_snapshot.load();
+    let port = core
+        .state
+        .inbound_port
+        .filter(|port| *port > 0)
+        .or_else(|| settings.map(|settings| settings.mixed_port))
+        .filter(|port| *port > 0)?;
+    let configured = core
+        .state
+        .inbound_host
+        .as_deref()
+        .filter(|host| !host.is_empty())
+        .map(str::to_string)
+        .or_else(|| settings.map(|settings| settings.mixed_listen.clone()))
+        .unwrap_or_else(|| "127.0.0.1".to_string());
+    let host = if ice_config::is_loopback_host(&configured) {
+        configured
+    } else {
+        "127.0.0.1".to_string()
+    };
+    let host = host.trim_matches(|ch| ch == '[' || ch == ']');
+    if host.contains(':') {
+        Some(format!("http://[{host}]:{port}"))
+    } else {
+        Some(format!("http://{host}:{port}"))
+    }
+}
+
+#[derive(Serialize)]
+pub struct RuleTypeCount {
+    pub rule_type: String,
+    pub count: usize,
+}
+
+#[derive(Serialize)]
+pub struct RuleOverview {
+    pub total: usize,
+    /// Disabled fingerprints that match a current rule (subscription or custom).
+    pub disabled: usize,
+    pub custom: usize,
+    pub rule_sets: usize,
+    /// Subscription rule counts by classified type, most frequent first.
+    pub types: Vec<RuleTypeCount>,
+}
+
+#[derive(Deserialize)]
+pub struct ListRulesRequest {
+    /// Case-insensitive substring match over the rule JSON.
+    #[serde(default)]
+    pub keyword: Option<String>,
+    /// Classified rule type (one of `rule_type_of` keys); None = all types.
+    #[serde(default, rename = "type")]
+    pub rule_type: Option<String>,
+    /// `"all"` (default) | `"disabled"` | `"enabled"`.
+    #[serde(default)]
+    pub disabled: Option<String>,
+    /// Restrict to custom rules (`Some(true)`) or subscription rules (`Some(false)`).
+    #[serde(default)]
+    pub custom: Option<bool>,
+    #[serde(default)]
+    pub offset: usize,
+    #[serde(default = "default_rules_page_size")]
+    pub limit: usize,
+}
+
+pub fn default_rules_page_size() -> usize {
+    50
+}
+
+pub const MAX_RULES_PAGE_SIZE: usize = 200;
+
+#[derive(Serialize)]
+pub struct RuleRow {
+    /// Position in the active subscription's `route.rules`; None for custom rules.
+    pub index: Option<usize>,
+    pub fingerprint: String,
+    pub rule: serde_json::Value,
+    pub custom: bool,
+    pub disabled: bool,
+    pub rule_type: String,
+}
+
+#[derive(Serialize)]
+pub struct ListRulesResponse {
+    /// Count of rules matching the filters (before pagination).
+    pub total: usize,
+    pub offset: usize,
+    pub limit: usize,
+    pub items: Vec<RuleRow>,
+}
+
+pub fn load_overrides(state: &AppState) -> RuleOverrides {
+    let mut overrides = load_rule_overrides(&state.paths.rule_overrides());
+    // A current file is only `sha256:` keys. Cloning every rule just to
+    // discover that is what made each rules read duplicate the profile.
+    if !overrides.has_legacy_disabled_fingerprints() {
+        return overrides;
+    }
+    if let Ok(rules) = subscription_rules(state) {
+        let custom = overrides.custom.clone();
+        let mut combined: Vec<&serde_json::Value> = rules.iter().collect();
+        combined.extend(custom.iter());
+        if overrides.migrate_legacy_fingerprints(combined) {
+            let _ = save_rule_overrides(&state.paths.rule_overrides(), &overrides);
+        }
+    }
+    overrides
+}
+
+pub fn subscription_rules(state: &AppState) -> Result<Arc<Vec<serde_json::Value>>, AppError> {
+    let Some(entry) = cached_profile(state)? else {
+        return Ok(Arc::new(Vec::new()));
+    };
+    Ok(Arc::clone(&entry.rule_page(state)?.rules))
+}
+
+pub fn rule_exists(
+    rules: &[serde_json::Value],
+    overrides: &RuleOverrides,
+    fingerprint: &str,
+) -> bool {
+    rules
+        .iter()
+        .any(|rule| rule_matches_fingerprint(rule, fingerprint))
+        || overrides
+            .custom
+            .iter()
+            .any(|rule| rule_matches_fingerprint(rule, fingerprint))
+}
+
+/// Persist rule overrides then Apply (hot reload when running), like subscription mutations.
+pub fn apply_after_rule_change(
+    app: &impl AppHost,
+    state: &AppState,
+) -> Result<Option<AppError>, AppError> {
+    let settings = current_settings(&state.paths)?;
+    Ok(apply_after_subscription_change(app, state, &settings))
+}
+
+/// Rules for the active subscription only (single-active model).
+pub fn rule_overview(state: &AppState) -> Result<RuleOverview, AppError> {
+    let cached = cached_profile(state)?;
+    let empty = NormalizedProfile::from_nodes_only(vec![]);
+    let profile = cached
+        .as_ref()
+        .map(|entry| entry.profile.as_ref())
+        .unwrap_or(&empty);
+    let page = cached
+        .as_ref()
+        .map(|entry| entry.rule_page(state))
+        .transpose()?;
+    let rules: &[serde_json::Value] = page
+        .as_ref()
+        .map(|page| page.rules.as_slice())
+        .unwrap_or(&[]);
+    let fingerprints: &[String] = page
+        .as_ref()
+        .map(|page| page.fingerprints.as_slice())
+        .unwrap_or(&[]);
+    let overrides = load_overrides(state);
+    let mut counts: std::collections::HashMap<&'static str, usize> =
+        std::collections::HashMap::new();
+    let mut disabled = 0usize;
+    for (idx, rule) in rules.iter().enumerate() {
+        let fp: std::borrow::Cow<'_, str> = fingerprints
+            .get(idx)
+            .map(|fp| std::borrow::Cow::Borrowed(fp.as_str()))
+            .unwrap_or_else(|| std::borrow::Cow::Owned(rule_fingerprint(rule)));
+        if overrides.is_disabled(fp.as_ref()) {
+            disabled += 1;
+        }
+        *counts.entry(rule_type_of(rule)).or_default() += 1;
+    }
+    // Custom rules are always active; legacy disabled ones are deleted on load.
+    let mut types: Vec<RuleTypeCount> = counts
+        .into_iter()
+        .map(|(rule_type, count)| RuleTypeCount {
+            rule_type: rule_type.to_string(),
+            count,
+        })
+        .collect();
+    types.sort_by(|a, b| b.count.cmp(&a.count).then(a.rule_type.cmp(&b.rule_type)));
+    Ok(RuleOverview {
+        total: rules.len(),
+        disabled,
+        custom: overrides.custom.len(),
+        rule_sets: profile.route.rule_sets.len(),
+        types,
+    })
+}
+
+/// Where each rule-set the active profile (and the custom rules) needs comes
+/// from: a downloaded copy, a bundled file, or nothing yet.
+///
+/// Reads the full profile: the resident cache has no `route.rules` or `dns`,
+/// and legacy `geosite` / `geoip` matchers there (the built-in defaults of a
+/// share-link subscription, Clash `GEOSITE` rules) name rule-sets too.
+pub fn rule_set_status(state: &AppState) -> Result<Vec<ice_engine::RuleSetStatus>, AppError> {
+    let mut profile =
+        read_full_profile(state)?.unwrap_or_else(|| NormalizedProfile::from_nodes_only(vec![]));
+    let mut rules = std::mem::take(&mut profile.route.rules);
+    rules.extend(load_overrides(state).custom);
+    Ok(ice_engine::rule_set_statuses(
+        &profile.route.rule_sets,
+        &rules,
+        profile.dns.as_ref(),
+        Some(&state.paths.geoip_dir()),
+        &state.paths.rule_set_cache_dir(),
+    ))
+}
+
+/// Re-check every rule-set the profile needs now (the manual refresh of the
+/// Rules page and MCP), re-apply when anything changed, and return the new
+/// status. Blocks on the downloads.
+pub fn refresh_rule_sets_use_case(
+    app: &impl AppHost,
+    state: &AppState,
+) -> Result<Vec<ice_engine::RuleSetStatus>, AppError> {
+    if !crate::rule_set_watch::refresh_pass(state, app, ice_engine::RuleSetRefreshMode::All) {
+        // Apply was busy; the background worker re-applies shortly.
+        crate::rule_set_watch::request_refresh(ice_engine::RuleSetRefreshMode::Missing);
+    }
+    rule_set_status(state)
+}
+
+/// Query rules with server-side filtering + pagination. Never ships the full rule list
+/// over IPC: big subscriptions (up to 10k rules) stay cheap for the UI.
+pub fn query_rules(
+    state: &AppState,
+    req: &ListRulesRequest,
+) -> Result<ListRulesResponse, AppError> {
+    let cached = cached_profile(state)?;
+    let page = cached
+        .as_ref()
+        .map(|entry| entry.rule_page(state))
+        .transpose()?;
+    let rules: &[serde_json::Value] = page
+        .as_ref()
+        .map(|page| page.rules.as_slice())
+        .unwrap_or(&[]);
+    let fingerprints: &[String] = page
+        .as_ref()
+        .map(|page| page.fingerprints.as_slice())
+        .unwrap_or(&[]);
+    // Lowercase-serialized rule text is built once per profile version (lazily,
+    // only when a keyword is present) instead of per request.
+    let keyword_texts = req
+        .keyword
+        .as_deref()
+        .map(str::trim)
+        .filter(|k| !k.is_empty())
+        .and_then(|_| page.as_ref().map(|page| page.keyword_texts()));
+    let overrides = load_overrides(state);
+    let limit = req.limit.clamp(1, MAX_RULES_PAGE_SIZE);
+    let keyword = req
+        .keyword
+        .as_deref()
+        .map(str::trim)
+        .filter(|k| !k.is_empty())
+        .map(str::to_ascii_lowercase);
+    let want_disabled = match req.disabled.as_deref() {
+        Some("disabled") => Some(true),
+        Some("enabled") => Some(false),
+        _ => None,
+    };
+
+    // Indices only. The page clones rule JSON; the rest of a large
+    // subscription stays as the profile's existing values.
+    enum RuleHit {
+        Custom(usize),
+        Subscription(usize),
+    }
+    let mut hits: Vec<RuleHit> = Vec::new();
+    for (idx, rule) in overrides.custom.iter().enumerate() {
+        if req.custom == Some(false) {
+            continue;
+        }
+        // Custom rules are always active; legacy disabled ones are deleted on load.
+        if !matches_filter(
+            rule_type_of(rule),
+            false,
+            &want_disabled,
+            &keyword,
+            &req.rule_type,
+            rule,
+        ) {
+            continue;
+        }
+        hits.push(RuleHit::Custom(idx));
+    }
+    for (idx, rule) in rules.iter().enumerate() {
+        if req.custom == Some(true) {
+            continue;
+        }
+        let fp: std::borrow::Cow<'_, str> = fingerprints
+            .get(idx)
+            .map(|fp| std::borrow::Cow::Borrowed(fp.as_str()))
+            .unwrap_or_else(|| std::borrow::Cow::Owned(rule_fingerprint(rule)));
+        let disabled = overrides.is_disabled(fp.as_ref());
+        if keyword_matches(&keyword, &keyword_texts, idx, rule)
+            && matches_filter(
+                rule_type_of(rule),
+                disabled,
+                &want_disabled,
+                &None,
+                &req.rule_type,
+                rule,
+            )
+        {
+            hits.push(RuleHit::Subscription(idx));
+        }
+    }
+
+    let total = hits.len();
+    let items: Vec<RuleRow> = hits
+        .iter()
+        .skip(req.offset)
+        .take(limit)
+        .map(|hit| match *hit {
+            RuleHit::Custom(idx) => {
+                let rule = &overrides.custom[idx];
+                RuleRow {
+                    index: None,
+                    fingerprint: rule_fingerprint(rule),
+                    rule: rule.clone(),
+                    custom: true,
+                    // Custom rules no longer support disabling.
+                    disabled: false,
+                    rule_type: rule_type_of(rule).to_string(),
+                }
+            }
+            RuleHit::Subscription(idx) => {
+                let rule = &rules[idx];
+                let fingerprint = fingerprints
+                    .get(idx)
+                    .cloned()
+                    .unwrap_or_else(|| rule_fingerprint(rule));
+                let disabled = overrides.is_disabled(&fingerprint);
+                RuleRow {
+                    index: Some(idx),
+                    fingerprint,
+                    rule: rule.clone(),
+                    custom: false,
+                    disabled,
+                    rule_type: rule_type_of(rule).to_string(),
+                }
+            }
+        })
+        .collect();
+    Ok(ListRulesResponse {
+        total,
+        offset: req.offset,
+        limit,
+        items,
+    })
+}
+
+/// Keyword containment check. Subscription rules use the precomputed
+/// lowercase text (built once per profile version); the fallback path (custom
+/// rules are few) serializes on demand.
+pub fn keyword_matches(
+    keyword: &Option<String>,
+    texts: &Option<Arc<Vec<String>>>,
+    idx: usize,
+    rule: &serde_json::Value,
+) -> bool {
+    match (keyword, texts) {
+        (Some(kw), Some(texts)) => texts
+            .get(idx)
+            .map(|text| text.contains(kw.as_str()))
+            .unwrap_or(false),
+        (Some(kw), None) => serde_json::to_string(rule)
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .contains(kw.as_str()),
+        (None, _) => true,
+    }
+}
+
+pub fn matches_filter(
+    rule_type: &str,
+    disabled: bool,
+    want_disabled: &Option<bool>,
+    keyword: &Option<String>,
+    type_filter: &Option<String>,
+    rule: &serde_json::Value,
+) -> bool {
+    if let Some(want) = want_disabled {
+        if disabled != *want {
+            return false;
+        }
+    }
+    if let Some(ty) = type_filter {
+        if rule_type != ty {
+            return false;
+        }
+    }
+    if let Some(kw) = keyword {
+        if !serde_json::to_string(rule)
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .contains(kw.as_str())
+        {
+            return false;
+        }
+    }
+    true
+}
+
+#[derive(Deserialize)]
+pub struct SetRuleDisabledRequest {
+    pub fingerprint: String,
+    pub disabled: bool,
+}
+
+/// Validate + persist the disable/enable toggle (no Apply).
+pub fn persist_rule_disabled(
+    state: &AppState,
+    req: &SetRuleDisabledRequest,
+) -> Result<(), AppError> {
+    let mut overrides = load_overrides(state);
+    let rules = subscription_rules(state)?;
+    if !rule_exists(rules.as_ref(), &overrides, &req.fingerprint) {
+        return Err(AppError::new(
+            ErrorCode::ConfigInvalid,
+            "unknown rule fingerprint",
+        ));
+    }
+    if let Some(rule) = rules
+        .iter()
+        .find(|r| rule_matches_fingerprint(r, &req.fingerprint))
+        .cloned()
+    {
+        overrides.set_rule_disabled(&rule, req.disabled);
+    } else if overrides
+        .custom
+        .iter()
+        .any(|r| rule_matches_fingerprint(r, &req.fingerprint))
+    {
+        return Err(AppError::new(
+            ErrorCode::ConfigInvalid,
+            "custom rules cannot be disabled; edit or remove the rule instead",
+        ));
+    } else {
+        overrides.set_disabled(req.fingerprint.clone(), req.disabled);
+    }
+    save_rule_overrides(&state.paths.rule_overrides(), &overrides)?;
+    Ok(())
+}
+
+#[derive(Deserialize)]
+pub struct AddCustomRuleRequest {
+    pub rule: serde_json::Value,
+}
+
+/// Validate a custom rule before it is persisted or emitted verbatim.
+fn validate_custom_rule(state: &AppState, rule: &serde_json::Value) -> Result<(), AppError> {
+    let profile = active_profile(state).ok();
+    validate_custom_rule_value(rule, profile.as_deref())
+        .map_err(|message| AppError::new(ErrorCode::ConfigInvalid, message))
+}
+
+/// Validate + persist a custom rule (no Apply). Returns its fingerprint.
+pub fn persist_add_custom_rule(
+    state: &AppState,
+    req: &AddCustomRuleRequest,
+) -> Result<String, AppError> {
+    validate_custom_rule(state, &req.rule)?;
+    let fp = rule_fingerprint(&req.rule);
+    let mut overrides = load_overrides(state);
+    if overrides.custom.iter().any(|r| rule_fingerprint(r) == fp) {
+        return Err(AppError::new(
+            ErrorCode::ConfigInvalid,
+            "custom rule already exists",
+        ));
+    }
+    overrides.custom.push(req.rule.clone());
+    save_rule_overrides(&state.paths.rule_overrides(), &overrides)?;
+    Ok(fp)
+}
+
+#[derive(Deserialize)]
+pub struct UpdateCustomRuleRequest {
+    pub fingerprint: String,
+    pub rule: serde_json::Value,
+}
+
+/// Validate + persist a replacement custom rule (no Apply). Returns its new fingerprint.
+pub fn persist_update_custom_rule(
+    state: &AppState,
+    req: &UpdateCustomRuleRequest,
+) -> Result<String, AppError> {
+    validate_custom_rule(state, &req.rule)?;
+    let new_fp = rule_fingerprint(&req.rule);
+    let mut overrides = load_overrides(state);
+    let Some(index) = overrides
+        .custom
+        .iter()
+        .position(|rule| rule_matches_fingerprint(rule, &req.fingerprint))
+    else {
+        return Err(AppError::new(
+            ErrorCode::ConfigInvalid,
+            "custom rule not found",
+        ));
+    };
+    if overrides
+        .custom
+        .iter()
+        .enumerate()
+        .any(|(idx, rule)| idx != index && rule_fingerprint(rule) == new_fp)
+    {
+        return Err(AppError::new(
+            ErrorCode::ConfigInvalid,
+            "custom rule already exists",
+        ));
+    }
+    overrides.custom[index] = req.rule.clone();
+    save_rule_overrides(&state.paths.rule_overrides(), &overrides)?;
+    Ok(new_fp)
+}
+
+#[derive(Deserialize)]
+pub struct RemoveCustomRuleRequest {
+    pub fingerprint: String,
+}
+
+/// Validate + persist custom rule removal (no Apply).
+pub fn persist_remove_custom_rule(
+    state: &AppState,
+    req: &RemoveCustomRuleRequest,
+) -> Result<(), AppError> {
+    let mut overrides = load_overrides(state);
+    let before = overrides.custom.len();
+    overrides.remove_custom(&req.fingerprint);
+    if overrides.custom.len() == before {
+        return Err(AppError::new(
+            ErrorCode::ConfigInvalid,
+            "custom rule not found",
+        ));
+    }
+    save_rule_overrides(&state.paths.rule_overrides(), &overrides)?;
+    Ok(())
+}
+
+#[derive(Deserialize)]
+pub struct TagRequest {
+    pub tag: String,
+}
+
+/// Persist and apply a node pick. Shared by the `set_selected_node` command and
+/// the tray node menu; callers hold the orchestrate lock.
+pub fn select_node(app: &impl AppHost, state: &AppState, tag: &str) -> Result<(), AppError> {
+    // One profile load (mtime-cached) validates the tag and computes the
+    // selection group; the pick itself is applied live via the Clash API.
+    let profile = active_profile(state)?;
+    if !profile.all_outbounds().any(|o| o.tag == tag) {
+        return Err(AppError::new(
+            ErrorCode::ConfigInvalid,
+            format!("unknown node tag: {tag}"),
+        ));
+    }
+
+    // With strategy groups the pick applies to the group containing the tag (top-level
+    // group preferred); flat profiles use the injected `proxy` selector.
+    let selection_group = if profile.groups.is_empty() {
+        None
+    } else {
+        profile.selection_group_for(tag)
+    };
+
+    // Picking a strategy group that isn't itself a member of any other group (e.g. the
+    // top-level group) is a live no-op: grouped profiles have no flat `proxy` selector
+    // for select_outbound to target, and there is no parent group to set its member in.
+    if profile.is_unselectable_group(tag) {
+        return Ok(());
+    }
+
+    let previous = current_settings(&state.paths)?;
+    let mut settings = previous.clone();
+    settings.selected_tag = Some(tag.to_string());
+
+    // Persist the group member selection too (mirrors set_group_selection) so grouped
+    // profiles keep the pick across restarts / config regeneration.
+    let previous_selection = if let Some(group) = &selection_group {
+        let mut selections = load_group_selections(&state.paths.group_selections());
+        let prev = selections.insert(group.clone(), tag.to_string());
+        save_group_selections(&state.paths.group_selections(), &selections)?;
+        Some((group.clone(), prev))
+    } else {
+        None
+    };
+
+    persist_settings(&state.paths.settings(), &settings, host_platform())?;
+    // Persist the default in the runtime config. The live switch (below)
+    // already applied the pick; the config write only bakes it in for
+    // restarts, so patch the target selector's `default` instead of a full
+    // rebuild. Fall back to `generate_config` when the selector is not
+    // locatable (e.g. first run without a config yet).
+    let selector_tag = if profile.groups.is_empty() {
+        Some("proxy".to_string())
+    } else {
+        selection_group.clone()
+    };
+    let persist_result = match &selector_tag {
+        Some(sel) => match patch_selected_tag_default(&state.paths, sel, tag) {
+            Ok(true) => Ok(()),
+            Ok(false) => generate_config_with_cache(
+                &state.paths,
+                &settings,
+                resource_dir(app).as_deref(),
+                state.capture.apply_intent(),
+                Some(state.profile_parse_cache.as_ref()),
+            )
+            .map(|_| ()),
+            Err(err) => Err(err),
+        },
+        None => generate_config_with_cache(
+            &state.paths,
+            &settings,
+            resource_dir(app).as_deref(),
+            state.capture.apply_intent(),
+            Some(state.profile_parse_cache.as_ref()),
+        )
+        .map(|_| ()),
+    };
+    if let Err(err) = persist_result {
+        let _ = persist_settings(&state.paths.settings(), &previous, host_platform());
+        rollback_group_selection(state, &previous_selection);
+        return Err(err);
+    }
+
+    let should_select = {
+        let core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
+        core.state().status == CoreStatus::Running
+    };
+    if should_select {
+        let endpoints = clash_endpoints(&state.paths, &settings)?;
+        let result = match &selection_group {
+            Some(group) => select_group(&endpoints, group, tag),
+            None => select_outbound(&endpoints, tag),
+        };
+        if let Err(err) = result {
+            let _ = persist_settings(&state.paths.settings(), &previous, host_platform());
+            rollback_group_selection(state, &previous_selection);
+            let _ = generate_config_with_cache(
+                &state.paths,
+                &previous,
+                resource_dir(app).as_deref(),
+                state.capture.apply_intent(),
+                Some(state.profile_parse_cache.as_ref()),
+            );
+            return Err(AppError::from(err));
+        }
+        let group = selection_group.as_deref().unwrap_or(ice_core::SELECTOR_TAG);
+        let generation = state.core_snapshot.load().generation;
+        state
+            .live_cache
+            .record_group_now(&endpoints, generation, group, tag);
+    }
+
+    Ok(())
+}
+
+/// Restore the group selection map to its state before `set_selected_node`.
+pub fn rollback_group_selection(state: &AppState, previous: &Option<(String, Option<String>)>) {
+    if let Some((group, prev)) = previous {
+        let mut selections = load_group_selections(&state.paths.group_selections());
+        match prev {
+            Some(member) => {
+                selections.insert(group.clone(), member.clone());
+            }
+            None => {
+                selections.remove(group);
+            }
+        }
+        let _ = save_group_selections(&state.paths.group_selections(), &selections);
+    }
+}
+
+#[derive(Deserialize)]
+pub struct GroupSelectionRequest {
+    pub group: String,
+    pub member: String,
+}
+
+/// Persist and apply a strategy-group member pick. Shared by the
+/// `set_group_selection` command and the tray node menu; callers hold the
+/// orchestrate lock. The pick always survives restarts / config regeneration,
+/// and is applied live via the Clash API when the core is running. A pick in
+/// the main group moves `selected_tag` too (see
+/// [`NormalizedProfile::picks_selected_node`]). Returns the selected node after
+/// the pick, so callers need not re-read the settings.
+///
+/// When the live switch or the config write fails, both the selection map and
+/// `selected_tag` are restored, as in [`select_node`], so Home never names an
+/// exit the core is not using.
+pub fn select_group_member(
+    app: &impl AppHost,
+    state: &AppState,
+    group: &str,
+    member: &str,
+) -> Result<Option<String>, AppError> {
+    let profile = active_profile(state)?;
+    validate_static_group_member(profile.all_outbounds(), group, member)?;
+
+    let mut selections = load_group_selections(&state.paths.group_selections());
+    let prev_member = selections.insert(group.to_string(), member.to_string());
+    save_group_selections(&state.paths.group_selections(), &selections)?;
+    let previous_selection = Some((group.to_string(), prev_member));
+
+    let previous = match current_settings(&state.paths) {
+        Ok(settings) => settings,
+        Err(err) => {
+            rollback_group_selection(state, &previous_selection);
+            return Err(err);
+        }
+    };
+    let mut settings = previous.clone();
+    let moves_node = profile.picks_selected_node(group, member)
+        && settings.selected_tag.as_deref() != Some(member);
+    if moves_node {
+        settings.selected_tag = Some(member.to_string());
+        if let Err(err) = persist_settings(&state.paths.settings(), &settings, host_platform()) {
+            rollback_group_selection(state, &previous_selection);
+            return Err(err);
+        }
+    }
+    let rollback = |err: AppError| {
+        if moves_node {
+            let _ = persist_settings(&state.paths.settings(), &previous, host_platform());
+        }
+        rollback_group_selection(state, &previous_selection);
+        err
+    };
+
+    let should_apply_live = {
+        let core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
+        core.state().status == CoreStatus::Running
+    };
+    if should_apply_live {
+        let endpoints = clash_endpoints(&state.paths, &settings).map_err(rollback)?;
+        select_group(&endpoints, group, member).map_err(|err| rollback(AppError::from(err)))?;
+        let generation = state.core_snapshot.load().generation;
+        state
+            .live_cache
+            .record_group_now(&endpoints, generation, group, member);
+    } else {
+        let patched = patch_selected_tag_default(&state.paths, group, member).map_err(rollback)?;
+        if !patched {
+            generate_config_with_cache(
+                &state.paths,
+                &settings,
+                resource_dir(app).as_deref(),
+                state.capture.apply_intent(),
+                Some(state.profile_parse_cache.as_ref()),
+            )
+            .map_err(rollback)?;
+        }
+    }
+    Ok(settings.selected_tag)
+}
+
+pub fn validate_static_group_member<'a>(
+    outbounds: impl IntoIterator<Item = &'a NormalizedOutbound>,
+    group: &str,
+    member: &str,
+) -> Result<(), AppError> {
+    let g = outbounds
+        .into_iter()
+        .find(|o| o.tag == group)
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::ConfigInvalid,
+                format!("unknown strategy group: {group}"),
+            )
+        })?;
+    if g.outbound.get("type").and_then(|v| v.as_str()) != Some("selector") {
+        return Err(AppError::new(
+            ErrorCode::ConfigInvalid,
+            format!("{group} is not a selector group"),
+        ));
+    }
+    let members: Vec<&str> = g
+        .outbound
+        .get("outbounds")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+        .unwrap_or_default();
+    if !members.contains(&member) {
+        return Err(AppError::new(
+            ErrorCode::ConfigInvalid,
+            format!("{member} is not a member of group {group}"),
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Serialize)]
+pub struct DelayTestResponse {
+    pub tag: String,
+    pub delay_ms: u32,
+}
+
+/// One delay probe against the running core: `GET /proxies/{tag}/delay` with
+/// the standard connectivity-check URL and a 5s timeout, exactly what the Nodes
+/// page asks for. Shared by the `test_node_delay` command and the tray runner.
+pub fn probe_node_delay(state: &AppState, tag: &str) -> Result<u32, AppError> {
+    require_known_node_tag(state, tag)?;
+    let settings = current_settings(&state.paths)?;
+    require_running_core(state)?;
+    let endpoints = clash_endpoints(&state.paths, &settings)?;
+    proxy_delay(&endpoints, tag, 5000, DELAY_TEST_URL).map_err(AppError::from)
+}
+
+pub fn set_rule_disabled_use_case(
+    app: &impl AppHost,
+    state: &AppState,
+    req: SetRuleDisabledRequest,
+) -> Result<serde_json::Value, AppError> {
+    let result = (|| {
+        let _orch = lock_orchestrate(state)?;
+        persist_rule_disabled(state, &req)?;
+
+        let apply_warning = apply_after_rule_change(app, state)?;
+        let mut value = serde_json::json!({ "ok": true, "disabled": req.disabled });
+        attach_apply_warning(&mut value, apply_warning);
+        Ok(value)
+    })();
+    broadcast_state_change(app);
+    result
+}
+
+pub fn add_custom_rule_use_case(
+    app: &impl AppHost,
+    state: &AppState,
+    req: AddCustomRuleRequest,
+) -> Result<serde_json::Value, AppError> {
+    let result = (|| {
+        let _orch = lock_orchestrate(state)?;
+        let fp = persist_add_custom_rule(state, &req)?;
+
+        let apply_warning = apply_after_rule_change(app, state)?;
+        let mut value = serde_json::json!({ "ok": true, "fingerprint": fp });
+        attach_apply_warning(&mut value, apply_warning);
+        Ok(value)
+    })();
+    broadcast_state_change(app);
+    result
+}
+
+pub fn update_custom_rule_use_case(
+    app: &impl AppHost,
+    state: &AppState,
+    req: UpdateCustomRuleRequest,
+) -> Result<serde_json::Value, AppError> {
+    let result = (|| {
+        let _orch = lock_orchestrate(state)?;
+        let fp = persist_update_custom_rule(state, &req)?;
+
+        let apply_warning = apply_after_rule_change(app, state)?;
+        let mut value = serde_json::json!({ "ok": true, "fingerprint": fp });
+        attach_apply_warning(&mut value, apply_warning);
+        Ok(value)
+    })();
+    broadcast_state_change(app);
+    result
+}
+
+pub fn remove_custom_rule_use_case(
+    app: &impl AppHost,
+    state: &AppState,
+    req: RemoveCustomRuleRequest,
+) -> Result<serde_json::Value, AppError> {
+    let result = (|| {
+        let _orch = lock_orchestrate(state)?;
+        persist_remove_custom_rule(state, &req)?;
+
+        let apply_warning = apply_after_rule_change(app, state)?;
+        let mut value = serde_json::json!({ "ok": true });
+        attach_apply_warning(&mut value, apply_warning);
+        Ok(value)
+    })();
+    broadcast_state_change(app);
+    result
+}
+
+#[derive(Deserialize)]
+pub struct SetNodeFavoriteRequest {
+    pub tag: String,
+    pub favorite: bool,
+}
+
+/// Persist a node favorite for the active subscription.
+///
+/// The orchestration lock serializes the profile read and the small file write
+/// with subscription switches, removals, and applies. A favorite is a UI
+/// preference: it never regenerates the runtime config or touches the core.
+pub fn set_node_favorite_use_case(
+    state: &AppState,
+    req: SetNodeFavoriteRequest,
+) -> Result<(), AppError> {
+    let _orch = lock_orchestrate(state)?;
+    let entry = cached_profile(state)?
+        .ok_or_else(|| AppError::new(ErrorCode::ConfigEmptyOutbounds, "no active subscription"))?;
+    if !entry
+        .profile
+        .all_outbounds()
+        .any(|outbound| outbound.tag == req.tag)
+    {
+        return Err(AppError::new(
+            ErrorCode::ConfigInvalid,
+            format!("unknown node tag: {}", req.tag),
+        ));
+    }
+    persist_node_favorite(
+        &state.paths.node_favorites(),
+        entry.subscription,
+        &req.tag,
+        req.favorite,
+    )
+}
+
+pub fn set_selected_node_use_case(
+    app: &impl AppHost,
+    state: &AppState,
+    req: TagRequest,
+) -> Result<(), AppError> {
+    let result = {
+        let _orch = lock_orchestrate(state)?;
+        select_node(app, state, &req.tag)
+    };
+    // The tray menu otherwise waits for the 5s watchdog.
+    broadcast_state_change(app);
+    result
+}
+
+#[derive(Serialize)]
+pub struct GroupSelectionResponse {
+    /// The selected node after the pick; a main-group pick moves it.
+    pub selected_tag: Option<String>,
+}
+
+pub fn set_group_selection_use_case(
+    app: &impl AppHost,
+    state: &AppState,
+    req: GroupSelectionRequest,
+) -> Result<GroupSelectionResponse, AppError> {
+    let result = {
+        let _orch = lock_orchestrate(state)?;
+        select_group_member(app, state, &req.group, &req.member)
+    };
+    broadcast_state_change(app);
+    result.map(|selected_tag| GroupSelectionResponse { selected_tag })
+}
+
+pub fn test_node_delay_use_case(
+    state: &AppState,
+    req: TagRequest,
+) -> Result<DelayTestResponse, AppError> {
+    let delay_ms = probe_node_delay(state, &req.tag)?;
+    Ok(DelayTestResponse {
+        tag: req.tag,
+        delay_ms,
+    })
+}

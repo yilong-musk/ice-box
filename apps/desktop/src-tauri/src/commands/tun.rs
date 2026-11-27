@@ -7,7 +7,8 @@ use super::*;
 pub async fn recover_tun(app: AppHandle) -> Result<Vec<ice_config::UiMessage>, AppError> {
     run_blocking("recover_tun", move || {
         let state = app.state::<AppState>();
-        recover_tun_use_case(&app, &state)
+        let host = tauri_host(&app);
+        recover_tun_use_case(&host, state.inner())
     })
     .await
 }
@@ -16,19 +17,22 @@ pub async fn recover_tun(app: AppHandle) -> Result<Vec<ice_config::UiMessage>, A
 pub async fn stop_system_proxy(app: AppHandle) -> Result<(), AppError> {
     run_blocking("stop_system_proxy", move || {
         let state = app.state::<AppState>();
-        disable_active_backend_inner(&app, &state)
+        let host = tauri_host(&app);
+        disable_active_backend_inner(&host, state.inner())
     })
     .await
 }
 
 /// Install and authorize the trusted helper component (TUN elevation path):
 /// prompts with the system authorization dialog and runs the bundled
-/// `ice-helper install` as root. macOS only; cancelling modifies nothing.
+/// `ice-helper install` as root. macOS and Linux; cancelling modifies nothing.
 /// On success the backend is refreshed so the fresh helper is usable at once.
 #[tauri::command]
 pub async fn install_helper(app: AppHandle) -> Result<(), AppError> {
     run_blocking("install_helper", move || {
-        crate::helper_install::install_helper_use_case(&app)
+        let state = app.state::<AppState>();
+        let host = tauri_host(&app);
+        crate::helper_install::install_helper_use_case(&host, state.inner())
     })
     .await
 }
@@ -39,7 +43,9 @@ pub async fn install_helper(app: AppHandle) -> Result<(), AppError> {
 #[tauri::command]
 pub async fn uninstall_helper(app: AppHandle) -> Result<(), AppError> {
     run_blocking("uninstall_helper", move || {
-        crate::helper_install::uninstall_helper_use_case(&app)
+        let state = app.state::<AppState>();
+        let host = tauri_host(&app);
+        crate::helper_install::uninstall_helper_use_case(&host, state.inner())
     })
     .await
 }
@@ -53,7 +59,8 @@ pub async fn uninstall_helper(app: AppHandle) -> Result<(), AppError> {
 pub async fn ensure_tun_elevation(app: AppHandle) -> Result<(), AppError> {
     run_blocking("ensure_tun_elevation", move || {
         let state = app.state::<AppState>();
-        ensure_tun_elevation_inner(&app, &state)
+        let host = tauri_host(&app);
+        ensure_tun_elevation_inner(&host, state.inner())
     })
     .await
 }
@@ -64,7 +71,8 @@ pub async fn ensure_tun_elevation(app: AppHandle) -> Result<(), AppError> {
 pub async fn remove_tun_elevation(app: AppHandle) -> Result<(), AppError> {
     run_blocking("remove_tun_elevation", move || {
         let state = app.state::<AppState>();
-        remove_tun_elevation_inner(&app, &state)
+        let host = tauri_host(&app);
+        remove_tun_elevation_inner(&host, state.inner())
     })
     .await
 }

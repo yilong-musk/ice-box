@@ -23,7 +23,7 @@ describe("application architecture boundaries", () => {
   });
 
   it("keeps application use cases independent of Tauri and IPC commands", () => {
-    const violations = sources(path.join(desktop, "src-tauri/src/application"))
+    const violations = sources(path.resolve(desktop, "../../crates/ice-runtime/src/application"))
       .filter(file => file.endsWith(".rs"))
       .filter(file => /tauri::|crate::commands/.test(readFileSync(file, "utf8")));
     expect(violations).toEqual([]);
@@ -85,6 +85,15 @@ describe("application architecture boundaries", () => {
     );
     for (const forbidden of ["tauri", "ice-proxy-sys", "ice-tun", "ice-helper", "ice-elevate"]) {
       expect(manifest).not.toContain(forbidden);
+    }
+  });
+
+  it("keeps ice-runtime and ice-cli free of Tauri and GUI toolkits", () => {
+    for (const rel of ["../../crates/ice-runtime/Cargo.toml", "../../crates/ice-cli/Cargo.toml"]) {
+      const manifest = readFileSync(path.resolve(desktop, rel), "utf8");
+      for (const forbidden of ["tauri", "objc2", "webkit", "gtk"]) {
+        expect(manifest).not.toContain(forbidden);
+      }
     }
   });
 });

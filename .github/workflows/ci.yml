@@ -121,6 +121,9 @@ jobs:
             --deb-arch "${{ matrix.deb_arch }}" \
             --appimage-arch "${{ matrix.appimage_arch }}"
 
+      - name: Package and verify CLI archive (Linux ${{ matrix.arch }})
+        run: bash scripts/package-cli.sh --platform "${{ matrix.platform }}"
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -128,6 +131,7 @@ jobs:
           path: |
             target/release/bundle/deb/*.deb
             target/release/bundle/appimage/*.AppImage
+            target/release/cli-dist/*.tar.gz
           if-no-files-found: error
 
   macos-test:
@@ -201,6 +205,9 @@ jobs:
           test -n "$APP"
           bash scripts/verify-macos-code-sign.sh "$APP"
 
+      - name: Package and verify CLI archive (macOS arm64)
+        run: bash scripts/package-cli.sh --platform mac-arm64
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -208,6 +215,7 @@ jobs:
           path: |
             target/release/bundle/dmg/*.dmg
             target/release/bundle/macos/*.app
+            target/release/cli-dist/*.tar.gz
 
   # Branch protection requires this check name. Keep it even though the work
   # now lives in macos-test / macos-build (run in parallel).
@@ -334,12 +342,16 @@ jobs:
             }
           done
 
+      - name: Package and verify CLI archive (Windows x64)
+        run: bash scripts/package-cli.sh --platform win
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
           name: ice-box-windows
           path: |
             target/release/bundle/nsis/*.exe
+            target/release/cli-dist/*.zip
 
   # Branch protection requires this check name. See gate-build-macos.
   gate-build-windows:

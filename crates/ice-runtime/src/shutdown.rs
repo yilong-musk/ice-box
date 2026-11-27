@@ -1,0 +1,538 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! Graceful shutdown shared by IPC `stop`, updates, and tray Quit.
+
+use crate::capture::TrafficCapture;
+use crate::orchestrate::{current_settings, orchestrate_stop};
+use crate::{lock_poisoned, AppState};
+use ice_config::{AppError, ErrorCode, UiMessage};
+use ice_core::CoreStatus;
+use std::path::PathBuf;
+
+fn core_is_live(status: CoreStatus) -> bool {
+    matches!(status, CoreStatus::Running | CoreStatus::Starting)
+}
+
+fn detach_traffic_if_core_not_live(state: &AppState, status: CoreStatus) {
+    if !core_is_live(status) {
+        state.traffic.set_endpoints(None);
+    }
+}
+
+/// Stop core + restore system proxy under the orchestrate lock (same serialization as `start`).
+///
+/// TUN capture is disabled first (bounded timeouts inside the backend); a
+/// failed TUN cleanup is surfaced as a warning and the core is still stopped
+/// so no capture remains enabled.
+pub fn graceful_stop(state: &AppState, binary: PathBuf) -> Result<(), AppError> {
+    state
+        .shutdown_requested
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let result = {
+        let _orch = match state.orchestrate.lock() {
+            Ok(orch) => orch,
+            Err(_) => {
+                state
+                    .shutdown_requested
+                    .store(false, std::sync::atomic::Ordering::SeqCst);
+                return Err(lock_poisoned("orchestrate"));
+            }
+        };
+        let result = graceful_stop_locked(state, binary);
+        state
+            .shutdown_requested
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        result
+    };
+    result
+}
+
+fn stop_with_persistent_shutdown_signal(state: &AppState, binary: PathBuf) -> Result<(), AppError> {
+    state
+        .shutdown_requested
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let result = {
+        let _orch = match state.orchestrate.lock() {
+            Ok(orch) => orch,
+            Err(_) => {
+                state
+                    .shutdown_requested
+                    .store(false, std::sync::atomic::Ordering::SeqCst);
+                return Err(lock_poisoned("orchestrate"));
+            }
+        };
+        let result = graceful_stop_locked(state, binary);
+        if result.is_err() {
+            state
+                .shutdown_requested
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+        result
+    };
+    result
+}
+
+pub fn graceful_stop_for_update(state: &AppState, binary: PathBuf) -> Result<(), AppError> {
+    stop_with_persistent_shutdown_signal(state, binary)
+}
+
+/// Re-enable runtime starts after an update stops the app but installation
+/// subsequently fails. The process remains open in that case, so keeping the
+/// persistent shutdown signal would make every later start look like a quit.
+pub fn clear_shutdown_request(state: &AppState) {
+    state
+        .shutdown_requested
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn graceful_stop_for_quit(state: &AppState, binary: PathBuf) -> Result<(), AppError> {
+    stop_with_persistent_shutdown_signal(state, binary)
+}
+
+/// Stop the runtime while the caller holds the orchestrate lock.
+///
+/// Keeping the lock with the caller lets composite operations persist related
+/// settings before another start or settings mutation can interleave.
+pub(crate) fn graceful_stop_locked(state: &AppState, binary: PathBuf) -> Result<(), AppError> {
+    let mut tun_warning: Option<UiMessage> = None;
+    if state.capture.active_backend() == TrafficCapture::Tun {
+        let settings = current_settings(&state.paths).unwrap_or_default();
+        let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
+        let proxy = state.proxy.lock().map_err(|_| lock_poisoned("proxy"))?;
+        match state.capture.disable_active_backend(
+            &settings,
+            &mut **core,
+            proxy.as_ref(),
+            binary.clone(),
+            false,
+        ) {
+            Ok(()) => {}
+            Err(err) => {
+                // Fail closed: keep stopping the core; the journal stays for
+                // startup recovery, and the warning is surfaced.
+                tun_warning = Some(
+                    UiMessage::new("recover.tunShutdownUnconfirmed")
+                        .with("detail", err.to_string()),
+                );
+            }
+        }
+    }
+
+    let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
+    let proxy = state.proxy.lock().map_err(|_| lock_poisoned("proxy"))?;
+    match orchestrate_stop(&state.paths, &mut **core, proxy.as_ref()) {
+        Ok(()) => {
+            drop(proxy);
+            drop(core);
+            state.traffic.set_endpoints(None);
+            if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
+                *slot = tun_warning.into_iter().collect();
+            }
+            Ok(())
+        }
+        Err(err) if err.code == ErrorCode::ProxyRestoreFailed.as_str() => {
+            drop(proxy);
+            drop(core);
+            state.traffic.set_endpoints(None);
+            if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
+                *slot = vec![err.ui_message()];
+            }
+            Err(err)
+        }
+        Err(err) => {
+            drop(proxy);
+            let status = core.state().status;
+            drop(core);
+            // Stop did not finish; drop the collector if Clash API is gone so
+            // the supervisor cannot keep retrying a dead port.
+            detach_traffic_if_core_not_live(state, status);
+            Err(err)
+        }
+    }
+}
+
+/// Outcome of a tray Quit request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuitOutcome {
+    /// Core stopped (and proxy restored when applicable); safe to exit the app.
+    Stopped,
+    /// Core stopped but system proxy restore failed — keep running and surface the warning.
+    ProxyRestoreFailed,
+    /// Stop failed for another reason — keep running so the user can retry from the UI.
+    StopFailed,
+    /// Mutex poisoned — cannot safely continue.
+    LockPoisoned,
+}
+
+/// Graceful quit for both desktop and headless runtimes: pause workers,
+/// stop capture + core under the orchestrate lock, then shut down workers and
+/// the local MCP/control listener only once shutdown succeeded.
+pub fn request_headless_quit(
+    state: &AppState,
+    resources: &impl crate::application::AppResources,
+    mcp: Option<&crate::mcp::McpService>,
+) -> QuitOutcome {
+    let binary = crate::application::binary_for(resources).unwrap_or_default();
+    let _pause = state.workers.pause();
+
+    match graceful_stop_for_quit(state, binary) {
+        Ok(()) => {
+            state
+                .workers
+                .shutdown(std::time::Duration::from_millis(500));
+            if let Some(mcp) = mcp {
+                mcp.shutdown();
+            }
+            QuitOutcome::Stopped
+        }
+        Err(err) if err.code == ErrorCode::ProxyRestoreFailed.as_str() => {
+            tracing::error!(error = %err, "quit: proxy restore failed");
+            QuitOutcome::ProxyRestoreFailed
+        }
+        Err(err) if err.code == ErrorCode::LockPoisoned.as_str() => {
+            tracing::error!(error = %err, "quit: lock poisoned");
+            QuitOutcome::LockPoisoned
+        }
+        Err(err) => {
+            tracing::error!(error = %err, "quit: stop failed");
+            QuitOutcome::StopFailed
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::capture::CaptureController;
+    use ice_config::AppPaths;
+    use ice_core::{
+        CoreController, CoreError, CoreHandle, CorePaths, CoreState, CoreStatus, HealthEndpoints,
+        ImmediateHealthProbe, MockReloader, MockSpawner, ReloadOutcome,
+    };
+    use ice_proxy_sys::{ProxyBackup, ProxyEndpoints, ProxySysError, SystemProxy};
+    use std::cell::Cell;
+    use std::path::Path;
+    use std::sync::Arc;
+    use std::thread;
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+    #[derive(Default)]
+    struct OkProxy;
+
+    impl SystemProxy for OkProxy {
+        fn backup(&self) -> Result<ProxyBackup, ProxySysError> {
+            Ok(ProxyBackup::default())
+        }
+
+        fn apply(&self, _endpoints: &ProxyEndpoints) -> Result<(), ProxySysError> {
+            Ok(())
+        }
+
+        fn restore(&self, _backup: &ProxyBackup) -> Result<(), ProxySysError> {
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct FailRestoreProxy {
+        restore_calls: Cell<usize>,
+    }
+
+    impl SystemProxy for FailRestoreProxy {
+        fn backup(&self) -> Result<ProxyBackup, ProxySysError> {
+            Ok(ProxyBackup::default())
+        }
+
+        fn apply(&self, _endpoints: &ProxyEndpoints) -> Result<(), ProxySysError> {
+            Ok(())
+        }
+
+        fn restore(&self, _backup: &ProxyBackup) -> Result<(), ProxySysError> {
+            self.restore_calls.set(self.restore_calls.get() + 1);
+            Err(ProxySysError::RestoreFailed("mock restore fail".into()))
+        }
+    }
+
+    fn temp_state(label: &str, proxy: Box<dyn SystemProxy>) -> AppState {
+        temp_state_with_core(
+            label,
+            proxy,
+            Box::new(CoreController::with_deps(
+                MockSpawner::default(),
+                ImmediateHealthProbe,
+                Box::new(MockReloader::default()),
+                Duration::from_millis(20),
+                Duration::from_millis(20),
+            )) as Box<dyn CoreHandle>,
+        )
+    }
+
+    fn temp_state_with_core(
+        label: &str,
+        proxy: Box<dyn SystemProxy>,
+        core: Box<dyn CoreHandle>,
+    ) -> AppState {
+        let dir = std::env::temp_dir().join(format!(
+            "ice-box-shutdown-{label}-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let paths = AppPaths::new(&dir);
+        paths.ensure_dirs().unwrap();
+        let system_proxy_available = proxy.is_available();
+        let (core, core_snapshot) = crate::core_snapshot::wrap_core(core);
+        AppState {
+            paths: paths.clone(),
+            core,
+            core_snapshot,
+            runtime_status: crate::runtime_status::RuntimeReadModel::default(),
+            workers: crate::workers::WorkerSupervisor::default(),
+            proxy: Mutex::new(proxy),
+            orchestrate: Mutex::new(()),
+            proxy_recovery_warning: Mutex::new(Vec::new()),
+            proxy_applied_cache: Mutex::new(None),
+            system_proxy_available,
+            capabilities: crate::HostCapabilities::headless(),
+            shutdown_requested: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            instance_lock: crate::test_instance_lock(&paths),
+            traffic: ice_core::TrafficMonitor::new(),
+            capture: CaptureController::new(paths.clone(), None),
+            profile_cache: Mutex::new(None),
+            profile_parse_cache: std::sync::Arc::new(ice_engine::ProfileCache::new()),
+            subscription_watchdog_alive: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+                true,
+            )),
+            helper_probe_cache: Mutex::new(None),
+            tun_task_cache: Mutex::new(None),
+            clash_live_mode_cache: Mutex::new(true),
+            launch_proxy_restore_attempted: std::sync::Arc::new(
+                std::sync::atomic::AtomicBool::new(false),
+            ),
+            live_cache: crate::application::LiveCache::default(),
+        }
+    }
+
+    struct FailStopCore {
+        status: CoreStatus,
+    }
+
+    impl CoreHandle for FailStopCore {
+        fn state(&self) -> CoreState {
+            CoreState {
+                status: self.status,
+                message: Some("mock".into()),
+                inbound_host: None,
+                inbound_port: None,
+            }
+        }
+
+        fn start(&mut self, _: &CorePaths) -> Result<(), CoreError> {
+            Err(CoreError::invalid_state("mock"))
+        }
+
+        fn stop(&mut self, _: &Path) -> Result<(), CoreError> {
+            Err(CoreError::invalid_state("mock stop failed"))
+        }
+
+        fn reload(&mut self, _: &CorePaths) -> Result<ReloadOutcome, CoreError> {
+            Err(CoreError::invalid_state("mock"))
+        }
+
+        fn needs_proxy_restore(&self) -> bool {
+            false
+        }
+
+        fn clear_needs_proxy_restore(&mut self) {}
+
+        fn reap_exited_child(&mut self, _: &Path) -> bool {
+            false
+        }
+
+        fn adopt_external(&mut self, _pid: u32, _paths: &CorePaths) -> Result<(), CoreError> {
+            Err(CoreError::invalid_state("mock adopt unsupported"))
+        }
+
+        fn reclaim_orphan_pid(&mut self, _: &Path, _: &[&Path]) -> Result<(), CoreError> {
+            Ok(())
+        }
+    }
+
+    use std::sync::Mutex;
+
+    #[test]
+    fn graceful_stop_blocks_until_orchestrate_lock_released() {
+        let state = Arc::new(temp_state("block", Box::new(OkProxy)));
+        let state_bg = state.clone();
+        let guard = state.orchestrate.lock().unwrap();
+
+        let handle = thread::spawn(move || {
+            let t0 = Instant::now();
+            graceful_stop(&state_bg, PathBuf::from("/bin/true")).expect("stop");
+            t0.elapsed()
+        });
+
+        thread::sleep(Duration::from_millis(40));
+        assert!(
+            !handle.is_finished(),
+            "graceful_stop must wait for orchestrate lock"
+        );
+        drop(guard);
+        let elapsed = handle.join().expect("join");
+        assert!(
+            elapsed >= Duration::from_millis(30),
+            "expected blocking wait, got {elapsed:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(state.paths.root());
+    }
+
+    #[test]
+    fn graceful_stop_proxy_restore_failed_sets_warning() {
+        let state = temp_state("restore-fail", Box::new(FailRestoreProxy::default()));
+        let backup = ice_proxy_sys::ProxyBackupFile {
+            applied: true,
+            pending_apply: false,
+            applied_at: None,
+            endpoints: ProxyEndpoints {
+                http_host: "127.0.0.1".into(),
+                http_port: 17890,
+                socks_host: None,
+                socks_port: None,
+            },
+            backup: ProxyBackup::default(),
+        };
+        backup
+            .save(&state.paths.proxy_backup())
+            .expect("seed backup");
+
+        let err = graceful_stop(&state, PathBuf::from("/bin/true")).expect_err("restore fail");
+        assert_eq!(err.code, "proxy.restore_failed");
+
+        let warning = state.proxy_recovery_warning.lock().unwrap().clone();
+        assert_eq!(warning.len(), 1);
+        assert_eq!(warning[0].key, ErrorCode::ProxyRestoreFailed.message_key());
+
+        let _ = std::fs::remove_dir_all(state.paths.root());
+    }
+
+    #[test]
+    fn graceful_stop_leaves_core_stopped() {
+        let state = temp_state("stopped", Box::new(OkProxy));
+        state
+            .shutdown_requested
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        state
+            .traffic
+            .set_endpoints(Some(HealthEndpoints::new("127.0.0.1", 9)));
+        graceful_stop(&state, PathBuf::from("/bin/true")).expect("stop");
+        let core = state.core.lock().unwrap();
+        assert_eq!(core.state().status, CoreStatus::Stopped);
+        assert!(!state.traffic.has_target());
+        assert!(
+            !state
+                .shutdown_requested
+                .load(std::sync::atomic::Ordering::SeqCst),
+            "a normal stop must allow a later start"
+        );
+
+        let _ = std::fs::remove_dir_all(state.paths.root());
+    }
+
+    #[test]
+    fn quit_keeps_the_shutdown_signal_after_stopping() {
+        let state = temp_state("quit-stopped", Box::new(OkProxy));
+        graceful_stop_for_quit(&state, PathBuf::from("/bin/true")).expect("quit stop");
+        assert!(
+            state
+                .shutdown_requested
+                .load(std::sync::atomic::Ordering::SeqCst),
+            "the quit path must keep healthchecks cancelled"
+        );
+        let _ = std::fs::remove_dir_all(state.paths.root());
+    }
+
+    #[test]
+    fn update_keeps_the_shutdown_signal_after_stopping() {
+        let state = temp_state("update-stopped", Box::new(OkProxy));
+        graceful_stop_for_update(&state, PathBuf::from("/bin/true")).expect("update stop");
+        assert!(
+            state
+                .shutdown_requested
+                .load(std::sync::atomic::Ordering::SeqCst),
+            "auto-start must remain cancelled while the updater replaces the app"
+        );
+        let _ = std::fs::remove_dir_all(state.paths.root());
+    }
+
+    #[test]
+    fn failed_update_can_release_the_persistent_shutdown_signal() {
+        let state = temp_state("update-failed", Box::new(OkProxy));
+        graceful_stop_for_update(&state, PathBuf::from("/bin/true")).expect("update stop");
+        assert!(state
+            .shutdown_requested
+            .load(std::sync::atomic::Ordering::SeqCst));
+
+        clear_shutdown_request(&state);
+
+        assert!(
+            !state
+                .shutdown_requested
+                .load(std::sync::atomic::Ordering::SeqCst),
+            "a failed installation must allow the still-running app to restart its runtime"
+        );
+        let _ = std::fs::remove_dir_all(state.paths.root());
+    }
+
+    #[test]
+    fn graceful_stop_generic_err_detaches_traffic_when_core_not_live() {
+        let state = temp_state_with_core(
+            "stop-fail-dead",
+            Box::new(OkProxy),
+            Box::new(FailStopCore {
+                status: CoreStatus::Error,
+            }),
+        );
+        state
+            .traffic
+            .set_endpoints(Some(HealthEndpoints::new("127.0.0.1", 9)));
+        assert!(state.traffic.has_target());
+
+        let err = graceful_stop(&state, PathBuf::from("/bin/true")).expect_err("stop fail");
+        assert_eq!(err.code, "core.invalid_state");
+        assert!(!state.traffic.has_target());
+
+        let _ = std::fs::remove_dir_all(state.paths.root());
+    }
+
+    #[test]
+    fn graceful_stop_generic_err_keeps_traffic_when_core_still_live() {
+        let state = temp_state_with_core(
+            "stop-fail-live",
+            Box::new(OkProxy),
+            Box::new(FailStopCore {
+                status: CoreStatus::Running,
+            }),
+        );
+        state
+            .traffic
+            .set_endpoints(Some(HealthEndpoints::new("127.0.0.1", 9)));
+
+        let err = graceful_stop(&state, PathBuf::from("/bin/true")).expect_err("stop fail");
+        assert_eq!(err.code, "core.invalid_state");
+        assert!(
+            state.traffic.has_target(),
+            "live core should keep the traffic collector"
+        );
+
+        let _ = std::fs::remove_dir_all(state.paths.root());
+    }
+
+    #[test]
+    fn lock_poisoned_uses_stable_app_code() {
+        let err = lock_poisoned("core");
+        assert_eq!(err.code, ErrorCode::LockPoisoned.as_str());
+        assert!(err.message.contains("lock poisoned"));
+    }
+}
