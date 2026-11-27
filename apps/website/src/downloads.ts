@@ -94,11 +94,25 @@ export function detectLinuxArch(userAgent: string): LinuxArch {
   return /aarch64|arm64/i.test(userAgent) ? "arm64" : "amd64";
 }
 
+export interface LinuxInstallerVariantPair {
+  appimage: "appimage-amd64" | "appimage-aarch64";
+  deb: "deb-amd64" | "deb-arm64";
+}
+
+/** Map a Linux CPU architecture to its AppImage and .deb installer variants. */
+export function linuxInstallerVariantsForArch(
+  arch: LinuxArch,
+): LinuxInstallerVariantPair {
+  return arch === "arm64"
+    ? { appimage: "appimage-aarch64", deb: "deb-arm64" }
+    : { appimage: "appimage-amd64", deb: "deb-amd64" };
+}
+
 /** Map a Linux CPU architecture to its primary AppImage installer variant. */
 export function linuxPrimaryInstallerVariant(
   arch: LinuxArch,
 ): "appimage-amd64" | "appimage-aarch64" {
-  return arch === "arm64" ? "appimage-aarch64" : "appimage-amd64";
+  return linuxInstallerVariantsForArch(arch).appimage;
 }
 
 /**
