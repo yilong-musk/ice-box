@@ -8,8 +8,7 @@
 
 **The best sing-box GUI.**
 
-A lightweight proxy client for macOS, Windows, Linux, and Android.<br>
-Easy to set up, quick to start, quiet once it runs, and agent-friendly — built on a [sing-box](https://github.com/SagerNet/sing-box) core.
+Lightweight proxy client for macOS, Windows, Linux, and Android — built on [sing-box](https://github.com/SagerNet/sing-box).
 
 [![Release](https://img.shields.io/github/v/release/yilong-musk/ice-box?style=flat-square&label=release)](https://github.com/yilong-musk/ice-box/releases/latest)
 [![CI](https://img.shields.io/github/actions/workflow/status/yilong-musk/ice-box/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/yilong-musk/ice-box/actions/workflows/ci.yml)
@@ -18,116 +17,84 @@ Easy to set up, quick to start, quiet once it runs, and agent-friendly — built
 [![Core](https://img.shields.io/badge/sing--box-1.14.4-6f42c1?style=flat-square)](https://github.com/SagerNet/sing-box)
 [![License](https://img.shields.io/github/license/yilong-musk/ice-box?style=flat-square)](LICENSE)
 
-[**Download**](https://github.com/yilong-musk/ice-box/releases/latest) · [**Live Demo**](https://yilong-musk.github.io/ice-box/) · [Install](#install) · [TUN](#tun-mode) · [Docs](#documentation) · [Changelog](CHANGELOG.md)
+[**Download**](https://github.com/yilong-musk/ice-box/releases/latest) · [**Live Demo**](https://yilong-musk.github.io/ice-box/) · [Install](#install) · [Development](#development) · [Docs](#docs) · [Changelog](CHANGELOG.md)
 
 [Bahasa Indonesia](README.id.md) · [Deutsch](README.de.md) · **English** · [Español](README.es.md) · [Français](README.fr.md) · [Português (BR)](README.pt-BR.md) · [Tiếng Việt](README.vi.md) · [Türkçe](README.tr.md)<br>[Русский](README.ru.md) · [Українська](README.uk.md) · [العربية](README.ar.md) · [فارسی](README.fa.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [简体中文](README.zh-CN.md) · [繁體中文](README.zh-TW.md)
 
 <br>
 
 <a href="https://yilong-musk.github.io/ice-box/">
-  <img src="docs/images/hero.png" alt="ice-box on desktop and Android: proxy status, mode switches, exit node, live traffic chart, and the phone-first Home with the node list" width="880">
+  <img src="docs/images/hero.png" alt="ice-box desktop and Android UI" width="880">
 </a>
 
-<sub>The <a href="https://yilong-musk.github.io/ice-box/">Live Demo</a> runs the desktop and Android UIs in your browser against a simulated backend.</sub>
+<sub>Try the desktop and Android UIs in your browser via the <a href="https://yilong-musk.github.io/ice-box/">Live Demo</a>.</sub>
 
 </div>
 
 ## Features
 
-- **Subscriptions.** sing-box JSON, Clash, and share-link lists are detected automatically, and a local sing-box config file can be imported too. Desktop can auto-update profiles; Android refreshes on import or manual refresh. Provider traffic and expiry are shown on each subscription.
-- **Routing.** **Rule**, **Global**, and **Direct** modes, a switch for each subscription rule, and your own custom rules on top.
-- **Nodes.** Pick an exit per strategy group, test latency one node or a whole list at a time, and pin favorites.
-- **Connections.** On desktop (macOS, Windows, and Linux), watch every live connection: where it goes, which rule matched, which exit it uses, and how much it has transferred. Search, sort, and close one or all of them.
-- **Capture.** System proxy or TUN on desktop; the system VPN on Android, with per-app routing (follow the rules, proxy, direct, or block).
-- **Tray.** Start and stop the proxy service and switch the mode, subscription, or exit node without opening the window. On macOS the menu bar item also shows live traffic and the menu runs delay tests.
-- **Agent access.** An opt-in local MCP service lets an Agent operate the same running session.
-- **Quiet upkeep.** Launch at login, signature-verified in-app updates, live traffic and memory readouts on Home, 16 languages with full RTL support (Bahasa Indonesia, Deutsch, English, Español, Français, Português (BR), Tiếng Việt, Türkçe, Русский, Українська, العربية, فارسی, 日本語, 한국어, 简体中文, 繁體中文), light and dark themes.
+- **Subscriptions**: Auto-detects sing-box JSON, Clash, share links, and local JSON files; quota/expiry display; desktop auto-update.
+- **Routing & Nodes**: **Rule** / **Global** / **Direct** modes, per-rule switches, custom rules, latency tests, and favorites.
+- **Traffic Capture**: System proxy or TUN on desktop ([`docs/tun.md`](docs/tun.md)); system VPN with per-app routing on Android.
+- **Connections & Tray (Desktop)**: Live connection inspector with search/sort/close, plus tray controls (macOS menu-bar speed & delay tests).
+- **MCP for Agents (Desktop)**: Opt-in local authenticated loopback MCP server with built-in stdio bridge sharing the live session ([`docs/mcp.md`](docs/mcp.md)).
+- **Essentials**: Launch at login, signed in-app updates, live traffic/memory cards, light/dark themes, and 16 languages with full RTL (`ar`, `fa`).
 
 ## Install
 
-Grab the installer for your platform from the [latest release](https://github.com/yilong-musk/ice-box/releases/latest).
+Download from [GitHub Releases](https://github.com/yilong-musk/ice-box/releases/latest):
 
-| Platform | Requires | Installer | First launch |
+| Platform | Requires | Package | Notes |
 |---|---|---|---|
-| **macOS** (Apple Silicon) | macOS 12 or later | `ice-box_<version>_aarch64.dmg` | Ad-hoc signed only (no Developer ID, not notarized), so the first launch shows an **unidentified developer** warning. Allow it in **System Settings → Privacy & Security → Open Anyway** (macOS 15+), right-click **Open** (older versions), or run `xattr -dr com.apple.quarantine /Applications/ice-box.app`. |
-| **Windows** (x64) | Windows 10 or later | `ice-box_<version>_x64-setup.exe` | Per-user NSIS installer; no administrator rights required. It has no Authenticode signature, so SmartScreen may ask you to confirm. |
-| **Linux** (x64 / arm64) | Ubuntu 22.04+ / modern distros | `ice-box_<version>_amd64.AppImage` / `aarch64.AppImage`<br>`ice-box_<version>_amd64.deb` / `arm64.deb` | Make the AppImage executable (`chmod +x`) or install the `.deb` with `sudo apt install ./ice-box_*.deb`. GNOME tray icon needs the AppIndicator extension (`gnome-shell-extension-appindicator`). On Wayland + NVIDIA, ice-box automatically sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` unless already configured. |
-| **Android** (arm64) | Android 14 or later | `ice-box_<version>_android_arm64.apk` | Signed with the project keystore. There is no Google Play listing; Android asks for permission to install from this source. |
+| **macOS** (Apple Silicon) | macOS 12+ | `ice-box_<version>_aarch64.dmg` | Ad-hoc signed: allow in **Privacy & Security → Open Anyway**, or run `xattr -dr com.apple.quarantine /Applications/ice-box.app`. |
+| **Windows** (x64) | Windows 10+ | `ice-box_<version>_x64-setup.exe` | Per-user NSIS installer (unsigned; confirm SmartScreen). TUN is IPv4 TCP only and requires Administrator. |
+| **Linux** (x64 / arm64) | Ubuntu 22.04+ | `.AppImage` / `.deb` | `chmod +x *.AppImage` or `sudo apt install ./ice-box_*.deb`. GNOME tray needs `gnome-shell-extension-appindicator`. |
+| **Android** (arm64) | Android 14+ | `ice-box_<version>_android_arm64.apk` | Signed with the project keystore; allow installing from this source. |
 
-**Updating.** On macOS, Windows (0.1.5+), and Linux AppImage installs, ice-box checks GitHub Releases in the background and installs signature-verified updates from **Settings → App Updates**; older macOS/Windows installs need one manual upgrade first. Linux `.deb` installs check the same catalog and open the release download page so upgrades stay managed by `apt` / `dpkg`. On Android, **Settings → App Updates** downloads the arm64 APK and hands it to the system installer for confirmation.
-
-## Quick start
-
-1. **Import a subscription.** Open **Subscriptions**, paste the URL, and press **Import**; the format is detected automatically. To use a local sing-box config file (JSON) instead, choose **Config file**; it has no remote URL, so it cannot be refreshed.
-2. **Pick a mode and a node.** On **Home**, choose **Rule**, **Global**, or **Direct**. On desktop, open **Nodes** to pick an exit and test its latency; on Android, use the node list on **Home**.
-3. **Start the proxy service.** Press the power button. Desktop applies the system proxy or starts TUN when enabled; Android connects the VPN after the system permission prompt.
-
-No subscription yet? ice-box starts in direct-only mode, so the core, capture, and UI can be explored before importing anything.
-
-## Launch at login
-
-On macOS, Windows, and Linux, enable **Settings → Startup → Launch at login**. A login start stays in the tray with the window hidden, starts the core, and restores the last proxy state.
-
-Turn it off with the same switch: disabling the entry under macOS **Login Items** does not clear it. Install the app before enabling it on macOS, because running straight from the disk image is refused. On Linux, the entry is written to `~/.config/autostart/com.yilong-musk.icebox.desktop` (recording `$APPIMAGE` when run from an AppImage).
-
-Android has no login item. **Settings → System** explains battery-optimization exemption, strict Private DNS, and always-on VPN.
-
-## TUN mode
-
-On macOS, Windows, and Linux, TUN captures traffic at the network layer, covering apps that never read the system proxy. Windows TUN carries IPv4 TCP only (no UDP/QUIC or IPv6) and needs an Administrator account; the system proxy remains the alternative there. Linux TUN uses Polkit (`pkexec`) to install a systemd `ice-helper` daemon and manages DNS via `systemd-resolved` (`resolvectl`) or a static `/etc/resolv.conf`. See [`docs/tun.md`](docs/tun.md) for setup, switch behavior, platform coverage, and limitations. Android uses the system VPN; see [`docs/architecture.md`](docs/architecture.md#clients).
-
-## Agent access with MCP
-
-The desktop app (macOS, Windows, and Linux) exposes an opt-in local MCP service. Open **MCP** between **Connections** and **Settings**, enable it, and copy the generated client configuration. The Agent shares the running session's settings, subscriptions, data, core, and proxy state instead of starting another runtime.
-
-- **Full tool set.** Status, settings, traffic, subscriptions, nodes and groups, rules, live connections, logs, diagnostics, proxy control, and protected TUN recovery. Results carry structured content when available and preserve application error codes.
-- **Safe by default.** MCP listens only on authenticated loopback with a random control token that is never included in the copied client config.
-- **Built-in stdio bridge.** The generated config launches the same executable in bridge mode, so no separate daemon or protocol adapter is needed.
-
-MCP is desktop-only: Android has no MCP, and the website demo uses a simulated service. See [`docs/mcp.md`](docs/mcp.md) for setup, lifecycle, and security boundaries.
+- **Quick start**: Import a subscription (**Subscriptions**) → pick mode & node (**Home** / **Nodes**) → press power. Works in direct mode without a subscription.
+- **Updates**: Signed in-app updates in **Settings → App Updates** (`.deb` opens Releases for `apt`; Android downloads APK for system install).
 
 ## Development
 
-Rust (the version pinned in `rust-toolchain.toml`, which rustup installs on first use), Node.js 22, Xcode Command Line Tools on macOS, and GTK/WebKit development packages (`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`, `libssl-dev`) on Linux. Android builds also need JDK 17, Go, and an Android SDK (`ANDROID_HOME`) with the packages installed by `scripts/ci-install-android-sdk.sh`.
+Requires Rust (`rust-toolchain.toml`), Node.js 22, Xcode CLT (macOS), or GTK/WebKit dev libs (`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`, `libssl-dev`) on Linux. Android adds JDK 17, Go, and `ANDROID_HOME` (`scripts/ci-install-android-sdk.sh`).
 
 ```bash
 cd apps/desktop && npm install && cd ../..
-npm run fetch-singbox   # download the pinned sing-box core for this host
+npm run fetch-singbox
 npm run dev
 ```
 
 | Command | Purpose |
 |---|---|
-| `npm run dev:mac-arm64` / `dev:mac-x64` / `dev:win` / `dev:linux-x64` / `dev:linux-arm64` | Run against a specific host target |
-| `npm run gate` | Full workspace gate: fmt, clippy, Rust tests, typechecks, builds, smoke tests, fixtures |
-| `npm run fetch-singbox && npm run build` | Build the macOS `.dmg` |
-| `npm run fetch-singbox -- win && npm run build:win` | Build the Windows NSIS installer |
-| `npm run fetch-singbox -- linux-x64 && npm run build:linux` | Build Linux `.deb` and `.AppImage` (pass `linux-arm64` on arm64) |
-| `npm run acceptance` / `acceptance:tun` / `acceptance:win` / `acceptance:linux` / `acceptance:linux-tun` | Live acceptance gates on a real host |
-| `bash scripts/build-android-apk.sh debug arm64` | Debug APK for an arm64 device |
-| `bash scripts/build-android-apk.sh debug amd64` | Debug APK for the emulator |
+| `npm run dev:mac-arm64` / `dev:mac-x64` / `dev:win` / `dev:linux-x64` / `dev:linux-arm64` | Run for a specific host target |
+| `npm run gate` | Full workspace gate (fmt, clippy, Rust/frontend tests, builds, smoke tests) |
+| `npm run fetch-singbox && npm run build` | Build macOS `.dmg` |
+| `npm run fetch-singbox -- win && npm run build:win` | Build Windows installer |
+| `npm run fetch-singbox -- linux-x64 && npm run build:linux` | Build Linux `.deb` & `.AppImage` (`linux-arm64` on arm64) |
+| `npm run acceptance` / `acceptance:tun` / `acceptance:win` / `acceptance:linux` / `acceptance:linux-tun` | Live host acceptance gates |
+| `bash scripts/build-android-apk.sh debug arm64` | Build Android debug APK (`amd64` for emulator) |
 
-```
-apps/desktop    React UI + Tauri shell for macOS, Windows, and Linux
-apps/mobile     Android shell; reuses the desktop UI
+```text
+apps/desktop    React UI + Tauri desktop shell (macOS, Windows, Linux)
+apps/mobile     Android Tauri shell (reuses desktop UI)
 apps/website    GitHub Pages site and Live Demo
-crates/         Rust workspace (main crates): ice-app, ice-config, ice-core, ice-engine, ice-subscription, ice-proxy-sys, ice-tun-sys, ice-elevate, ice-helper, ice-types, ...
+crates/         Rust workspace (ice-app, ice-config, ice-core, ice-engine, ice-subscription, ice-proxy-sys, ice-tun-sys, ice-elevate, ice-helper, ice-types, ...)
 ```
 
-## Documentation
+## Docs
 
-| Document | What you will find |
+| Document | Scope |
 |---|---|
-| [`docs/architecture.md`](docs/architecture.md) | System structure, component responsibilities, data flow, and design boundaries |
-| [`docs/mcp.md`](docs/mcp.md) | Desktop MCP setup, shared-runtime model, tools, and security |
-| [`docs/tun.md`](docs/tun.md) | TUN behavior, recovery, platform configuration, and limits |
-| [`docs/testing.md`](docs/testing.md) | Local and CI gate coverage, manual live tests |
+| [`docs/architecture.md`](docs/architecture.md) | Architecture, module boundaries, and data flow |
+| [`docs/mcp.md`](docs/mcp.md) | Desktop MCP setup, tools, and security model |
+| [`docs/tun.md`](docs/tun.md) | TUN capture, elevation, recovery, and platform limits |
+| [`docs/testing.md`](docs/testing.md) | Local/CI gates and manual live tests |
 | [`docs/release-process.md`](docs/release-process.md) | Versioning, signing, packaging, and publishing |
 | [`CHANGELOG.md`](CHANGELOG.md) | Release history |
 
 ## License
 
-ice-box is free software, released under the [GNU General Public License v3.0 or later](LICENSE). The bundled sing-box core is also [GPL-3.0-or-later](third_party/sing-box/LICENSE), with its upstream naming restriction; see [NOTICE](NOTICE) for all third-party notices.
+[GPL-3.0-or-later](LICENSE). Bundled sing-box core: [GPL-3.0-or-later](third_party/sing-box/LICENSE) with upstream naming restriction. Third-party notices: [NOTICE](NOTICE).
 
 <div align="center">
 <br>
