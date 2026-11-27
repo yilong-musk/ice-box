@@ -37,7 +37,12 @@ vi.mock("@platform/windowChrome", async (importOriginal) => {
   };
 });
 import { APP_VERSION } from "./lib/appVersion";
-import { LANGUAGE_STORAGE_KEY, t, isMessageKey } from "./lib/i18n";
+import {
+  LANGUAGE_STORAGE_KEY,
+  persistLanguagePreference,
+  t,
+  isMessageKey,
+} from "./lib/i18n";
 import { clearNodesSnapshot } from "./lib/nodes";
 
 const phoneShell = vi.hoisted(() => ({ value: false }));
@@ -689,6 +694,28 @@ describe("App", () => {
     fireEvent.mouseDown(overlay, { button: 0, clientY: 12 });
     fireEvent.doubleClick(overlay, { button: 0, clientY: 12 });
     expect(cmd).not.toHaveBeenCalled();
+  });
+
+  it("does not treat the content top strip as a titlebar in macOS RTL mode", () => {
+    const platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+    const userAgent = vi
+      .spyOn(navigator, "userAgent", "get")
+      .mockReturnValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)");
+    const cmd = vi.fn().mockResolvedValue(undefined);
+    windowCommand.fn = cmd;
+    act(() => persistLanguagePreference("ar"));
+    try {
+      const { container } = render(<App />);
+      const content = within(container).getByTestId("app-content");
+      expect(content).not.toHaveClass("-mt-12");
+
+      fireEvent.mouseDown(content, { button: 0, clientY: 16 });
+      fireEvent.doubleClick(content, { button: 0, clientY: 16 });
+      expect(cmd).not.toHaveBeenCalled();
+    } finally {
+      platform.mockRestore();
+      userAgent.mockRestore();
+    }
   });
 
   it("keeps the nodes list mounted when switching away and back", async () => {

@@ -327,6 +327,33 @@ try {
   await waitForAttribute(page.locator("html"), "dir", "ltr");
   await waitForAttribute(frame.locator("html"), "dir", "ltr");
 
+  // Keyboard navigation on the language popover: clicking opens it with focus
+  // on the trigger, ArrowDown moves into the selected option, and Tab closes
+  // the menu while advancing focus cleanly rather than dropping it to <body>.
+  await page.locator(".nav-language").click();
+  await page.keyboard.press("ArrowDown");
+  const focusedLang = await page.evaluate(
+    () => document.activeElement?.getAttribute("data-language") ?? null,
+  );
+  if (focusedLang !== "en") {
+    throw new Error(
+      `ArrowDown after opening language menu must focus active option "en", got ${JSON.stringify(focusedLang)}`,
+    );
+  }
+  await page.keyboard.press("Tab");
+  const tabResult = await page.evaluate(() => ({
+    menuHidden: document.querySelector(".nav-language-menu")?.hasAttribute("hidden") ?? false,
+    activeTag: document.activeElement?.tagName ?? null,
+    insideMenu: Boolean(
+      document.querySelector(".nav-language-menu")?.contains(document.activeElement),
+    ),
+  }));
+  if (!tabResult.menuHidden || tabResult.insideMenu || tabResult.activeTag === "BODY") {
+    throw new Error(
+      `Tab inside language menu must close it and advance focus cleanly, got ${JSON.stringify(tabResult)}`,
+    );
+  }
+
   // Theme changes travel through the same storage bridge as the language: the
   // frame follows a write from the app, and the app follows a write from the
   // site or the other demo iframe.
@@ -386,6 +413,33 @@ try {
     throw new Error("capture mode must not mark the subscription fixtures as expired");
   }
   await captureContext.close();
+
+  // Initial load with an RTL preference must set `lang`, `dir="rtl"`, and the
+  // stored dark theme on the landing page and both embedded demo iframes before
+  // any language switch happens.
+  const rtlContext = await browser.newContext({
+    viewport: { width: 1280, height: 1000 },
+    colorScheme: "dark",
+    locale: "ar-SA",
+  });
+  await rtlContext.addInitScript(() => {
+    window.localStorage.setItem("ice-box.theme", "dark");
+    window.localStorage.setItem("ice-box.language", "ar");
+  });
+  const rtlPage = await rtlContext.newPage();
+  await rtlPage.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
+  const rtlDesktopFrame = rtlPage.frameLocator(".demo-screen iframe");
+  const rtlPhoneFrame = rtlPage.frameLocator(".phone-viewport iframe");
+  await rtlDesktopFrame.locator('[data-testid="home-panel"]').waitFor({ timeout: 30_000 });
+  await rtlPhoneFrame.locator('[data-testid="phone-shell"]').waitFor({ timeout: 30_000 });
+  await waitForAttribute(rtlPage.locator("html"), "dir", "rtl");
+  await waitForAttribute(rtlDesktopFrame.locator("html"), "lang", "ar");
+  await waitForAttribute(rtlDesktopFrame.locator("html"), "dir", "rtl");
+  await waitForTheme(rtlDesktopFrame, true);
+  await waitForAttribute(rtlPhoneFrame.locator("html"), "lang", "ar");
+  await waitForAttribute(rtlPhoneFrame.locator("html"), "dir", "rtl");
+  await waitForTheme(rtlPhoneFrame, true);
+  await rtlContext.close();
 
   console.log("smoke-mobile-demo: OK");
 } catch (error) {

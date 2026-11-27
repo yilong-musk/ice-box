@@ -59,9 +59,9 @@ export const ar: Record<MessageKey, string> = {
   "home.memory.app": "التطبيق",
   "home.memory.coreStopped": "غير قيد التشغيل",
   "home.memory.coreUnreadable": "غير مقروءة",
-  "home.memory.tooltip": "النواة {core} · التطبيق {app}",
-  "home.memory.tooltipAppOnly": "التطبيق {app} · النواة متوقفة",
-  "home.memory.tooltipUnreadable": "التطبيق {app} · لا يشمل النواة (غير مقروءة)",
+  "home.memory.tooltip": "النواة \u2066{core}\u2069 · التطبيق \u2066{app}\u2069",
+  "home.memory.tooltipAppOnly": "التطبيق \u2066{app}\u2069 · النواة متوقفة",
+  "home.memory.tooltipUnreadable": "التطبيق \u2066{app}\u2069 · لا يشمل النواة (غير مقروءة)",
   "home.coreStatus.running": "قيد التشغيل",
   "home.coreStatus.stopped": "متوقفة",
   "home.coreStatus.starting": "جارٍ التشغيل",
@@ -470,7 +470,7 @@ export const ar: Record<MessageKey, string> = {
     "يظهر منحنى الرفع والتنزيل المباشر بعد تشغيل خدمة البروكسي (آخر {n} ثانية).",
   "traffic.samplingInterrupted": "انقطع القياس: {error}",
   "traffic.chartAria": "منحنى حركة الرفع والتنزيل",
-  "traffic.peak": "مقياس الذروة {rate} · آخر {n} ثانية (قياس مستمر في الخلفية)",
+  "traffic.peak": "مقياس الذروة \u2066{rate}\u2069 · آخر {n} ثانية (قياس مستمر في الخلفية)",
 
   // --- validation ---
   "validation.listen": "يجب أن يكون عنوان استرجاع محلي (127.0.0.1 أو localhost أو ::1)",

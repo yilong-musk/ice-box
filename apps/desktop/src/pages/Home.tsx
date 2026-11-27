@@ -847,7 +847,8 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                     {t(vpnState.labelKey)}
                   </span>
                   <span
-                    className="truncate text-base font-semibold"
+                    dir="auto"
+                    className="truncate text-base font-semibold ltr:text-left rtl:text-right"
                     title={currentNodeLabel}
                     data-testid="home-current-node"
                   >
@@ -1007,6 +1008,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                       {t("home.outbound.node")}
                     </span>
                     <span
+                      dir="auto"
                       className="min-w-0 truncate text-sm"
                       title={currentNodeLabel}
                       data-testid="home-proxy-current-node"
@@ -1096,7 +1098,9 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                           data-testid={row.testId}
                           data-selectable=""
                         >
-                          <span className="min-w-0 truncate">{row.value}</span>
+                          <span dir="auto" className="min-w-0 truncate">
+                            {row.value}
+                          </span>
                         </ItemTitle>
                       </Item>
                     </div>

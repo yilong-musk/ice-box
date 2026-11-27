@@ -59,9 +59,9 @@ export const fa: Record<MessageKey, string> = {
   "home.memory.app": "برنامه",
   "home.memory.coreStopped": "متوقف",
   "home.memory.coreUnreadable": "غیرقابل خواندن",
-  "home.memory.tooltip": "هسته {core} · برنامه {app}",
-  "home.memory.tooltipAppOnly": "برنامه {app} · هسته متوقف است",
-  "home.memory.tooltipUnreadable": "برنامه {app} · بدون هسته (غیرقابل خواندن)",
+  "home.memory.tooltip": "هسته \u2066{core}\u2069 · برنامه \u2066{app}\u2069",
+  "home.memory.tooltipAppOnly": "برنامه \u2066{app}\u2069 · هسته متوقف است",
+  "home.memory.tooltipUnreadable": "برنامه \u2066{app}\u2069 · بدون هسته (غیرقابل خواندن)",
   "home.coreStatus.running": "در حال اجرا",
   "home.coreStatus.stopped": "متوقف",
   "home.coreStatus.starting": "در حال شروع",
@@ -476,7 +476,7 @@ export const fa: Record<MessageKey, string> = {
     "پس از شروع سرویس پروکسی، نمودار زنده آپلود و دانلود ({n} ثانیه اخیر) نمایش داده می‌شود.",
   "traffic.samplingInterrupted": "نمونه‌برداری متوقف شد: {error}",
   "traffic.chartAria": "نمودار ترافیک آپلود و دانلود",
-  "traffic.peak": "سقف مقیاس {rate} · {n} ثانیه اخیر (نمونه‌برداری مداوم در پس‌زمینه)",
+  "traffic.peak": "سقف مقیاس \u2066{rate}\u2069 · {n} ثانیه اخیر (نمونه‌برداری مداوم در پس‌زمینه)",
 
   // --- validation ---
   "validation.listen": "باید یک آدرس loopback باشد (127.0.0.1، localhost یا ::1)",

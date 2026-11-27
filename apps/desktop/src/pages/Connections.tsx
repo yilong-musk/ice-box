@@ -59,14 +59,14 @@ const MAX_ROWS = 300;
 /** Download and upload figures, coloured like the Home traffic chart. */
 function TrafficPair({ down, up }: { down: number; up: number }) {
   return (
-    <>
+    <span dir="ltr" className="inline-block">
       <span data-testid="traffic-down">
         <span className="text-traffic-down">↓</span> {formatBytes(down)}
       </span>{" "}
       <span data-testid="traffic-up">
         <span className="text-traffic-up">↑</span> {formatBytes(up)}
       </span>
-    </>
+    </span>
   );
 }
 

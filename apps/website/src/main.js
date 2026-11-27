@@ -769,9 +769,10 @@ function isLanguageMenuOpen() {
 }
 
 function openLanguageMenu({ focusSelected = false } = {}) {
-  if (!parts.languageMenu.hidden) return;
-  parts.languageMenu.hidden = false;
-  parts.languageToggle.setAttribute("aria-expanded", "true");
+  if (parts.languageMenu.hidden) {
+    parts.languageMenu.hidden = false;
+    parts.languageToggle.setAttribute("aria-expanded", "true");
+  }
   if (focusSelected) {
     const active =
       parts.languageOptions.find((el) => el.dataset.language === language) ??
@@ -825,7 +826,10 @@ parts.languageMenu.addEventListener("keydown", (event) => {
     return;
   }
   if (event.key === "Tab") {
-    closeLanguageMenu();
+    // Restore focus to the trigger before hiding the menu so the browser's
+    // default Tab/Shift+Tab continues cleanly from the trigger instead of
+    // dropping focus to <body> when the focused option becomes hidden.
+    closeLanguageMenu({ restoreFocus: true });
     return;
   }
   const options = parts.languageOptions;

@@ -235,7 +235,7 @@ export function Apps({ active = true }: Props) {
                       </Badge>
                     )}
                     <ChevronRight
-                      className="size-4 shrink-0 text-muted-foreground"
+                      className="size-4 shrink-0 text-muted-foreground rtl:rotate-180"
                       aria-hidden="true"
                     />
                   </button>

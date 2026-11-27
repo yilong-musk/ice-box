@@ -329,7 +329,7 @@ const SectionHeader = memo(function SectionHeader({
         <ChevronRight
           className={cn(
             "size-4 shrink-0 text-muted-foreground transition-transform",
-            expanded && "rotate-90",
+            expanded ? "rotate-90" : "rtl:rotate-180",
           )}
           aria-hidden="true"
         />

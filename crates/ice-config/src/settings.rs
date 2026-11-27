@@ -393,7 +393,25 @@ mod tests {
     #[test]
     fn language_round_trips_through_save_and_load() {
         let path = temp_settings_path("language-roundtrip");
-        for language in [LanguagePreference::Zh, LanguagePreference::En] {
+        for language in [
+            LanguagePreference::System,
+            LanguagePreference::Zh,
+            LanguagePreference::ZhTw,
+            LanguagePreference::En,
+            LanguagePreference::Ru,
+            LanguagePreference::Ja,
+            LanguagePreference::Fa,
+            LanguagePreference::Ar,
+            LanguagePreference::Ko,
+            LanguagePreference::Tr,
+            LanguagePreference::Vi,
+            LanguagePreference::Id,
+            LanguagePreference::Es,
+            LanguagePreference::De,
+            LanguagePreference::Fr,
+            LanguagePreference::PtBr,
+            LanguagePreference::Uk,
+        ] {
             save_settings(
                 &path,
                 &AppSettings {

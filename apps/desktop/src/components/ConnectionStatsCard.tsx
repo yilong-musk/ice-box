@@ -63,8 +63,9 @@ function StatCell({
           {label}
         </span>
         <span
+          dir="ltr"
           className={cn(
-            "truncate font-mono text-[15px] font-semibold leading-6 tracking-tight tabular-nums",
+            "truncate font-mono text-[15px] font-semibold leading-6 tracking-tight tabular-nums rtl:text-right",
             TONE_VALUE[tone],
           )}
           title={value}

@@ -32,4 +32,21 @@ describe("ProxyModePicker", () => {
       expect(radio).toHaveAttribute("aria-checked", "false");
     }
   });
+
+  it.each(["segmented", "list"] as const)(
+    "%s variant flips only the direct arrow icon in RTL",
+    (variant) => {
+      const view = render(
+        <ProxyModePicker variant={variant} value="rule" onChange={() => {}} />,
+      );
+      const directIcon = view
+        .getByRole("radio", { name: new RegExp(t("home.mode.direct")) })
+        .querySelector("svg");
+      const ruleIcon = view
+        .getByRole("radio", { name: new RegExp(t("home.mode.rule")) })
+        .querySelector("svg");
+      expect(directIcon).toHaveClass("rtl:rotate-180");
+      expect(ruleIcon).not.toHaveClass("rtl:rotate-180");
+    },
+  );
 });

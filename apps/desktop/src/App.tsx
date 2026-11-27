@@ -961,8 +961,14 @@ function AppShell() {
               // so keep the content below the title bar strip.
               !phone && !macosRtlTitlebar && "relative z-10 -mt-12",
             )}
-            onMouseDown={phone ? undefined : onContentTitlebarMouseDown}
-            onDoubleClick={phone ? undefined : onContentTitlebarDoubleClick}
+            onMouseDown={
+              phone || macosRtlTitlebar ? undefined : onContentTitlebarMouseDown
+            }
+            onDoubleClick={
+              phone || macosRtlTitlebar
+                ? undefined
+                : onContentTitlebarDoubleClick
+            }
             data-testid="app-content"
             ref={contentRef}
             data-pinned={pinnedContentWidth == null ? undefined : "true"}

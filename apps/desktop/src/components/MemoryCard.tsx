@@ -90,6 +90,7 @@ export function MemoryCard({
           {t("home.memoryTitle")}
         </CardTitle>
         <span
+          dir="auto"
           className={cn(
             "font-mono text-xl font-semibold tabular-nums",
             tone && TONE_TEXT[tone],
@@ -158,7 +159,11 @@ function LegendItem({
     <span className="flex min-w-0 items-center gap-1.5">
       <span aria-hidden="true" className={cn("size-2 shrink-0 rounded-full", swatch)} />
       <span className="flex-1 text-muted-foreground">{label}</span>
-      <span className="truncate font-mono tabular-nums" data-testid={testId}>
+      <span
+        dir="auto"
+        className="truncate font-mono tabular-nums"
+        data-testid={testId}
+      >
         {value}
       </span>
     </span>

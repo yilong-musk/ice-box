@@ -169,4 +169,15 @@ describe("locale resolution and dictionaries", () => {
       }
     }
   });
+
+  it("isolates LTR rate and memory placeholders inside RTL templates", () => {
+    for (const lang of ["ar", "fa"] as const) {
+      const dict = dictionaries[lang];
+      expect(dict["traffic.peak"]).toContain("\u2066{rate}\u2069");
+      expect(dict["home.memory.tooltip"]).toContain("\u2066{core}\u2069");
+      expect(dict["home.memory.tooltip"]).toContain("\u2066{app}\u2069");
+      expect(dict["home.memory.tooltipAppOnly"]).toContain("\u2066{app}\u2069");
+      expect(dict["home.memory.tooltipUnreadable"]).toContain("\u2066{app}\u2069");
+    }
+  });
 });
