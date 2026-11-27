@@ -58,5 +58,5 @@ impl McpContext {
 pub use bridge::{
     call_tool, default_data_dir, list_tools, ping, run_stdio_bridge, BridgeError, ToolCallOutput,
 };
-pub use protocol::tools;
+pub use protocol::{tools, MCP_POLICY_DENIED};
 pub use service::{McpService, McpStatus};

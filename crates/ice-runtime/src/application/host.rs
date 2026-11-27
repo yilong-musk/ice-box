@@ -6,6 +6,14 @@ use std::sync::Arc;
 /// Shell capabilities required by application use cases, without a UI runtime.
 pub trait AppResources {
     fn resource_dir(&self) -> Option<PathBuf>;
+
+    /// Whether `resource_dir()` should be preferred over the compile-time
+    /// development tree (`third_party/sing-box`) when resolving bundled
+    /// binaries. True when the caller explicitly passed `--resource-dir` or
+    /// `ICE_BOX_RESOURCE_DIR`, or runs from a packaged CLI archive.
+    fn prefer_resource_dir(&self) -> bool {
+        false
+    }
 }
 
 pub trait AppHost: AppResources {
@@ -25,6 +33,10 @@ impl<T: AppResources + ?Sized> AppResources for &T {
     fn resource_dir(&self) -> Option<PathBuf> {
         (**self).resource_dir()
     }
+
+    fn prefer_resource_dir(&self) -> bool {
+        (**self).prefer_resource_dir()
+    }
 }
 
 impl<T: AppHost + ?Sized> AppHost for &T {
@@ -40,6 +52,10 @@ impl<T: AppHost + ?Sized> AppHost for &T {
 impl<T: AppResources + ?Sized> AppResources for Arc<T> {
     fn resource_dir(&self) -> Option<PathBuf> {
         (**self).resource_dir()
+    }
+
+    fn prefer_resource_dir(&self) -> bool {
+        (**self).prefer_resource_dir()
     }
 }
 

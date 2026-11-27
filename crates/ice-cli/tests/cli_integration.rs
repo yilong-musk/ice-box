@@ -3,11 +3,9 @@
 //! End-to-end integration tests for the cross-platform headless CLI & daemon.
 
 use ice_cli::daemon::{run_daemon_with_signal, DaemonOptions};
-#[cfg(unix)]
-use ice_cli::exit::EXIT_PERMISSION;
-use ice_cli::exit::{EXIT_NOT_RUNNING, EXIT_OK, EXIT_USAGE};
+use ice_cli::exit::{EXIT_ERROR, EXIT_NOT_RUNNING, EXIT_OK, EXIT_PERMISSION, EXIT_USAGE};
 use ice_cli::signal::ShutdownSignal;
-use ice_runtime::mcp::{call_tool, ping, McpPolicy};
+use ice_runtime::mcp::{call_tool, ping, McpPolicy, MCP_POLICY_DENIED};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -68,6 +66,24 @@ fn offline_discovery_and_not_running_exit_codes() {
 
     let missing_schema = run_cli(&["schema", "does_not_exist"]);
     assert_eq!(missing_schema.status.code(), Some(EXIT_USAGE));
+
+    // Subcommand help and invalid flag combinations must not fall through to RPC.
+    assert_eq!(run_cli(&["mcp", "--help"]).status.code(), Some(EXIT_OK));
+    assert_eq!(
+        run_cli(&["sub", "add", "--help"]).status.code(),
+        Some(EXIT_OK)
+    );
+    assert_eq!(run_cli(&["status", "--help"]).status.code(), Some(EXIT_OK));
+    assert_eq!(
+        run_cli(&["status", "--unexpected"]).status.code(),
+        Some(EXIT_USAGE)
+    );
+    assert_eq!(
+        run_cli(&["daemon", "--no-auto-start", "--start-service"])
+            .status
+            .code(),
+        Some(EXIT_USAGE)
+    );
 
     let empty_dir = temp_dir("not-running");
     let dir_str = empty_dir.to_string_lossy().to_string();
@@ -157,6 +173,21 @@ fn headless_daemon_full_automation_round_trip() {
 
         let exec_rc = run_cli(&["--data-dir", &dir_str, "exec", "--", "sh", "-c", "exit 42"]);
         assert_eq!(exec_rc.status.code(), Some(42));
+
+        // Omitting `--` must not let global flag parsing steal child flags.
+        let exec_no_sep = run_cli(&[
+            "--data-dir",
+            &dir_str,
+            "exec",
+            "sh",
+            "-c",
+            "printf '%s|%s' \"$1\" \"$2\"",
+            "_",
+            "--timeout",
+            "5",
+        ]);
+        assert_eq!(exec_no_sep.status.code(), Some(EXIT_OK));
+        assert_eq!(String::from_utf8_lossy(&exec_no_sep.stdout), "--timeout|5");
     }
     #[cfg(windows)]
     {
@@ -255,6 +286,30 @@ fn headless_daemon_full_automation_round_trip() {
     let rules_json: Value = serde_json::from_slice(&rules.stdout).expect("rules json");
     assert_eq!(rules_json["total"], 1);
 
+    // 5b. Headless daemon rejects launch_at_login changes so it cannot register
+    // `ice-box-cli --autostart` as the OS login item.
+    let autostart_err = run_cli(&[
+        "--data-dir",
+        &dir_str,
+        "--json",
+        "settings",
+        "set",
+        r#"{"launch_at_login": true}"#,
+    ]);
+    assert_eq!(autostart_err.status.code(), Some(EXIT_ERROR));
+    let autostart_json: Value =
+        serde_json::from_slice(&autostart_err.stderr).expect("autostart error json");
+    assert_eq!(autostart_json["error"]["code"], "app.autostart_failed");
+
+    // 5c. Human-mode logs and connections render cleanly without falling back to raw JSON.
+    let human_logs = run_cli(&["--data-dir", &dir_str, "--human", "logs"]);
+    assert_eq!(human_logs.status.code(), Some(EXIT_OK));
+    let human_logs_text = String::from_utf8_lossy(&human_logs.stdout);
+    assert!(
+        !human_logs_text.trim_start().starts_with('['),
+        "human logs should not dump raw JSON array: {human_logs_text}"
+    );
+
     // 6. Headless elevation guardrail fails fast with permission exit code on Unix
     #[cfg(unix)]
     {
@@ -301,12 +356,19 @@ fn read_only_and_no_secrets_policies_guard_agent_calls() {
     assert!(call_tool(&dir, "get_status", json!({}), None).is_ok());
     assert!(call_tool(&dir, "get_settings", json!({}), None).is_ok());
 
-    // Mutating tool is rejected by --read-only.
+    // Mutating tool is rejected by --read-only with mcp.policy_denied -> EXIT_PERMISSION.
     let err = call_tool(&dir, "set_proxy_mode", json!({"mode": "global"}), None)
         .expect_err("read-only must reject mutating tool");
+    assert_eq!(err.code(), MCP_POLICY_DENIED);
     assert!(err.message().contains("--read-only"), "got: {err}");
 
-    // Secret export is rejected by --no-secrets.
+    let dir_str = dir.to_string_lossy().to_string();
+    let cli_ro = run_cli(&["--data-dir", &dir_str, "--json", "mode", "global"]);
+    assert_eq!(cli_ro.status.code(), Some(EXIT_PERMISSION));
+    let cli_ro_err: Value = serde_json::from_slice(&cli_ro.stderr).expect("ro error json");
+    assert_eq!(cli_ro_err["error"]["code"], MCP_POLICY_DENIED);
+
+    // Secret export is rejected by --no-secrets with mcp.policy_denied -> EXIT_PERMISSION.
     let export_err = call_tool(
         &dir,
         "export_subscription",
@@ -314,10 +376,34 @@ fn read_only_and_no_secrets_policies_guard_agent_calls() {
         None,
     )
     .expect_err("no-secrets must reject export_subscription");
+    assert_eq!(export_err.code(), MCP_POLICY_DENIED);
     assert!(
         export_err.message().contains("--no-secrets"),
         "got: {export_err}"
     );
+
+    let cli_secret = run_cli(&[
+        "--data-dir",
+        &dir_str,
+        "--json",
+        "sub",
+        "export",
+        "00000000-0000-0000-0000-000000000000",
+        "--kind",
+        "url",
+    ]);
+    assert_eq!(cli_secret.status.code(), Some(EXIT_PERMISSION));
+
+    // Unknown tool under --read-only must still fail as unknown tool (not policy denial).
+    let cli_unknown = run_cli(&["--data-dir", &dir_str, "--json", "call", "no_such_tool"]);
+    assert_eq!(cli_unknown.status.code(), Some(EXIT_ERROR));
+    let cli_unknown_err: Value =
+        serde_json::from_slice(&cli_unknown.stderr).expect("unknown error json");
+    assert_eq!(cli_unknown_err["error"]["code"], "config.invalid");
+    assert!(cli_unknown_err["error"]["message"]
+        .as_str()
+        .unwrap_or("")
+        .contains("unknown MCP tool"));
 
     signal.trigger();
     assert_eq!(daemon_handle.join().unwrap(), EXIT_OK);

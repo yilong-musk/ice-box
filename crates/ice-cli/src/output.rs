@@ -3,6 +3,7 @@
 //! Machine-readable JSON and concise human-readable output formatting.
 
 use serde_json::{json, Value};
+use std::fmt::Write as _;
 use std::io::IsTerminal;
 
 /// Explicit or auto-detected output mode.
@@ -40,8 +41,9 @@ pub fn print_json(value: &Value) {
     }
 }
 
-/// Print a structured error to stderr (or stdout as JSON when `--json` is active
-/// so Agent pipelines reading stdout still receive valid JSON on failure).
+/// Print a structured error to stderr (as JSON when JSON mode is active so
+/// Agent pipelines parsing stderr receive structured error details without
+/// corrupting stdout).
 pub fn emit_error(mode: OutputMode, code: &str, message: &str) {
     if mode.wants_json() {
         let payload = json!({
@@ -64,18 +66,27 @@ pub fn emit_tool_result(mode: OutputMode, command: &str, value: &Value) {
         print_json(value);
         return;
     }
-    match command {
-        "status" => print_status_human(value),
-        "sub_list" => print_subscriptions_human(value),
-        "node_list" => print_nodes_human(value),
-        "conn_list" => print_connections_human(value),
-        "ruleset_list" => print_rule_sets_human(value),
-        "logs" => print_logs_human(value),
-        _ => print_json(value),
+    match format_tool_result_human(command, value) {
+        Some(text) => print!("{text}"),
+        None => print_json(value),
     }
 }
 
-fn print_status_human(v: &Value) {
+/// Format a tool result for human-readable terminal display. Returns `None`
+/// when the command should fall back to pretty-printed JSON.
+pub(crate) fn format_tool_result_human(command: &str, value: &Value) -> Option<String> {
+    match command {
+        "status" => Some(format_status_human(value)),
+        "sub_list" => format_subscriptions_human(value),
+        "node_list" => format_nodes_human(value),
+        "conn_list" => Some(format_connections_human(value)),
+        "ruleset_list" => format_rule_sets_human(value),
+        "logs" => format_logs_human(value),
+        _ => None,
+    }
+}
+
+fn format_status_human(v: &Value) -> String {
     let core = v
         .pointer("/core/status")
         .and_then(Value::as_str)
@@ -97,24 +108,23 @@ fn print_status_human(v: &Value) {
         .and_then(Value::as_u64)
         .map(|p| p.to_string())
         .unwrap_or_else(|| "-".into());
-    println!("core:          {core}");
-    println!("mixed inbound: {host}:{port}");
-    println!("capture:       {capture}");
-    println!("subscriptions: {subs}");
+    let mut out = String::new();
+    let _ = writeln!(out, "core:          {core}");
+    let _ = writeln!(out, "mixed inbound: {host}:{port}");
+    let _ = writeln!(out, "capture:       {capture}");
+    let _ = writeln!(out, "subscriptions: {subs}");
     if let Some(tag) = v.pointer("/selected_outbound/tag").and_then(Value::as_str) {
-        println!("outbound:      {tag}");
+        let _ = writeln!(out, "outbound:      {tag}");
     }
+    out
 }
 
-fn print_subscriptions_human(v: &Value) {
-    let Some(items) = v.as_array() else {
-        print_json(v);
-        return;
-    };
+fn format_subscriptions_human(v: &Value) -> Option<String> {
+    let items = v.as_array()?;
     if items.is_empty() {
-        println!("(no subscriptions)");
-        return;
+        return Some("(no subscriptions)\n".into());
     }
+    let mut out = String::new();
     for item in items {
         let active = if item.get("active").and_then(Value::as_bool).unwrap_or(false) {
             "*"
@@ -124,19 +134,17 @@ fn print_subscriptions_human(v: &Value) {
         let id = item.get("id").and_then(Value::as_str).unwrap_or("-");
         let name = item.get("name").and_then(Value::as_str).unwrap_or("-");
         let nodes = item.get("node_count").and_then(Value::as_u64).unwrap_or(0);
-        println!("{active} {id}  {name}  ({nodes} nodes)");
+        let _ = writeln!(out, "{active} {id}  {name}  ({nodes} nodes)");
     }
+    Some(out)
 }
 
-fn print_nodes_human(v: &Value) {
-    let Some(items) = v.as_array() else {
-        print_json(v);
-        return;
-    };
+fn format_nodes_human(v: &Value) -> Option<String> {
+    let items = v.as_array()?;
     if items.is_empty() {
-        println!("(no nodes)");
-        return;
+        return Some("(no nodes)\n".into());
     }
+    let mut out = String::new();
     for item in items {
         let tag = item.get("tag").and_then(Value::as_str).unwrap_or("-");
         let kind = item
@@ -144,17 +152,19 @@ fn print_nodes_human(v: &Value) {
             .and_then(Value::as_str)
             .unwrap_or("-");
         if let Some(now) = item.get("group_now").and_then(Value::as_str) {
-            println!("{tag}  [{kind}] -> {now}");
+            let _ = writeln!(out, "{tag}  [{kind}] -> {now}");
         } else {
-            println!("{tag}  [{kind}]");
+            let _ = writeln!(out, "{tag}  [{kind}]");
         }
     }
+    Some(out)
 }
 
-fn print_connections_human(v: &Value) {
+fn format_connections_human(v: &Value) -> String {
     let total = v.get("total").and_then(Value::as_u64).unwrap_or(0);
     let matched = v.get("matched").and_then(Value::as_u64).unwrap_or(0);
-    println!("connections: {matched}/{total}");
+    let mut out = String::new();
+    let _ = writeln!(out, "connections: {matched}/{total}");
     if let Some(items) = v.get("connections").and_then(Value::as_array) {
         for item in items {
             let id = item.get("id").and_then(Value::as_str).unwrap_or("-");
@@ -166,8 +176,13 @@ fn print_connections_human(v: &Value) {
                 .unwrap_or("-");
             let port = item
                 .get("destination_port")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
+                .and_then(|p| {
+                    p.as_str()
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_owned)
+                        .or_else(|| p.as_u64().map(|n| n.to_string()))
+                })
+                .unwrap_or_else(|| "-".into());
             let chains = item
                 .get("chains")
                 .and_then(Value::as_array)
@@ -178,39 +193,44 @@ fn print_connections_human(v: &Value) {
                         .join(" -> ")
                 })
                 .unwrap_or_default();
-            println!("  {id}  {host}:{port}  [{chains}]");
+            let _ = writeln!(out, "  {id}  {host}:{port}  [{chains}]");
         }
     }
+    out
 }
 
-fn print_rule_sets_human(v: &Value) {
-    let Some(items) = v.as_array() else {
-        print_json(v);
-        return;
-    };
+fn format_rule_sets_human(v: &Value) -> Option<String> {
+    let items = v.as_array()?;
     if items.is_empty() {
-        println!("(no rule-sets)");
-        return;
+        return Some("(no rule-sets)\n".into());
     }
+    let mut out = String::new();
     for item in items {
         let tag = item.get("tag").and_then(Value::as_str).unwrap_or("-");
         let state = item.get("state").and_then(Value::as_str).unwrap_or("-");
-        println!("{tag}  ({state})");
+        let _ = writeln!(out, "{tag}  ({state})");
     }
+    Some(out)
 }
 
-fn print_logs_human(v: &Value) {
-    if let Some(lines) = v.get("lines").and_then(Value::as_array) {
-        for entry in lines {
-            if let Some(raw) = entry.get("raw").and_then(Value::as_str) {
-                println!("{raw}");
-            } else if let Some(msg) = entry.get("message").and_then(Value::as_str) {
-                let ts = entry.get("ts").and_then(Value::as_str).unwrap_or("");
-                let level = entry.get("level").and_then(Value::as_str).unwrap_or("");
-                println!("{ts} {level} {msg}");
-            }
-        }
-    } else {
-        print_json(v);
+fn format_logs_human(v: &Value) -> Option<String> {
+    let lines = v
+        .as_array()
+        .or_else(|| v.get("lines").and_then(Value::as_array))?;
+    if lines.is_empty() {
+        return Some("(no logs)\n".into());
     }
+    let mut out = String::new();
+    for entry in lines {
+        if let Some(line) = entry.as_str() {
+            let _ = writeln!(out, "{line}");
+        } else if let Some(raw) = entry.get("raw").and_then(Value::as_str) {
+            let _ = writeln!(out, "{raw}");
+        } else if let Some(msg) = entry.get("message").and_then(Value::as_str) {
+            let ts = entry.get("ts").and_then(Value::as_str).unwrap_or("");
+            let level = entry.get("level").and_then(Value::as_str).unwrap_or("");
+            let _ = writeln!(out, "{ts} {level} {msg}");
+        }
+    }
+    Some(out)
 }

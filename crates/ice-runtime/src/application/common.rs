@@ -12,7 +12,8 @@ pub(crate) use crate::capture::{
 pub(crate) use crate::orchestrate::{
     endpoints_from_settings, ensure_clash_api_port_available, generate_config_with_cache,
     orchestrate_apply_with_cache, orchestrate_set_proxy_mode_with_apply,
-    orchestrate_start_with_cache, orphan_reclaim_cores, patch_selected_tag_default, resolve_binary,
+    orchestrate_start_with_cache, orphan_reclaim_cores, patch_selected_tag_default,
+    resolve_binary_with_preference,
 };
 pub(crate) use crate::AppState;
 pub(crate) use ice_config::NormalizedOutbound;
@@ -105,7 +106,7 @@ pub fn resource_dir(app: &impl AppResources) -> Option<std::path::PathBuf> {
 }
 
 pub fn binary_for(app: &impl AppResources) -> Result<std::path::PathBuf, AppError> {
-    resolve_binary(resource_dir(app).as_deref())
+    resolve_binary_with_preference(resource_dir(app).as_deref(), app.prefer_resource_dir())
 }
 
 pub fn require_running_core(state: &AppState) -> Result<(), AppError> {

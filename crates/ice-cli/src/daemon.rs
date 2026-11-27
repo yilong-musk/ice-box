@@ -6,8 +6,8 @@ use crate::exit::{EXIT_ERROR, EXIT_OK};
 use crate::signal::{install_shutdown_handlers, ShutdownSignal};
 use ice_config::AppPaths;
 use ice_runtime::application::{
-    append_recovery_warning, auto_start_on_launch, collect_status, request_runtime_probe_refresh,
-    start_service, AppHost, AppResources,
+    append_recovery_warning, auto_start_on_launch, collect_status, lock_orchestrate,
+    recover_launch_leftovers, request_runtime_probe_refresh, start_service, AppHost, AppResources,
 };
 use ice_runtime::mcp::{McpContext, McpPolicy, McpService};
 use ice_runtime::shutdown::{request_headless_quit, QuitOutcome};
@@ -37,6 +37,7 @@ pub struct DaemonOptions {
 #[derive(Clone)]
 pub struct HeadlessHost {
     resource_dir: Option<PathBuf>,
+    prefer_resource_dir: bool,
     state: Arc<AppState>,
     interactive_elevation: bool,
 }
@@ -45,10 +46,12 @@ impl HeadlessHost {
     pub fn new(
         state: Arc<AppState>,
         resource_dir: Option<PathBuf>,
+        prefer_resource_dir: bool,
         interactive_elevation: bool,
     ) -> Self {
         Self {
             resource_dir,
+            prefer_resource_dir,
             state,
             interactive_elevation,
         }
@@ -58,6 +61,10 @@ impl HeadlessHost {
 impl AppResources for HeadlessHost {
     fn resource_dir(&self) -> Option<PathBuf> {
         self.resource_dir.clone()
+    }
+
+    fn prefer_resource_dir(&self) -> bool {
+        self.prefer_resource_dir
     }
 }
 
@@ -72,27 +79,41 @@ impl AppHost for HeadlessHost {
 }
 
 /// Resolve the portable CLI resource directory (`sing-box`, `ice-helper`,
-/// `ice-tun-launcher.exe`, `geoip/`).
+/// `ice-tun-launcher.exe`, `geoip/`) and whether it should take precedence
+/// over the compile-time development checkout (`third_party/sing-box`).
 ///
 /// Order:
-/// 1. Explicit `--resource-dir` or `ICE_BOX_RESOURCE_DIR`
-/// 2. Sibling `resources/` or same directory as `current_exe()` when it contains `sing-box[.exe]`
-/// 3. Standard Linux FHS install directories (`/usr/lib/ice-box`, `/usr/share/ice-box`)
-/// 4. Fallback `None` (dev builds still resolve `third_party/sing-box` via `orchestrate`)
+/// 1. Explicit `--resource-dir` or `ICE_BOX_RESOURCE_DIR` (preferred)
+/// 2. Sibling `resources/` or same directory as `current_exe()` when it contains `sing-box[.exe]` or `geoip/` (preferred)
+/// 3. Standard Linux FHS install directories (`/usr/lib/ice-box`, `/usr/share/ice-box`) (preferred)
+/// 4. Fallback `exe_dir` / `None` (dev builds resolve `third_party/sing-box` via `orchestrate`)
 pub fn resolve_resource_dir(explicit: Option<PathBuf>) -> Option<PathBuf> {
+    resolve_resource_dir_with_preference(explicit).0
+}
+
+pub(crate) fn resolve_resource_dir_with_preference(
+    explicit: Option<PathBuf>,
+) -> (Option<PathBuf>, bool) {
     if let Some(dir) = explicit {
-        return Some(dir);
+        return (Some(dir), true);
     }
     if let Some(env_dir) = std::env::var_os("ICE_BOX_RESOURCE_DIR").filter(|v| !v.is_empty()) {
-        return Some(PathBuf::from(env_dir));
+        return (Some(PathBuf::from(env_dir)), true);
     }
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(Path::to_path_buf));
-    resolve_resource_dir_from_candidates(exe_dir.as_deref())
+    resolve_resource_dir_from_candidates_with_preference(exe_dir.as_deref())
 }
 
+#[cfg(test)]
 pub(crate) fn resolve_resource_dir_from_candidates(exe_dir: Option<&Path>) -> Option<PathBuf> {
+    resolve_resource_dir_from_candidates_with_preference(exe_dir).0
+}
+
+pub(crate) fn resolve_resource_dir_from_candidates_with_preference(
+    exe_dir: Option<&Path>,
+) -> (Option<PathBuf>, bool) {
     let bin_name = if cfg!(windows) {
         "sing-box.exe"
     } else {
@@ -110,10 +131,10 @@ pub(crate) fn resolve_resource_dir_from_candidates(exe_dir: Option<&Path>) -> Op
     }
     for candidate in candidates {
         if candidate.join(bin_name).is_file() || candidate.join("geoip").is_dir() {
-            return Some(candidate);
+            return (Some(candidate), true);
         }
     }
-    exe_dir.map(Path::to_path_buf)
+    (exe_dir.map(Path::to_path_buf), false)
 }
 
 /// Run the headless daemon until terminated by an OS signal.
@@ -129,6 +150,14 @@ pub fn run_daemon(opts: DaemonOptions) -> i32 {
 
 /// Testable entry point accepting an explicit [`ShutdownSignal`].
 pub fn run_daemon_with_signal(opts: DaemonOptions, signal: ShutdownSignal) -> i32 {
+    struct DoneGuard(ShutdownSignal);
+    impl Drop for DoneGuard {
+        fn drop(&mut self) {
+            self.0.mark_done();
+        }
+    }
+    let _done_guard = DoneGuard(signal.clone());
+
     let paths = AppPaths::new(&opts.data_dir);
     set_panic_log_path(paths.app_log());
 
@@ -151,7 +180,8 @@ pub fn run_daemon_with_signal(opts: DaemonOptions, signal: ShutdownSignal) -> i3
     #[cfg(target_os = "windows")]
     ice_runtime::session_end::install(paths.proxy_backup());
 
-    let resource_dir = resolve_resource_dir(opts.resource_dir);
+    let (resource_dir, prefer_resource_dir) =
+        resolve_resource_dir_with_preference(opts.resource_dir);
     let state = match AppState::bootstrap(
         paths.clone(),
         instance_lock,
@@ -168,6 +198,7 @@ pub fn run_daemon_with_signal(opts: DaemonOptions, signal: ShutdownSignal) -> i3
     let host = Arc::new(HeadlessHost::new(
         Arc::clone(&state),
         resource_dir.clone(),
+        prefer_resource_dir,
         opts.allow_interactive_elevation,
     ));
 
@@ -184,29 +215,47 @@ pub fn run_daemon_with_signal(opts: DaemonOptions, signal: ShutdownSignal) -> i3
         });
     }
 
-    if opts.auto_start_core {
+    // Always run crash leftover recovery under the orchestrate lock before any
+    // control RPC can race on stale cores, proxy backups, or TUN journals.
+    {
         let startup_host = Arc::clone(&host);
         let startup_state = Arc::clone(&state);
+        let auto_start_core = opts.auto_start_core;
         let start_service_after = opts.start_service;
         let (orch_tx, orch_rx) = std::sync::mpsc::sync_channel(1);
         std::thread::spawn(move || {
-            if let Err(err) = auto_start_on_launch(&startup_host, &startup_state, Some(orch_tx)) {
-                if startup_state.shutdown_requested.load(Ordering::SeqCst) {
-                    tracing::info!(error = %err, "auto-start aborted by shutdown");
+            if auto_start_core {
+                if let Err(err) = auto_start_on_launch(&startup_host, &startup_state, Some(orch_tx))
+                {
+                    if startup_state.shutdown_requested.load(Ordering::SeqCst) {
+                        tracing::info!(error = %err, "auto-start aborted by shutdown");
+                        return;
+                    }
+                    tracing::error!(error = %err, "daemon auto-start failed");
+                    append_recovery_warning(
+                        &startup_state,
+                        ice_config::UiMessage::new("recover.autoStartFailed")
+                            .with("detail", err.to_string()),
+                    );
                     return;
                 }
-                tracing::error!(error = %err, "daemon auto-start failed");
-                append_recovery_warning(
-                    &startup_state,
-                    ice_config::UiMessage::new("recover.autoStartFailed")
-                        .with("detail", err.to_string()),
-                );
-                return;
-            }
-            if start_service_after && !startup_state.shutdown_requested.load(Ordering::SeqCst) {
-                if let Err(err) = start_service(&startup_host, &startup_state) {
-                    tracing::error!(error = %err, "daemon --start-service failed");
+                if start_service_after && !startup_state.shutdown_requested.load(Ordering::SeqCst) {
+                    if let Err(err) = start_service(&startup_host, &startup_state) {
+                        tracing::error!(error = %err, "daemon --start-service failed");
+                        append_recovery_warning(
+                            &startup_state,
+                            ice_config::UiMessage::new("recover.autoStartFailed")
+                                .with("detail", err.to_string()),
+                        );
+                    }
                 }
+            } else {
+                let Ok(_orch) = lock_orchestrate(&startup_state) else {
+                    let _ = orch_tx.send(());
+                    return;
+                };
+                let _ = orch_tx.send(());
+                recover_launch_leftovers(&startup_state);
             }
         });
         if orch_rx.recv().is_err() {

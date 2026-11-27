@@ -1638,7 +1638,8 @@ fn launch_at_login_is_synced_when_combined_with_runtime_settings() {
         fn state_changed(&self) {}
     }
 
-    let state = temp_state_with_node("launch-at-login-combined");
+    let mut state = temp_state_with_node("launch-at-login-combined");
+    state.capabilities = crate::HostCapabilities::desktop(false);
     let resources = state.paths.root().join("resources");
     fs::create_dir_all(&resources).unwrap();
     let binary_name = if cfg!(windows) {
@@ -1702,6 +1703,55 @@ fn launch_at_login_is_synced_when_combined_with_runtime_settings() {
     let unchanged = current_settings(&state.paths).unwrap();
     assert!(!unchanged.launch_at_login);
     assert_eq!(unchanged.mixed_port, 18081);
+
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn headless_mode_rejects_launch_at_login_changes() {
+    use crate::application::settings::save_settings_inner_with_autostart;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct Host;
+
+    impl AppResources for Host {
+        fn resource_dir(&self) -> Option<PathBuf> {
+            None
+        }
+    }
+
+    impl AppHost for Host {
+        fn state_changed(&self) {}
+    }
+
+    let state = temp_state_with_node("launch-at-login-headless");
+    assert!(!state.capabilities.launch_at_login_supported);
+    let autostart_called = AtomicBool::new(false);
+
+    let err = save_settings_inner_with_autostart(
+        &Host,
+        &state,
+        SettingsPatch {
+            launch_at_login: Some(true),
+            mixed_port: Some(18089),
+            ..SettingsPatch::default()
+        },
+        |_enabled| {
+            autostart_called.store(true, Ordering::SeqCst);
+            Ok(())
+        },
+    )
+    .expect_err("headless mode must reject launch_at_login");
+    assert_eq!(err.code, ErrorCode::AutostartFailed.as_str());
+    assert!(err.message.contains("headless"));
+    assert!(
+        !autostart_called.load(Ordering::SeqCst),
+        "autostart hook must never run in headless mode"
+    );
+    let persisted = current_settings(&state.paths).unwrap();
+    assert!(!persisted.launch_at_login);
+    assert_ne!(persisted.mixed_port, 18089);
 
     let _ = fs::remove_dir_all(state.paths.root());
 }

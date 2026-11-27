@@ -126,7 +126,7 @@ By default, commands emit JSON automatically when `stdout` is not a TTY (pipes, 
 | `2` | CLI usage error or invalid JSON input |
 | `3` | Control service / daemon is not running (`cli.not_running`) |
 | `4` | Authentication or endpoint config error (`cli.auth_failed`) |
-| `5` | Privileged helper / administrator elevation required |
+| `5` | Privileged helper / administrator elevation required, or tool blocked by `--read-only` / `--no-secrets` (`mcp.policy_denied`) |
 | `6` | RPC or `wait-ready` timeout |
 
 Errors print `{"error":{"code":"...","message":"..."}}` to `stderr` when JSON mode is active.

@@ -8,22 +8,27 @@
 //! - Windows: `SetConsoleCtrlHandler` catching `CTRL_C_EVENT`,
 //!   `CTRL_BREAK_EVENT`, `CTRL_CLOSE_EVENT`, `CTRL_LOGOFF_EVENT`, and
 //!   `CTRL_SHUTDOWN_EVENT`, paired with `ice_runtime::session_end::install`.
+//!   Close/logoff/shutdown events wait for cleanup completion before returning
+//!   because Windows terminates the process as soon as the handler returns.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Handle that blocks until an OS termination signal arrives (or until
-/// `trigger()` is called programmatically in tests).
+/// `trigger()` is called programmatically in tests), and coordinates
+/// shutdown completion for platform handlers that terminate the process once
+/// their callback returns (Windows console close/logoff/shutdown).
 #[derive(Clone)]
 pub struct ShutdownSignal {
     triggered: Arc<(Mutex<bool>, Condvar)>,
+    done: Arc<(Mutex<bool>, Condvar)>,
 }
 
 impl ShutdownSignal {
     pub fn new() -> Self {
         Self {
             triggered: Arc::new((Mutex::new(false), Condvar::new())),
+            done: Arc::new((Mutex::new(false), Condvar::new())),
         }
     }
 
@@ -51,16 +56,38 @@ impl ShutdownSignal {
 
     /// Block until triggered or `timeout` elapses. Returns `true` if triggered.
     pub fn wait_timeout(&self, timeout: Duration) -> bool {
-        let (lock, cvar) = &*self.triggered;
-        let fired = lock.lock().unwrap_or_else(|e| e.into_inner());
-        if *fired {
-            return true;
-        }
-        let (fired, _) = cvar
-            .wait_timeout(fired, timeout)
-            .unwrap_or_else(|e| e.into_inner());
-        *fired
+        wait_flag_timeout(&self.triggered, timeout)
     }
+
+    /// Signal that graceful daemon shutdown has completed.
+    pub fn mark_done(&self) {
+        let (lock, cvar) = &*self.done;
+        let mut finished = lock.lock().unwrap_or_else(|e| e.into_inner());
+        *finished = true;
+        cvar.notify_all();
+    }
+
+    /// Wait up to `timeout` for [`Self::mark_done`]. Returns `true` if marked.
+    pub fn wait_done(&self, timeout: Duration) -> bool {
+        wait_flag_timeout(&self.done, timeout)
+    }
+}
+
+fn wait_flag_timeout(pair: &(Mutex<bool>, Condvar), timeout: Duration) -> bool {
+    let (lock, cvar) = pair;
+    let deadline = Instant::now() + timeout;
+    let mut flag = lock.lock().unwrap_or_else(|e| e.into_inner());
+    while !*flag {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return false;
+        }
+        let (next, _) = cvar
+            .wait_timeout(flag, remaining)
+            .unwrap_or_else(|e| e.into_inner());
+        flag = next;
+    }
+    true
 }
 
 impl Default for ShutdownSignal {
@@ -69,13 +96,17 @@ impl Default for ShutdownSignal {
     }
 }
 
-/// Install OS signal handlers that trigger `signal`. Idempotent per process.
+/// Install OS signal handlers that trigger `signal`. Idempotent per process
+/// once installation succeeds.
 pub fn install_shutdown_handlers(signal: ShutdownSignal) -> Result<(), String> {
-    static INSTALLED: AtomicBool = AtomicBool::new(false);
-    if INSTALLED.swap(true, Ordering::SeqCst) {
+    static INSTALLED: Mutex<bool> = Mutex::new(false);
+    let mut installed = INSTALLED.lock().unwrap_or_else(|e| e.into_inner());
+    if *installed {
         return Ok(());
     }
-    platform::install(signal)
+    platform::install(signal)?;
+    *installed = true;
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -179,15 +210,15 @@ mod platform {
             create_self_pipe().map_err(|e| format!("create signal pipe: {e}"))?;
         PIPE_WR.store(write_fd, Ordering::SeqCst);
         if let Err(err) = register_handlers() {
-            PIPE_WR.store(-1, Ordering::SeqCst);
             reset_handlers_to_default();
+            PIPE_WR.store(-1, Ordering::SeqCst);
             unsafe {
                 libc::close(read_fd);
                 libc::close(write_fd);
             }
             return Err(format!("register signal handlers: {err}"));
         }
-        std::thread::Builder::new()
+        if let Err(err) = std::thread::Builder::new()
             .name("ice-cli-signal".into())
             .spawn(move || {
                 let mut buf = [0u8; 1];
@@ -209,12 +240,16 @@ mod platform {
                         break;
                     }
                 }
-                unsafe {
-                    libc::close(read_fd);
-                    libc::close(write_fd);
-                }
+                // Intentionally keep `read_fd` and `write_fd` open until
+                // process exit so a concurrent signal handler that already
+                // loaded `write_fd` before `PIPE_WR.store(-1)` can never write
+                // into a reused file descriptor opened during shutdown.
             })
-            .map_err(|e| format!("spawn signal watcher: {e}"))?;
+        {
+            reset_handlers_to_default();
+            PIPE_WR.store(-1, Ordering::SeqCst);
+            return Err(format!("spawn signal watcher: {err}"));
+        }
         Ok(())
     }
 }
@@ -223,20 +258,31 @@ mod platform {
 mod platform {
     use super::ShutdownSignal;
     use std::sync::OnceLock;
+    use std::time::Duration;
     use windows_sys::Win32::Foundation::{BOOL, TRUE};
     use windows_sys::Win32::System::Console::{
         SetConsoleCtrlHandler, CTRL_BREAK_EVENT, CTRL_CLOSE_EVENT, CTRL_C_EVENT, CTRL_LOGOFF_EVENT,
         CTRL_SHUTDOWN_EVENT,
     };
 
+    /// Windows allows roughly 5 seconds for `CTRL_CLOSE_EVENT` cleanup before
+    /// forcibly terminating the process.
+    const CLOSE_CLEANUP_WAIT: Duration = Duration::from_millis(4_500);
+
     static SIGNAL: OnceLock<ShutdownSignal> = OnceLock::new();
 
     unsafe extern "system" fn ctrl_handler(ctrl_type: u32) -> BOOL {
         match ctrl_type {
-            CTRL_C_EVENT | CTRL_BREAK_EVENT | CTRL_CLOSE_EVENT | CTRL_LOGOFF_EVENT
-            | CTRL_SHUTDOWN_EVENT => {
+            CTRL_C_EVENT | CTRL_BREAK_EVENT => {
                 if let Some(signal) = SIGNAL.get() {
                     signal.trigger();
+                }
+                TRUE
+            }
+            CTRL_CLOSE_EVENT | CTRL_LOGOFF_EVENT | CTRL_SHUTDOWN_EVENT => {
+                if let Some(signal) = SIGNAL.get() {
+                    signal.trigger();
+                    let _ = signal.wait_done(CLOSE_CLEANUP_WAIT);
                 }
                 TRUE
             }

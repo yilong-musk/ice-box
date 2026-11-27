@@ -115,6 +115,21 @@ fn parse_outcome(outcome: ElevateOutcome) -> Result<(), AppError> {
     }
 }
 
+/// Quote a filesystem path for copy-pasteable POSIX shell commands when it
+/// contains whitespace or shell metacharacters (for example macOS
+/// `~/Library/Application Support/...`).
+fn shell_quote_path(path: &Path) -> String {
+    let raw = path.to_string_lossy();
+    if !raw.is_empty()
+        && raw.bytes().all(|b| {
+            b.is_ascii_alphanumeric() || matches!(b, b'/' | b'.' | b'_' | b'-' | b'+' | b':' | b'@')
+        })
+    {
+        return raw.into_owned();
+    }
+    format!("'{}'", raw.replace('\'', "'\\''"))
+}
+
 /// Resolve the tool + core binary pair for an elevated run.
 fn resolve_install_inputs(
     resources: &impl crate::application::AppResources,
@@ -126,7 +141,7 @@ fn resolve_install_inputs(
             "helper resource (ice-helper) not found; rebuild the app and retry",
         )
     })?;
-    let core = crate::orchestrate::resolve_binary(resource_dir.as_deref()).map_err(|err| {
+    let core = crate::application::binary_for(resources).map_err(|err| {
         AppError::with_code(
             ERR_HELPER_INSTALL_FAILED,
             format!("core resource not found: {err}"),
@@ -592,9 +607,9 @@ pub fn install_helper_inner(
             ERR_HELPER_INSTALL_FAILED,
             format!(
                 "interactive elevation is disabled in headless mode; run: sudo {} install {} {} {}",
-                helper.display(),
-                data_dir.display(),
-                core.display(),
+                shell_quote_path(&helper),
+                shell_quote_path(data_dir),
+                shell_quote_path(&core),
                 current_uid(),
             ),
         ));
@@ -667,14 +682,9 @@ pub fn uninstall_helper_inner(
     refuse_while_tun_active(state)?;
     // Prefer the installed root copy; fall back to the bundled binary.
     let installed_helper = PathBuf::from(ice_tun_sys::install_paths::HELPER_BIN_DEST);
-    #[cfg(target_os = "linux")]
-    let _staging_guard;
-    let helper = if installed_helper.is_file() {
-        #[cfg(target_os = "linux")]
-        {
-            _staging_guard = None;
-        }
-        installed_helper
+    let data_dir = state.paths.root();
+    let (helper_src, is_installed_copy) = if installed_helper.is_file() {
+        (installed_helper, true)
     } else {
         let bundled = helper_binary(host.resource_dir().as_deref()).ok_or_else(|| {
             AppError::with_code(
@@ -682,6 +692,27 @@ pub fn uninstall_helper_inner(
                 "helper binary not found; cannot uninstall",
             )
         })?;
+        (bundled, false)
+    };
+    if !host.interactive_elevation() {
+        return Err(AppError::with_code(
+            ERR_HELPER_INSTALL_FAILED,
+            format!(
+                "interactive elevation is disabled in headless mode; run: sudo {} uninstall {}",
+                shell_quote_path(&helper_src),
+                shell_quote_path(data_dir),
+            ),
+        ));
+    }
+    #[cfg(target_os = "linux")]
+    let _staging_guard;
+    let helper = if is_installed_copy {
+        #[cfg(target_os = "linux")]
+        {
+            _staging_guard = None;
+        }
+        helper_src
+    } else {
         #[cfg(target_os = "linux")]
         {
             let current_exe = std::env::current_exe().ok();
@@ -691,33 +722,22 @@ pub fn uninstall_helper_inner(
                 appimage.as_deref(),
                 appdir.as_deref(),
                 current_exe.as_deref(),
-                &bundled,
+                &helper_src,
             ) {
                 let (guard, staged_helper) =
-                    stage_uninstall_helper(&std::env::temp_dir(), &bundled)?;
+                    stage_uninstall_helper(&std::env::temp_dir(), &helper_src)?;
                 _staging_guard = Some(guard);
                 staged_helper
             } else {
                 _staging_guard = None;
-                bundled
+                helper_src
             }
         }
         #[cfg(not(target_os = "linux"))]
         {
-            bundled
+            helper_src
         }
     };
-    let data_dir = state.paths.root();
-    if !host.interactive_elevation() {
-        return Err(AppError::with_code(
-            ERR_HELPER_INSTALL_FAILED,
-            format!(
-                "interactive elevation is disabled in headless mode; run: sudo {} uninstall {}",
-                helper.display(),
-                data_dir.display(),
-            ),
-        ));
-    }
     let args = ["uninstall", data_dir.to_str().unwrap_or_default()];
     let outcome = run_elevated(&helper, &args)?;
     parse_outcome(outcome)?;
@@ -736,6 +756,24 @@ mod tests {
             output: "OK helper installed\n".into(),
         };
         assert!(parse_outcome(ok).is_ok());
+    }
+
+    #[test]
+    fn shell_quote_path_quotes_spaces_and_single_quotes() {
+        assert_eq!(
+            shell_quote_path(Path::new("/usr/local/bin/ice-helper")),
+            "/usr/local/bin/ice-helper"
+        );
+        assert_eq!(
+            shell_quote_path(Path::new(
+                "/Users/alice/Library/Application Support/com.yilong-musk.icebox"
+            )),
+            "'/Users/alice/Library/Application Support/com.yilong-musk.icebox'"
+        );
+        assert_eq!(
+            shell_quote_path(Path::new("/tmp/a'b/dir")),
+            "'/tmp/a'\\''b/dir'"
+        );
     }
 
     #[test]

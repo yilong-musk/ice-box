@@ -13,14 +13,19 @@ pub use commands::run;
 
 #[cfg(test)]
 mod tests {
-    use crate::daemon::resolve_resource_dir_from_candidates;
+    use crate::daemon::{
+        resolve_resource_dir_from_candidates, resolve_resource_dir_from_candidates_with_preference,
+    };
     use crate::env_exec::{format_env_script, ShellFlavor};
     use crate::exit::{
         exit_code_for_bridge_error, exit_code_for_error_code, EXIT_AUTH, EXIT_ERROR,
         EXIT_NOT_RUNNING, EXIT_PERMISSION, EXIT_TIMEOUT,
     };
+    use crate::output::format_tool_result_human;
     use crate::signal::ShutdownSignal;
-    use ice_runtime::mcp::BridgeError;
+    use ice_runtime::application::{ConnectionRow, ConnectionsPage};
+    use ice_runtime::mcp::{BridgeError, MCP_POLICY_DENIED};
+    use serde_json::json;
     use std::fs;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -69,6 +74,13 @@ mod tests {
             EXIT_PERMISSION
         );
         assert_eq!(
+            exit_code_for_bridge_error(&BridgeError::ToolError {
+                code: MCP_POLICY_DENIED.into(),
+                message: "blocked by --read-only".into(),
+            }),
+            EXIT_PERMISSION
+        );
+        assert_eq!(
             exit_code_for_error_code("core.health_timeout"),
             EXIT_TIMEOUT
         );
@@ -98,6 +110,10 @@ mod tests {
     #[test]
     fn resource_dir_prefers_sibling_resources_dir_over_exe_dir() {
         let root = temp_dir("res");
+        let empty = temp_dir("res-empty");
+        let (_, empty_prefer) = resolve_resource_dir_from_candidates_with_preference(Some(&empty));
+        assert!(!empty_prefer);
+
         let nested = root.join("resources");
         fs::create_dir_all(&nested).unwrap();
         let bin = if cfg!(windows) {
@@ -108,23 +124,79 @@ mod tests {
         fs::write(nested.join(bin), b"core").unwrap();
         assert_eq!(
             resolve_resource_dir_from_candidates(Some(&root)),
-            Some(nested)
+            Some(nested.clone())
         );
+        let (dir, prefer) = resolve_resource_dir_from_candidates_with_preference(Some(&root));
+        assert_eq!(dir, Some(nested));
+        assert!(prefer);
         let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(empty);
     }
 
     #[test]
-    fn shutdown_signal_wakes_waiter() {
+    fn shutdown_signal_wakes_waiter_and_done_waiter() {
         let signal = ShutdownSignal::new();
         assert!(!signal.is_triggered());
         assert!(!signal.wait_timeout(Duration::from_millis(10)));
+        assert!(!signal.wait_done(Duration::from_millis(10)));
         let trigger = signal.clone();
         let handle = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(20));
             trigger.trigger();
+            std::thread::sleep(Duration::from_millis(20));
+            trigger.mark_done();
         });
         assert!(signal.wait_timeout(Duration::from_secs(2)));
         assert!(signal.is_triggered());
+        assert!(signal.wait_done(Duration::from_secs(2)));
         handle.join().unwrap();
+    }
+
+    #[test]
+    fn human_formatters_match_serialized_connections_and_logs_schemas() {
+        let page = ConnectionsPage {
+            running: true,
+            upload_total: 100,
+            download_total: 200,
+            total: 1,
+            matched: 1,
+            connections: vec![ConnectionRow {
+                id: "conn-1".into(),
+                network: "tcp".into(),
+                inbound: "mixed/mixed-in".into(),
+                source: "127.0.0.1:50000".into(),
+                host: "example.com".into(),
+                destination_ip: String::new(),
+                destination_port: "443".into(),
+                process_path: String::new(),
+                upload: 10,
+                download: 20,
+                start_ms: Some(1_700_000_000_000),
+                chains: vec!["node-a".into(), "proxy".into()],
+                rule: "final".into(),
+            }],
+        };
+        let rendered_conns =
+            format_tool_result_human("conn_list", &serde_json::to_value(page).unwrap())
+                .expect("connections human output");
+        assert!(
+            rendered_conns.contains("example.com:443"),
+            "expected string port 443, got:\n{rendered_conns}"
+        );
+        assert!(rendered_conns.contains("[node-a -> proxy]"));
+
+        let logs = serde_json::to_value(vec![
+            "2026-01-01T00:00:00Z INFO core started",
+            "2026-01-01T00:00:01Z WARN slow peer",
+        ])
+        .unwrap();
+        let rendered_logs = format_tool_result_human("logs", &logs).expect("logs human output");
+        assert_eq!(
+            rendered_logs,
+            "2026-01-01T00:00:00Z INFO core started\n2026-01-01T00:00:01Z WARN slow peer\n"
+        );
+
+        let empty_logs = format_tool_result_human("logs", &json!([])).expect("empty logs");
+        assert_eq!(empty_logs, "(no logs)\n");
     }
 }

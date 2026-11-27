@@ -9,8 +9,8 @@ use ice_config::{
     ErrorCode, LocalTemplate, NormalizedProfile, UiMessage,
 };
 use ice_core::{
-    get_mode, resolve_singbox_binary, set_mode, CoreHandle, CorePaths, CoreStatus, HealthEndpoints,
-    ReloadOutcome,
+    get_mode, resolve_singbox_binary, resolve_singbox_binary_preferring_resource, set_mode,
+    CoreHandle, CorePaths, CoreStatus, HealthEndpoints, ReloadOutcome,
 };
 use ice_engine::{
     build_config, build_direct_only_config, host_platform, load_index, resolve_selected_tag,
@@ -444,7 +444,19 @@ pub fn generate_config_with_cache(
 }
 
 pub fn resolve_binary(resource_dir: Option<&Path>) -> Result<PathBuf, AppError> {
-    resolve_singbox_binary(&repo_third_party_singbox(), resource_dir).map_err(AppError::from)
+    resolve_binary_with_preference(resource_dir, false)
+}
+
+pub fn resolve_binary_with_preference(
+    resource_dir: Option<&Path>,
+    prefer_resource: bool,
+) -> Result<PathBuf, AppError> {
+    let dev = repo_third_party_singbox();
+    if prefer_resource {
+        resolve_singbox_binary_preferring_resource(&dev, resource_dir).map_err(AppError::from)
+    } else {
+        resolve_singbox_binary(&dev, resource_dir).map_err(AppError::from)
+    }
 }
 
 /// Start: generate config → core.start.

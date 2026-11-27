@@ -72,14 +72,37 @@ pub fn resolve_singbox_binary(
     dev_third_party: &Path,
     resource_dir: Option<&Path>,
 ) -> Result<PathBuf, CoreError> {
+    resolve_singbox_binary_inner(dev_third_party, resource_dir, false)
+}
+
+/// Resolve binary preferring an explicit or packaged `resource_dir` over the
+/// compile-time development tree (`third_party/sing-box`).
+pub fn resolve_singbox_binary_preferring_resource(
+    dev_third_party: &Path,
+    resource_dir: Option<&Path>,
+) -> Result<PathBuf, CoreError> {
+    resolve_singbox_binary_inner(dev_third_party, resource_dir, true)
+}
+
+fn resolve_singbox_binary_inner(
+    dev_third_party: &Path,
+    resource_dir: Option<&Path>,
+    prefer_resource: bool,
+) -> Result<PathBuf, CoreError> {
     let candidates = {
         let mut list = Vec::new();
-        list.push(binary_in_target_root(dev_third_party));
+        let dev_candidate = binary_in_target_root(dev_third_party);
+        if !prefer_resource {
+            list.push(dev_candidate.clone());
+        }
         if let Some(res) = resource_dir {
             list.push(res.join(binary_file_name()));
             // Older / misconfigured bundles nested under Resources/resources/
             list.push(res.join("resources").join(binary_file_name()));
             list.push(binary_in_target_root(res));
+        }
+        if prefer_resource {
+            list.push(dev_candidate);
         }
         list
     };
@@ -162,6 +185,8 @@ mod tests {
         fs::write(&res_bin, b"res").unwrap();
         let found = resolve_singbox_binary(&root, Some(&res)).unwrap();
         assert_eq!(found, dev_bin);
+        let preferred = resolve_singbox_binary_preferring_resource(&root, Some(&res)).unwrap();
+        assert_eq!(preferred, res_bin);
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_dir_all(&res);
     }

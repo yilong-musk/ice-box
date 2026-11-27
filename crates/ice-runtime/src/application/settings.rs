@@ -255,6 +255,12 @@ pub(super) fn save_settings_inner_with_autostart(
     // records the new state.
     let mut previous_for_apply = previous.clone();
     if previous.launch_at_login != settings.launch_at_login {
+        if !state.capabilities.launch_at_login_supported {
+            return Err(AppError::new(
+                ErrorCode::AutostartFailed,
+                "launch at login is not supported in headless mode",
+            ));
+        }
         sync_autostart(settings.launch_at_login)
             .map_err(|err| AppError::new(ErrorCode::AutostartFailed, err))?;
         // Remove the login-item delta from the runtime change classification.

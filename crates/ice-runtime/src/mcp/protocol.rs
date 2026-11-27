@@ -570,6 +570,37 @@ fn respond_with(ctx: Option<&McpContext>, text: &str) -> Option<Value> {
     })
 }
 
+/// Stable MCP/control-plane error code returned when a tool call is rejected by
+/// `--read-only` or `--no-secrets`.
+pub const MCP_POLICY_DENIED: &str = "mcp.policy_denied";
+
+enum DispatchError {
+    App(AppError),
+    PolicyDenied(String),
+}
+
+impl DispatchError {
+    fn code(&self) -> &str {
+        match self {
+            Self::App(err) => err.code.as_str(),
+            Self::PolicyDenied(_) => MCP_POLICY_DENIED,
+        }
+    }
+
+    fn message(&self) -> &str {
+        match self {
+            Self::App(err) => err.message.as_str(),
+            Self::PolicyDenied(msg) => msg.as_str(),
+        }
+    }
+}
+
+impl From<AppError> for DispatchError {
+    fn from(err: AppError) -> Self {
+        Self::App(err)
+    }
+}
+
 fn call_tool(ctx: &McpContext, params: Value) -> Result<Value, (i32, String)> {
     let name = params
         .get("name")
@@ -597,12 +628,12 @@ fn call_tool(ctx: &McpContext, params: Value) -> Result<Value, (i32, String)> {
         Err(error) => Ok(json!({
             "content": [{
                 "type": "text",
-                "text": format!("{}: {}", error.code, error.message)
+                "text": format!("{}: {}", error.code(), error.message())
             }],
             "structuredContent": {
                 "error": {
-                    "code": error.code,
-                    "message": error.message
+                    "code": error.code(),
+                    "message": error.message()
                 }
             },
             "isError": true
@@ -623,36 +654,43 @@ pub(super) fn protocol_error_value(
 }
 
 /// Enforce read-only and secret-redaction policies configured on the listener.
-pub(crate) fn enforce_policy(policy: McpPolicy, name: &str) -> Result<(), AppError> {
-    if !policy.allow_secrets && name == "export_subscription" {
-        return Err(AppError::new(
+fn enforce_policy(policy: McpPolicy, name: &str) -> Result<(), DispatchError> {
+    let tool = tools()
+        .into_iter()
+        .find(|tool| tool.get("name").and_then(Value::as_str) == Some(name));
+    let Some(tool) = tool else {
+        return Err(DispatchError::App(AppError::new(
             ErrorCode::ConfigInvalid,
-            "export_subscription is disabled by --no-secrets policy",
+            format!("unknown MCP tool: {name}"),
+        )));
+    };
+    if !policy.allow_secrets && name == "export_subscription" {
+        return Err(DispatchError::PolicyDenied(
+            "export_subscription is disabled by --no-secrets policy".into(),
         ));
     }
     if policy.read_only {
-        let is_read_only = tools()
-            .into_iter()
-            .find(|tool| tool.get("name").and_then(Value::as_str) == Some(name))
-            .and_then(|tool| {
-                tool.pointer("/annotations/readOnlyHint")
-                    .and_then(Value::as_bool)
-            })
+        let is_read_only = tool
+            .pointer("/annotations/readOnlyHint")
+            .and_then(Value::as_bool)
             .unwrap_or(false);
         if !is_read_only {
-            return Err(AppError::new(
-                ErrorCode::ConfigInvalid,
-                format!("tool '{name}' is disabled by --read-only policy"),
-            ));
+            return Err(DispatchError::PolicyDenied(format!(
+                "tool '{name}' is disabled by --read-only policy"
+            )));
         }
     }
     Ok(())
 }
 
-fn dispatch_tool(ctx: &McpContext, name: &str, args: Value) -> Result<Value, AppError> {
+fn dispatch_tool(ctx: &McpContext, name: &str, args: Value) -> Result<Value, DispatchError> {
     ensure_object(&args)?;
     validate_tool_arguments(name, &args)?;
     enforce_policy(ctx.policy, name)?;
+    dispatch_tool_inner(ctx, name, args).map_err(DispatchError::from)
+}
+
+fn dispatch_tool_inner(ctx: &McpContext, name: &str, args: Value) -> Result<Value, AppError> {
     let state = ctx.state.as_ref();
     let app = &ctx.host;
     match name {
@@ -1236,5 +1274,30 @@ mod tests {
         .expect("method error");
         assert_eq!(unknown["id"], "missing");
         assert_eq!(unknown["error"]["code"], -32601);
+    }
+
+    #[test]
+    fn policy_denials_use_policy_error_code_and_unknown_tools_fail_as_unknown() {
+        let ro_no_secrets = McpPolicy {
+            read_only: true,
+            allow_secrets: false,
+        };
+
+        let unknown = enforce_policy(ro_no_secrets, "nonexistent_tool")
+            .expect_err("unknown tool must not be masked as policy denial");
+        assert_eq!(unknown.code(), ErrorCode::ConfigInvalid.as_str());
+        assert!(unknown.message().contains("unknown MCP tool"));
+
+        let ro_err = enforce_policy(ro_no_secrets, "set_proxy_mode")
+            .expect_err("mutating tool must be denied in read-only mode");
+        assert_eq!(ro_err.code(), MCP_POLICY_DENIED);
+        assert!(ro_err.message().contains("--read-only"));
+
+        let secret_err = enforce_policy(ro_no_secrets, "export_subscription")
+            .expect_err("secret export must be denied with --no-secrets");
+        assert_eq!(secret_err.code(), MCP_POLICY_DENIED);
+        assert!(secret_err.message().contains("--no-secrets"));
+
+        assert!(enforce_policy(ro_no_secrets, "get_status").is_ok());
     }
 }

@@ -39,7 +39,8 @@ pub fn exit_code_for_bridge_error(err: &BridgeError) -> i32 {
 /// Map an `ice-box` application error code string onto a CLI exit code.
 pub fn exit_code_for_error_code(code: &str) -> i32 {
     match code {
-        "tun.permission_required"
+        "mcp.policy_denied"
+        | "tun.permission_required"
         | "tun.helper_install_failed"
         | "tun.helper_install_cancelled"
         | "tun.elevation_cancelled"

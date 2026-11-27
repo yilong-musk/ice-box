@@ -14,7 +14,8 @@ mod reload;
 mod traffic;
 
 pub use binary::{
-    binary_in_target_root, current_target_dir, resolve_singbox_binary, BUNDLED_SINGBOX_VERSION,
+    binary_in_target_root, current_target_dir, resolve_singbox_binary,
+    resolve_singbox_binary_preferring_resource, BUNDLED_SINGBOX_VERSION,
 };
 pub use clash_api::{
     close_all_connections, close_connection, connections, get_mode, proxy_delay, proxy_group_heads,

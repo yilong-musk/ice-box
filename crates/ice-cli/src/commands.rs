@@ -102,7 +102,15 @@ pub fn run(args: impl IntoIterator<Item = OsString>) -> i32 {
                     }
                 }
             }
-            _ => rest.push(s),
+            _ => {
+                if rest.is_empty() && s == "exec" {
+                    // Stop intercepting global flags once `exec` starts so
+                    // child command flags (e.g. `--timeout`, `--json`) are
+                    // forwarded intact even if `--` is omitted.
+                    passthrough = true;
+                }
+                rest.push(s);
+            }
         }
     }
 
@@ -147,16 +155,22 @@ pub fn run(args: impl IntoIterator<Item = OsString>) -> i32 {
 
     match cmd {
         "daemon" | "serve" => handle_daemon(data_dir, &global, sub),
-        "mcp" => {
-            let mut bridge_args = vec![OsString::from("--data-dir"), data_dir.into_os_string()];
-            bridge_args.extend(sub.iter().map(OsString::from));
-            ice_runtime::run_mcp_stdio_bridge(bridge_args)
-        }
-        "ping" => handle_ping(&data_dir, &global),
+        "mcp" => handle_mcp(data_dir, &global, sub),
+        "ping" => handle_ping(&data_dir, &global, sub),
         "wait-ready" => handle_wait_ready(&data_dir, &global, sub),
-        "status" => invoke_and_print(&data_dir, &global, "status", "get_status", json!({})),
+        "status" => {
+            if let Some(rc) = check_no_args(&global, sub, "ice-box-cli status") {
+                return rc;
+            }
+            invoke_and_print(&data_dir, &global, "status", "get_status", json!({}))
+        }
         "start" => handle_start(&data_dir, &global, sub),
-        "stop" => invoke_and_print(&data_dir, &global, "stop", "stop_proxy_service", json!({})),
+        "stop" => {
+            if let Some(rc) = check_no_args(&global, sub, "ice-box-cli stop") {
+                return rc;
+            }
+            invoke_and_print(&data_dir, &global, "stop", "stop_proxy_service", json!({}))
+        }
         "core" => handle_core(&data_dir, &global, sub),
         "mode" => handle_mode(&data_dir, &global, sub),
         "env" => handle_env(&data_dir, &global, sub),
@@ -168,7 +182,7 @@ pub fn run(args: impl IntoIterator<Item = OsString>) -> i32 {
         "conn" | "connections" => handle_conn(&data_dir, &global, sub),
         "traffic" => handle_traffic(&data_dir, &global, sub),
         "logs" => handle_logs(&data_dir, &global, sub),
-        "config" => handle_config(&data_dir, &global),
+        "config" => handle_config(&data_dir, &global, sub),
         "settings" => handle_settings(&data_dir, &global, sub),
         "tun" => handle_tun(&data_dir, &global, sub),
         "call" => handle_call(&data_dir, &global, sub),
@@ -257,6 +271,15 @@ fn handle_daemon(data_dir: PathBuf, global: &GlobalOpts, args: &[String]) -> i32
         }
     }
 
+    if !auto_start_core && start_service {
+        emit_error(
+            global.output,
+            "cli.usage",
+            "--no-auto-start cannot be combined with --start-service",
+        );
+        return EXIT_USAGE;
+    }
+
     run_daemon(DaemonOptions {
         data_dir,
         resource_dir: global.resource_dir.clone(),
@@ -271,7 +294,37 @@ fn handle_daemon(data_dir: PathBuf, global: &GlobalOpts, args: &[String]) -> i32
     })
 }
 
-fn handle_ping(data_dir: &Path, global: &GlobalOpts) -> i32 {
+fn check_no_args(global: &GlobalOpts, args: &[String], usage: &str) -> Option<i32> {
+    if args.is_empty() {
+        return None;
+    }
+    if args.len() == 1 && matches!(args[0].as_str(), "-h" | "--help") {
+        println!("Usage: {usage}");
+        return Some(EXIT_OK);
+    }
+    emit_error(
+        global.output,
+        "cli.usage",
+        &format!("unexpected argument '{}' (usage: {usage})", args[0]),
+    );
+    Some(EXIT_USAGE)
+}
+
+fn handle_mcp(data_dir: PathBuf, global: &GlobalOpts, args: &[String]) -> i32 {
+    if let Some(rc) = check_no_args(
+        global,
+        args,
+        "ice-box-cli [--data-dir <PATH>] mcp\n\nRun the authenticated MCP stdio bridge against the running desktop app or daemon.",
+    ) {
+        return rc;
+    }
+    ice_runtime::run_mcp_stdio_bridge([OsString::from("--data-dir"), data_dir.into_os_string()])
+}
+
+fn handle_ping(data_dir: &Path, global: &GlobalOpts, args: &[String]) -> i32 {
+    if let Some(rc) = check_no_args(global, args, "ice-box-cli ping") {
+        return rc;
+    }
     match ping(data_dir, global.timeout) {
         Ok(()) => {
             if global.output.wants_json() {
@@ -375,7 +428,11 @@ fn handle_start(data_dir: &Path, global: &GlobalOpts, args: &[String]) -> i32 {
     match call_tool(data_dir, "start_proxy_service", json!({}), global.timeout) {
         Ok(out) => {
             if wait {
-                return handle_wait_ready(data_dir, global, &["--core".to_string()]);
+                return handle_wait_ready(
+                    data_dir,
+                    global,
+                    &["--core".to_string(), "--service".to_string()],
+                );
             }
             emit_tool_result(global.output, "start", &out.value);
             EXIT_OK
@@ -388,9 +445,20 @@ fn handle_start(data_dir: &Path, global: &GlobalOpts, args: &[String]) -> i32 {
 }
 
 fn handle_core(data_dir: &Path, global: &GlobalOpts, args: &[String]) -> i32 {
+    let tail = args.get(1..).unwrap_or(&[]);
     match args.first().map(String::as_str) {
-        Some("start") => invoke_and_print(data_dir, global, "core_start", "start_core", json!({})),
-        Some("stop") => invoke_and_print(data_dir, global, "core_stop", "stop_core", json!({})),
+        Some("start") => {
+            if let Some(rc) = check_no_args(global, tail, "ice-box-cli core start") {
+                return rc;
+            }
+            invoke_and_print(data_dir, global, "core_start", "start_core", json!({}))
+        }
+        Some("stop") => {
+            if let Some(rc) = check_no_args(global, tail, "ice-box-cli core stop") {
+                return rc;
+            }
+            invoke_and_print(data_dir, global, "core_stop", "stop_core", json!({}))
+        }
         Some("-h" | "--help") | None => {
             println!("Usage: ice-box-cli core <start|stop>");
             if args.is_empty() {
@@ -422,6 +490,9 @@ fn handle_mode(data_dir: &Path, global: &GlobalOpts, args: &[String]) -> i32 {
     if matches!(mode, "-h" | "--help") {
         println!("Usage: ice-box-cli mode <rule|global|direct>");
         return EXIT_OK;
+    }
+    if let Some(rc) = check_no_args(global, &args[1..], "ice-box-cli mode <rule|global|direct>") {
+        return rc;
     }
     if !matches!(mode, "rule" | "global" | "direct") {
         emit_error(
@@ -519,22 +590,28 @@ fn handle_sub(data_dir: &Path, global: &GlobalOpts, args: &[String]) -> i32 {
             );
             EXIT_OK
         }
-        "list" => invoke_and_print(
-            data_dir,
-            global,
-            "sub_list",
-            "list_subscriptions",
-            json!({}),
-        ),
+        "list" => {
+            if let Some(rc) = check_no_args(global, tail, "ice-box-cli sub list") {
+                return rc;
+            }
+            invoke_and_print(
+                data_dir,
+                global,
+                "sub_list",
+                "list_subscriptions",
+                json!({}),
+            )
+        }
         "add" => {
+            let usage = "ice-box-cli sub add <URL> [--name <NAME>] [--auto-update] [--interval 1h|3h|6h|12h|24h] [--activate]";
             let Some(url) = tail.first() else {
-                emit_error(
-                    global.output,
-                    "cli.usage",
-                    "usage: ice-box-cli sub add <URL> [--name <NAME>] [--auto-update] [--interval 1h|3h|6h|12h|24h] [--activate]",
-                );
+                emit_error(global.output, "cli.usage", &format!("usage: {usage}"));
                 return EXIT_USAGE;
             };
+            if matches!(url.as_str(), "-h" | "--help") {
+                println!("Usage: {usage}");
+                return EXIT_OK;
+            }
             let mut name: Option<String> = None;
             let mut auto_update = false;
             let mut interval: Option<String> = None;
@@ -599,14 +676,15 @@ fn handle_sub(data_dir: &Path, global: &GlobalOpts, args: &[String]) -> i32 {
             )
         }
         "import" => {
+            let usage = "ice-box-cli sub import <FILE|-> [--name <NAME>] [--activate]";
             let Some(file) = tail.first() else {
-                emit_error(
-                    global.output,
-                    "cli.usage",
-                    "usage: ice-box-cli sub import <FILE|-> [--name <NAME>] [--activate]",
-                );
+                emit_error(global.output, "cli.usage", &format!("usage: {usage}"));
                 return EXIT_USAGE;
             };
+            if matches!(file.as_str(), "-h" | "--help") {
+                println!("Usage: {usage}");
+                return EXIT_OK;
+            }
             let mut name: Option<String> = None;
             let mut activate = false;
             let mut i = 1;
@@ -664,14 +742,18 @@ fn handle_sub(data_dir: &Path, global: &GlobalOpts, args: &[String]) -> i32 {
             )
         }
         "update" => {
+            let usage = "ice-box-cli sub update <ID>";
             let Some(id) = tail.first() else {
-                emit_error(
-                    global.output,
-                    "cli.usage",
-                    "usage: ice-box-cli sub update <ID>",
-                );
+                emit_error(global.output, "cli.usage", &format!("usage: {usage}"));
                 return EXIT_USAGE;
             };
+            if matches!(id.as_str(), "-h" | "--help") {
+                println!("Usage: {usage}");
+                return EXIT_OK;
+            }
+            if let Some(rc) = check_no_args(global, &tail[1..], usage) {
+                return rc;
+            }
             invoke_and_print(
                 data_dir,
                 global,
@@ -681,14 +763,18 @@ fn handle_sub(data_dir: &Path, global: &GlobalOpts, args: &[String]) -> i32 {
             )
         }
         "use" => {
+            let usage = "ice-box-cli sub use <ID>";
             let Some(id) = tail.first() else {
-                emit_error(
-                    global.output,
-                    "cli.usage",
-                    "usage: ice-box-cli sub use <ID>",
-                );
+                emit_error(global.output, "cli.usage", &format!("usage: {usage}"));
                 return EXIT_USAGE;
             };
+            if matches!(id.as_str(), "-h" | "--help") {
+                println!("Usage: {usage}");
+                return EXIT_OK;
+            }
+            if let Some(rc) = check_no_args(global, &tail[1..], usage) {
+                return rc;
+            }
             invoke_and_print(
                 data_dir,
                 global,
@@ -698,14 +784,18 @@ fn handle_sub(data_dir: &Path, global: &GlobalOpts, args: &[String]) -> i32 {
             )
         }
         "deactivate" => {
+            let usage = "ice-box-cli sub deactivate <ID>";
             let Some(id) = tail.first() else {
-                emit_error(
-                    global.output,
-                    "cli.usage",
-                    "usage: ice-box-cli sub deactivate <ID>",
-                );
+                emit_error(global.output, "cli.usage", &format!("usage: {usage}"));
                 return EXIT_USAGE;
             };
+            if matches!(id.as_str(), "-h" | "--help") {
+                println!("Usage: {usage}");
+                return EXIT_OK;
+            }
+            if let Some(rc) = check_no_args(global, &tail[1..], usage) {
+                return rc;
+            }
             invoke_and_print(
                 data_dir,
                 global,
@@ -715,10 +805,18 @@ fn handle_sub(data_dir: &Path, global: &GlobalOpts, args: &[String]) -> i32 {
             )
         }
         "rm" | "remove" => {
+            let usage = "ice-box-cli sub rm <ID>";
             let Some(id) = tail.first() else {
-                emit_error(global.output, "cli.usage", "usage: ice-box-cli sub rm <ID>");
+                emit_error(global.output, "cli.usage", &format!("usage: {usage}"));
                 return EXIT_USAGE;
             };
+            if matches!(id.as_str(), "-h" | "--help") {
+                println!("Usage: {usage}");
+                return EXIT_OK;
+            }
+            if let Some(rc) = check_no_args(global, &tail[1..], usage) {
+                return rc;
+            }
             invoke_and_print(
                 data_dir,
                 global,
@@ -728,12 +826,13 @@ fn handle_sub(data_dir: &Path, global: &GlobalOpts, args: &[String]) -> i32 {
             )
         }
         "auto-update" => {
+            let usage = "ice-box-cli sub auto-update <ID> <on|off> [--interval 1h|3h|6h|12h|24h]";
+            if tail.first().is_some_and(|a| a == "-h" || a == "--help") {
+                println!("Usage: {usage}");
+                return EXIT_OK;
+            }
             let (Some(id), Some(flag)) = (tail.first(), tail.get(1)) else {
-                emit_error(
-                    global.output,
-                    "cli.usage",
-                    "usage: ice-box-cli sub auto-update <ID> <on|off> [--interval 1h|3h|6h|12h|24h]",
-                );
+                emit_error(global.output, "cli.usage", &format!("usage: {usage}"));
                 return EXIT_USAGE;
             };
             let enabled = match flag.as_str() {
@@ -786,14 +885,15 @@ fn handle_sub(data_dir: &Path, global: &GlobalOpts, args: &[String]) -> i32 {
             )
         }
         "export" => {
+            let usage = "ice-box-cli sub export <ID> [--kind url|singbox]";
             let Some(id) = tail.first() else {
-                emit_error(
-                    global.output,
-                    "cli.usage",
-                    "usage: ice-box-cli sub export <ID> [--kind url|singbox]",
-                );
+                emit_error(global.output, "cli.usage", &format!("usage: {usage}"));
                 return EXIT_USAGE;
             };
+            if matches!(id.as_str(), "-h" | "--help") {
+                println!("Usage: {usage}");
+                return EXIT_OK;
+            }
             let mut kind = "singbox".to_string();
             let mut i = 1;
             while i < tail.len() {
@@ -850,16 +950,25 @@ fn handle_node(data_dir: &Path, global: &GlobalOpts, args: &[String]) -> i32 {
             );
             EXIT_OK
         }
-        "list" => invoke_and_print(data_dir, global, "node_list", "list_nodes", json!({})),
+        "list" => {
+            if let Some(rc) = check_no_args(global, tail, "ice-box-cli node list") {
+                return rc;
+            }
+            invoke_and_print(data_dir, global, "node_list", "list_nodes", json!({}))
+        }
         "use" => {
+            let usage = "ice-box-cli node use <TAG>";
             let Some(tag) = tail.first() else {
-                emit_error(
-                    global.output,
-                    "cli.usage",
-                    "usage: ice-box-cli node use <TAG>",
-                );
+                emit_error(global.output, "cli.usage", &format!("usage: {usage}"));
                 return EXIT_USAGE;
             };
+            if matches!(tag.as_str(), "-h" | "--help") {
+                println!("Usage: {usage}");
+                return EXIT_OK;
+            }
+            if let Some(rc) = check_no_args(global, &tail[1..], usage) {
+                return rc;
+            }
             invoke_and_print(
                 data_dir,
                 global,
@@ -869,14 +978,18 @@ fn handle_node(data_dir: &Path, global: &GlobalOpts, args: &[String]) -> i32 {
             )
         }
         "group" => {
+            let usage = "ice-box-cli node group <GROUP> <MEMBER>";
+            if tail.first().is_some_and(|a| a == "-h" || a == "--help") {
+                println!("Usage: {usage}");
+                return EXIT_OK;
+            }
             let (Some(group), Some(member)) = (tail.first(), tail.get(1)) else {
-                emit_error(
-                    global.output,
-                    "cli.usage",
-                    "usage: ice-box-cli node group <GROUP> <MEMBER>",
-                );
+                emit_error(global.output, "cli.usage", &format!("usage: {usage}"));
                 return EXIT_USAGE;
             };
+            if let Some(rc) = check_no_args(global, &tail[2..], usage) {
+                return rc;
+            }
             invoke_and_print(
                 data_dir,
                 global,
@@ -886,14 +999,18 @@ fn handle_node(data_dir: &Path, global: &GlobalOpts, args: &[String]) -> i32 {
             )
         }
         "test" => {
+            let usage = "ice-box-cli node test <TAG>";
             let Some(tag) = tail.first() else {
-                emit_error(
-                    global.output,
-                    "cli.usage",
-                    "usage: ice-box-cli node test <TAG>",
-                );
+                emit_error(global.output, "cli.usage", &format!("usage: {usage}"));
                 return EXIT_USAGE;
             };
+            if matches!(tag.as_str(), "-h" | "--help") {
+                println!("Usage: {usage}");
+                return EXIT_OK;
+            }
+            if let Some(rc) = check_no_args(global, &tail[1..], usage) {
+                return rc;
+            }
             invoke_and_print(
                 data_dir,
                 global,
@@ -936,13 +1053,18 @@ fn handle_rule(data_dir: &Path, global: &GlobalOpts, args: &[String]) -> i32 {
             );
             EXIT_OK
         }
-        "overview" => invoke_and_print(
-            data_dir,
-            global,
-            "rule_overview",
-            "get_rule_overview",
-            json!({}),
-        ),
+        "overview" => {
+            if let Some(rc) = check_no_args(global, tail, "ice-box-cli rule overview") {
+                return rc;
+            }
+            invoke_and_print(
+                data_dir,
+                global,
+                "rule_overview",
+                "get_rule_overview",
+                json!({}),
+            )
+        }
         "list" => {
             let mut payload = serde_json::Map::new();
             let mut i = 0;
@@ -1019,14 +1141,18 @@ fn handle_rule(data_dir: &Path, global: &GlobalOpts, args: &[String]) -> i32 {
             )
         }
         "enable" | "disable" => {
+            let usage = format!("ice-box-cli rule {action} <FINGERPRINT>");
             let Some(fp) = tail.first() else {
-                emit_error(
-                    global.output,
-                    "cli.usage",
-                    &format!("usage: ice-box-cli rule {action} <FINGERPRINT>"),
-                );
+                emit_error(global.output, "cli.usage", &format!("usage: {usage}"));
                 return EXIT_USAGE;
             };
+            if matches!(fp.as_str(), "-h" | "--help") {
+                println!("Usage: {usage}");
+                return EXIT_OK;
+            }
+            if let Some(rc) = check_no_args(global, &tail[1..], &usage) {
+                return rc;
+            }
             invoke_and_print(
                 data_dir,
                 global,
@@ -1036,6 +1162,10 @@ fn handle_rule(data_dir: &Path, global: &GlobalOpts, args: &[String]) -> i32 {
             )
         }
         "add" => {
+            if tail.first().is_some_and(|a| a == "-h" || a == "--help") {
+                println!("Usage: ice-box-cli rule add <JSON|--stdin>");
+                return EXIT_OK;
+            }
             let rule = match parse_json_arg(tail) {
                 Ok(v) => v,
                 Err(msg) => {
@@ -1052,14 +1182,15 @@ fn handle_rule(data_dir: &Path, global: &GlobalOpts, args: &[String]) -> i32 {
             )
         }
         "update" => {
+            let usage = "ice-box-cli rule update <FINGERPRINT> <JSON|--stdin>";
             let Some(fp) = tail.first() else {
-                emit_error(
-                    global.output,
-                    "cli.usage",
-                    "usage: ice-box-cli rule update <FINGERPRINT> <JSON|--stdin>",
-                );
+                emit_error(global.output, "cli.usage", &format!("usage: {usage}"));
                 return EXIT_USAGE;
             };
+            if matches!(fp.as_str(), "-h" | "--help") {
+                println!("Usage: {usage}");
+                return EXIT_OK;
+            }
             let rule = match parse_json_arg(&tail[1..]) {
                 Ok(v) => v,
                 Err(msg) => {
@@ -1076,14 +1207,18 @@ fn handle_rule(data_dir: &Path, global: &GlobalOpts, args: &[String]) -> i32 {
             )
         }
         "rm" | "remove" => {
+            let usage = "ice-box-cli rule rm <FINGERPRINT>";
             let Some(fp) = tail.first() else {
-                emit_error(
-                    global.output,
-                    "cli.usage",
-                    "usage: ice-box-cli rule rm <FINGERPRINT>",
-                );
+                emit_error(global.output, "cli.usage", &format!("usage: {usage}"));
                 return EXIT_USAGE;
             };
+            if matches!(fp.as_str(), "-h" | "--help") {
+                println!("Usage: {usage}");
+                return EXIT_OK;
+            }
+            if let Some(rc) = check_no_args(global, &tail[1..], usage) {
+                return rc;
+            }
             invoke_and_print(
                 data_dir,
                 global,
@@ -1104,21 +1239,32 @@ fn handle_rule(data_dir: &Path, global: &GlobalOpts, args: &[String]) -> i32 {
 }
 
 fn handle_ruleset(data_dir: &Path, global: &GlobalOpts, args: &[String]) -> i32 {
+    let tail = args.get(1..).unwrap_or(&[]);
     match args.first().map(String::as_str) {
-        Some("list") => invoke_and_print(
-            data_dir,
-            global,
-            "ruleset_list",
-            "list_rule_sets",
-            json!({}),
-        ),
-        Some("refresh") => invoke_and_print(
-            data_dir,
-            global,
-            "ruleset_refresh",
-            "refresh_rule_sets",
-            json!({}),
-        ),
+        Some("list") => {
+            if let Some(rc) = check_no_args(global, tail, "ice-box-cli ruleset list") {
+                return rc;
+            }
+            invoke_and_print(
+                data_dir,
+                global,
+                "ruleset_list",
+                "list_rule_sets",
+                json!({}),
+            )
+        }
+        Some("refresh") => {
+            if let Some(rc) = check_no_args(global, tail, "ice-box-cli ruleset refresh") {
+                return rc;
+            }
+            invoke_and_print(
+                data_dir,
+                global,
+                "ruleset_refresh",
+                "refresh_rule_sets",
+                json!({}),
+            )
+        }
         Some("-h" | "--help") | None => {
             println!("Usage: ice-box-cli ruleset <list|refresh>");
             if args.is_empty() {
@@ -1191,14 +1337,18 @@ fn handle_conn(data_dir: &Path, global: &GlobalOpts, args: &[String]) -> i32 {
             )
         }
         "close" => {
+            let usage = "ice-box-cli conn close <ID>";
             let Some(id) = tail.first() else {
-                emit_error(
-                    global.output,
-                    "cli.usage",
-                    "usage: ice-box-cli conn close <ID>",
-                );
+                emit_error(global.output, "cli.usage", &format!("usage: {usage}"));
                 return EXIT_USAGE;
             };
+            if matches!(id.as_str(), "-h" | "--help") {
+                println!("Usage: {usage}");
+                return EXIT_OK;
+            }
+            if let Some(rc) = check_no_args(global, &tail[1..], usage) {
+                return rc;
+            }
             invoke_and_print(
                 data_dir,
                 global,
@@ -1207,13 +1357,18 @@ fn handle_conn(data_dir: &Path, global: &GlobalOpts, args: &[String]) -> i32 {
                 json!({ "id": id }),
             )
         }
-        "close-all" => invoke_and_print(
-            data_dir,
-            global,
-            "conn_close_all",
-            "close_all_connections",
-            json!({}),
-        ),
+        "close-all" => {
+            if let Some(rc) = check_no_args(global, tail, "ice-box-cli conn close-all") {
+                return rc;
+            }
+            invoke_and_print(
+                data_dir,
+                global,
+                "conn_close_all",
+                "close_all_connections",
+                json!({}),
+            )
+        }
         other => {
             emit_error(
                 global.output,
@@ -1248,6 +1403,11 @@ fn handle_traffic(data_dir: &Path, global: &GlobalOpts, args: &[String]) -> i32 
             );
             return EXIT_USAGE;
         };
+        if let Some(rc) =
+            check_no_args(global, &args[2..], "ice-box-cli traffic [--since <CURSOR>]")
+        {
+            return rc;
+        }
         return invoke_and_print(
             data_dir,
             global,
@@ -1298,7 +1458,10 @@ fn handle_logs(data_dir: &Path, global: &GlobalOpts, args: &[String]) -> i32 {
     invoke_and_print(data_dir, global, "logs", "get_logs", Value::Object(payload))
 }
 
-fn handle_config(data_dir: &Path, global: &GlobalOpts) -> i32 {
+fn handle_config(data_dir: &Path, global: &GlobalOpts, args: &[String]) -> i32 {
+    if let Some(rc) = check_no_args(global, args, "ice-box-cli config") {
+        return rc;
+    }
     match call_tool(data_dir, "get_runtime_config", json!({}), global.timeout) {
         Ok(out) => {
             if global.output.wants_json_for_raw() {
@@ -1318,12 +1481,20 @@ fn handle_config(data_dir: &Path, global: &GlobalOpts) -> i32 {
 }
 
 fn handle_settings(data_dir: &Path, global: &GlobalOpts, args: &[String]) -> i32 {
+    let tail = args.get(1..).unwrap_or(&[]);
     match args.first().map(String::as_str) {
         Some("get") | None => {
+            if let Some(rc) = check_no_args(global, tail, "ice-box-cli settings get") {
+                return rc;
+            }
             invoke_and_print(data_dir, global, "settings_get", "get_settings", json!({}))
         }
         Some("set") => {
-            let patch = match parse_json_arg(&args[1..]) {
+            if tail.first().is_some_and(|a| a == "-h" || a == "--help") {
+                println!("Usage: ice-box-cli settings set <JSON|--stdin>");
+                return EXIT_OK;
+            }
+            let patch = match parse_json_arg(tail) {
                 Ok(v) => v,
                 Err(msg) => {
                     emit_error(global.output, "cli.usage", &msg);
@@ -1354,38 +1525,62 @@ fn handle_settings(data_dir: &Path, global: &GlobalOpts, args: &[String]) -> i32
 }
 
 fn handle_tun(data_dir: &Path, global: &GlobalOpts, args: &[String]) -> i32 {
+    let tail = args.get(1..).unwrap_or(&[]);
     match args.first().map(String::as_str) {
         Some("recover") => {
+            if let Some(rc) = check_no_args(global, tail, "ice-box-cli tun recover") {
+                return rc;
+            }
             invoke_and_print(data_dir, global, "tun_recover", "recover_tun", json!({}))
         }
-        Some("install-helper") => invoke_and_print(
-            data_dir,
-            global,
-            "tun_install",
-            "install_tun_helper",
-            json!({}),
-        ),
-        Some("uninstall-helper") => invoke_and_print(
-            data_dir,
-            global,
-            "tun_uninstall",
-            "uninstall_tun_helper",
-            json!({}),
-        ),
-        Some("ensure-elevation") => invoke_and_print(
-            data_dir,
-            global,
-            "tun_ensure",
-            "ensure_tun_elevation",
-            json!({}),
-        ),
-        Some("remove-elevation") => invoke_and_print(
-            data_dir,
-            global,
-            "tun_remove",
-            "remove_tun_elevation",
-            json!({}),
-        ),
+        Some("install-helper") => {
+            if let Some(rc) = check_no_args(global, tail, "ice-box-cli tun install-helper") {
+                return rc;
+            }
+            invoke_and_print(
+                data_dir,
+                global,
+                "tun_install",
+                "install_tun_helper",
+                json!({}),
+            )
+        }
+        Some("uninstall-helper") => {
+            if let Some(rc) = check_no_args(global, tail, "ice-box-cli tun uninstall-helper") {
+                return rc;
+            }
+            invoke_and_print(
+                data_dir,
+                global,
+                "tun_uninstall",
+                "uninstall_tun_helper",
+                json!({}),
+            )
+        }
+        Some("ensure-elevation") => {
+            if let Some(rc) = check_no_args(global, tail, "ice-box-cli tun ensure-elevation") {
+                return rc;
+            }
+            invoke_and_print(
+                data_dir,
+                global,
+                "tun_ensure",
+                "ensure_tun_elevation",
+                json!({}),
+            )
+        }
+        Some("remove-elevation") => {
+            if let Some(rc) = check_no_args(global, tail, "ice-box-cli tun remove-elevation") {
+                return rc;
+            }
+            invoke_and_print(
+                data_dir,
+                global,
+                "tun_remove",
+                "remove_tun_elevation",
+                json!({}),
+            )
+        }
         Some("-h" | "--help") | None => {
             println!(
                 "Usage: ice-box-cli tun <recover|install-helper|uninstall-helper|ensure-elevation|remove-elevation>"
@@ -1449,7 +1644,7 @@ fn handle_tools(global: &GlobalOpts, args: &[String]) -> i32 {
         mcp::tools()
     };
 
-    if matches!(global.output, OutputMode::Human) {
+    if !global.output.wants_json() {
         for tool in &catalog {
             let name = tool.get("name").and_then(Value::as_str).unwrap_or("-");
             let ro = tool
@@ -1494,6 +1689,9 @@ fn handle_schema(global: &GlobalOpts, args: &[String]) -> i32 {
              Print the JSON input schema and annotations for one control/MCP tool."
         );
         return EXIT_OK;
+    }
+    if let Some(rc) = check_no_args(global, &args[1..], "ice-box-cli schema <TOOL_NAME>") {
+        return rc;
     }
     let Some(tool) = mcp::tools()
         .into_iter()
@@ -1616,6 +1814,9 @@ fn parse_json_arg(args: &[String]) -> Result<Value, String> {
     let Some(first) = args.first() else {
         return Err("expected a JSON argument or --stdin".into());
     };
+    if let Some(extra) = args.get(1) {
+        return Err(format!("unexpected trailing argument '{extra}'"));
+    }
     let text = if first == "--stdin" || first == "-" {
         let mut buf = String::new();
         std::io::stdin()
