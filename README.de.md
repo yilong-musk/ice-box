@@ -24,7 +24,7 @@ Schlanker Proxy-Client für macOS, Windows, Linux und Android — aufgebaut auf 
 <br>
 
 <a href="https://yilong-musk.github.io/ice-box/">
-  <img src="docs/images/hero.png" alt="ice-box Desktop- und Android-Oberfläche" width="880">
+  <img src="docs/images/hero.de.webp" alt="ice-box Desktop- und Android-Oberfläche" width="880">
 </a>
 
 <sub>Probiere die Desktop- und Android-Oberflächen direkt im Browser über die <a href="https://yilong-musk.github.io/ice-box/">Live-Demo</a> aus.</sub>

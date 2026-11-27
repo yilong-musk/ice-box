@@ -24,7 +24,7 @@
 <br>
 
 <a href="https://yilong-musk.github.io/ice-box/">
-  <img src="docs/images/hero.png" alt="Интерфейс ice-box для ПК и Android" width="880">
+  <img src="docs/images/hero.ru.webp" alt="Интерфейс ice-box для ПК и Android" width="880">
 </a>
 
 <sub>Опробуйте интерфейсы для ПК и Android прямо в браузере в <a href="https://yilong-musk.github.io/ice-box/">Интерактивном демо</a>.</sub>

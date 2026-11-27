@@ -24,7 +24,7 @@
 <br>
 
 <a href="https://yilong-musk.github.io/ice-box/">
-  <img src="docs/images/hero.png" alt="رابط کاربری ice-box در دسکتاپ و Android" width="880">
+  <img src="docs/images/hero.fa.webp" alt="رابط کاربری ice-box در دسکتاپ و Android" width="880">
 </a>
 
 <sub>رابط کاربری دسکتاپ و Android را در مرورگر از طریق <a href="https://yilong-musk.github.io/ice-box/">دموی زنده</a> امتحان کنید.</sub>

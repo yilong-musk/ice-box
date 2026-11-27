@@ -24,7 +24,7 @@
 <br>
 
 <a href="https://yilong-musk.github.io/ice-box/">
-  <img src="docs/images/hero.png" alt="Giao diện máy tính và Android của ice-box" width="880">
+  <img src="docs/images/hero.vi.webp" alt="Giao diện máy tính và Android của ice-box" width="880">
 </a>
 
 <sub>Trải nghiệm giao diện máy tính và Android ngay trong trình duyệt qua <a href="https://yilong-musk.github.io/ice-box/">Demo trực tiếp</a>.</sub>

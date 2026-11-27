@@ -24,7 +24,7 @@ Client proxy léger pour macOS, Windows, Linux et Android — basé sur [sing-bo
 <br>
 
 <a href="https://yilong-musk.github.io/ice-box/">
-  <img src="docs/images/hero.png" alt="Interface bureau et Android d'ice-box" width="880">
+  <img src="docs/images/hero.fr.webp" alt="Interface bureau et Android d'ice-box" width="880">
 </a>
 
 <sub>Essayez les interfaces bureau et Android dans votre navigateur via la <a href="https://yilong-musk.github.io/ice-box/">Démo en direct</a>.</sub>

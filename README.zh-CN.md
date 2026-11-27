@@ -24,7 +24,7 @@
 <br>
 
 <a href="https://yilong-musk.github.io/ice-box/">
-  <img src="docs/images/hero.zh-CN.png" alt="ice-box 桌面端与 Android 界面" width="880">
+  <img src="docs/images/hero.zh-CN.webp" alt="ice-box 桌面端与 Android 界面" width="880">
 </a>
 
 <sub>通过 <a href="https://yilong-musk.github.io/ice-box/">在线演示</a> 在浏览器中体验桌面端与 Android 界面。</sub>

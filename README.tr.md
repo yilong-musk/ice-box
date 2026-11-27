@@ -24,7 +24,7 @@ macOS, Windows, Linux ve Android için hafif proxy istemcisi — [sing-box](http
 <br>
 
 <a href="https://yilong-musk.github.io/ice-box/">
-  <img src="docs/images/hero.png" alt="ice-box masaüstü ve Android arayüzü" width="880">
+  <img src="docs/images/hero.tr.webp" alt="ice-box masaüstü ve Android arayüzü" width="880">
 </a>
 
 <sub><a href="https://yilong-musk.github.io/ice-box/">Canlı Demo</a> ile masaüstü ve Android arayüzlerini tarayıcınızda deneyin.</sub>

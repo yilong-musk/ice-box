@@ -24,7 +24,7 @@ Klien proksi ringan untuk macOS, Windows, Linux, dan Android — dibangun di ata
 <br>
 
 <a href="https://yilong-musk.github.io/ice-box/">
-  <img src="docs/images/hero.png" alt="Antarmuka desktop dan Android ice-box" width="880">
+  <img src="docs/images/hero.id.webp" alt="Antarmuka desktop dan Android ice-box" width="880">
 </a>
 
 <sub>Coba antarmuka desktop dan Android langsung di browser melalui <a href="https://yilong-musk.github.io/ice-box/">Demo Langsung</a>.</sub>

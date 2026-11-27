@@ -24,7 +24,7 @@ macOS、Windows、Linux、Android 向けの軽量プロキシクライアント 
 <br>
 
 <a href="https://yilong-musk.github.io/ice-box/">
-  <img src="docs/images/hero.png" alt="ice-box デスクトップおよび Android UI" width="880">
+  <img src="docs/images/hero.ja.webp" alt="ice-box デスクトップおよび Android UI" width="880">
 </a>
 
 <sub><a href="https://yilong-musk.github.io/ice-box/">ライブデモ</a>からブラウザ上でデスクトップ版と Android 版の UI を試せます。</sub>

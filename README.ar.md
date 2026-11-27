@@ -24,7 +24,7 @@
 <br>
 
 <a href="https://yilong-musk.github.io/ice-box/">
-  <img src="docs/images/hero.png" alt="واجهة ice-box على سطح المكتب وAndroid" width="880">
+  <img src="docs/images/hero.ar.webp" alt="واجهة ice-box على سطح المكتب وAndroid" width="880">
 </a>
 
 <sub>جرّب واجهتي سطح المكتب وAndroid داخل المتصفح عبر <a href="https://yilong-musk.github.io/ice-box/">العرض التفاعلي</a>.</sub>

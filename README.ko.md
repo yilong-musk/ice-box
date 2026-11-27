@@ -24,7 +24,7 @@ macOS, Windows, Linux, Android를 위한 가벼운 프록시 클라이언트 —
 <br>
 
 <a href="https://yilong-musk.github.io/ice-box/">
-  <img src="docs/images/hero.png" alt="ice-box 데스크톱 및 Android UI" width="880">
+  <img src="docs/images/hero.ko.webp" alt="ice-box 데스크톱 및 Android UI" width="880">
 </a>
 
 <sub><a href="https://yilong-musk.github.io/ice-box/">라이브 데모</a>를 통해 브라우저에서 데스크톱 및 Android UI를 바로 체험해 보세요.</sub>
