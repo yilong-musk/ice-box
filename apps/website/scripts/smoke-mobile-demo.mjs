@@ -16,6 +16,10 @@
  *   - the VPN power button toggles and the node list follows it
  *   - capture mode keeps the subscription expiry in the future
  *   - language and theme changes on the site reach the iframe
+ *   - the download platform rail supports click/keyboard navigation without
+ *     intercepting modified shortcuts, keeps desktop panel height and note-box
+ *     alignment consistent, preserves state across language switches, and
+ *     refines Linux architecture without overriding manual selection
  *
  * Usage:
  *   (cd apps/website && npm run build && npm run test:mobile-demo)
@@ -113,6 +117,154 @@ async function waitForAttribute(locator, name, expected, timeoutMs = 15_000) {
   }
   if ((await locator.getAttribute(name)) === expected) return;
   throw new Error(`${name} did not become ${expected}`);
+}
+
+const DOWNLOAD_PLATFORMS = ["macos", "windows", "linux", "android"];
+
+/** Measure desktop download panel height, note-box clearance, and bottom edge across all 4 tabs. */
+async function assertUniformDesktopDownloadPanel(page, label) {
+  const metrics = [];
+  for (const platform of DOWNLOAD_PLATFORMS) {
+    await page.locator(`[data-download-tab="${platform}"]`).click();
+    const m = await page.evaluate(async (plat) => {
+      const panel = document.querySelector(".download-panel");
+      const pane = document.querySelector(`[data-download-panel="${plat}"]`);
+      // Wait for the pane's translateY entrance animation to settle before reading rects.
+      await Promise.all(
+        pane.getAnimations().map((animation) => animation.finished.catch(() => {})),
+      );
+      const noteBox = pane.querySelector(".download-note-box");
+      const above =
+        plat === "linux"
+          ? pane.querySelector(".download-files")
+          : pane.querySelector(".download-action-row");
+      const panelRect = panel.getBoundingClientRect();
+      const noteRect = noteBox.getBoundingClientRect();
+      const aboveRect = above.getBoundingClientRect();
+      return {
+        platform: plat,
+        panelHeight: panelRect.height,
+        noteGap: noteRect.top - aboveRect.bottom,
+        noteBottomOffset: panelRect.bottom - noteRect.bottom,
+      };
+    }, platform);
+    if (m.noteGap < 17) {
+      throw new Error(
+        `${label}: ${platform} note-box gap collapsed to ${m.noteGap.toFixed(1)}px`,
+      );
+    }
+    metrics.push(m);
+  }
+  const heights = metrics.map((m) => m.panelHeight);
+  if (Math.max(...heights) - Math.min(...heights) > 0.5) {
+    throw new Error(
+      `${label}: desktop download panel heights diverged: ${JSON.stringify(metrics)}`,
+    );
+  }
+  const bottomOffsets = metrics.map((m) => m.noteBottomOffset);
+  if (Math.max(...bottomOffsets) - Math.min(...bottomOffsets) > 0.5) {
+    throw new Error(
+      `${label}: desktop note-box bottom alignment diverged: ${JSON.stringify(metrics)}`,
+    );
+  }
+}
+
+async function verifyDownloadDesktopAndMobile(browser) {
+  // Just above the 960px breakpoint: still 2-column desktop, vertical rail, uniform height.
+  const narrowDesktop = await browser.newContext({
+    viewport: { width: 970, height: 900 },
+    locale: "en-US",
+    userAgent:
+      "Mozilla/5.0 (Windows NT 10.0; Win64; ARM64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+  });
+  try {
+    await narrowDesktop.addInitScript(() => {
+      window.localStorage.setItem("ice-box.language", "en");
+    });
+    const p = await narrowDesktop.newPage();
+    await p.goto(`${BASE_URL}/#download`, { waitUntil: "domcontentloaded" });
+    await p.evaluate(() => document.fonts.ready);
+    await waitForAttribute(p.locator(".download-rail"), "aria-orientation", "vertical");
+    // Non-Linux ARM64 UA still defaults the Linux tab to x64.
+    await p.locator('[data-download-tab="linux"]').click();
+    await waitForAttribute(p.locator('[data-linux-arch="amd64"]'), "aria-pressed", "true");
+    await assertUniformDesktopDownloadPanel(p, "970px en");
+    await p.setViewportSize({ width: 390, height: 844 });
+    await waitForAttribute(p.locator(".download-rail"), "aria-orientation", "horizontal");
+  } finally {
+    await narrowDesktop.close();
+  }
+
+  // Linux frozen x86_64 UA refined to arm64 via Client Hints: auto-updates when untouched.
+  const frozenLinuxUa =
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
+  const autoRefineCtx = await browser.newContext({
+    viewport: { width: 1280, height: 900 },
+    locale: "en-US",
+    userAgent: frozenLinuxUa,
+  });
+  try {
+    await autoRefineCtx.addInitScript(() => {
+      window.localStorage.setItem("ice-box.language", "en");
+      Object.defineProperty(navigator, "userAgentData", {
+        configurable: true,
+        value: {
+          getHighEntropyValues: async () => ({ architecture: "arm" }),
+        },
+      });
+    });
+    const p = await autoRefineCtx.newPage();
+    await p.goto(`${BASE_URL}/#download`, { waitUntil: "domcontentloaded" });
+    await waitForAttribute(p.locator('[data-linux-arch="arm64"]'), "aria-pressed", "true");
+    const heroHref = await p.locator(".hero-download").getAttribute("href");
+    const appimageHref = await p.locator('[data-linux-format="appimage"]').getAttribute("href");
+    const debHref = await p.locator('[data-linux-format="deb"]').getAttribute("href");
+    if (!heroHref?.endsWith("_aarch64.AppImage") || !appimageHref?.endsWith("_aarch64.AppImage") || !debHref?.endsWith("_arm64.deb")) {
+      throw new Error(
+        `refineLinuxArch auto-update failed: ${JSON.stringify({ heroHref, appimageHref, debHref })}`,
+      );
+    }
+  } finally {
+    await autoRefineCtx.close();
+  }
+
+  // Deferred Client Hints resolution must not override an explicit user selection.
+  const manualArchCtx = await browser.newContext({
+    viewport: { width: 1280, height: 900 },
+    locale: "en-US",
+    userAgent: frozenLinuxUa,
+  });
+  try {
+    await manualArchCtx.addInitScript(() => {
+      window.localStorage.setItem("ice-box.language", "en");
+      Object.defineProperty(navigator, "userAgentData", {
+        configurable: true,
+        value: {
+          getHighEntropyValues: () =>
+            new Promise((resolve) => {
+              window.__resolveArchHint = () => resolve({ architecture: "arm" });
+            }),
+        },
+      });
+    });
+    const p = await manualArchCtx.newPage();
+    await p.goto(`${BASE_URL}/#download`, { waitUntil: "domcontentloaded" });
+    await p.locator('[data-linux-arch="amd64"]').click();
+    await p.evaluate(() => window.__resolveArchHint());
+    await p.waitForFunction(() =>
+      document.querySelector(".hero-download")?.getAttribute("href")?.endsWith("_aarch64.AppImage"),
+    );
+    const pressed = await p.locator('[data-linux-arch="amd64"]').getAttribute("aria-pressed");
+    const appimageHref = await p.locator('[data-linux-format="appimage"]').getAttribute("href");
+    const debHref = await p.locator('[data-linux-format="deb"]').getAttribute("href");
+    if (pressed !== "true" || !appimageHref?.endsWith("_amd64.AppImage") || !debHref?.endsWith("_amd64.deb")) {
+      throw new Error(
+        `refineLinuxArch overwrote manual x64 pick: ${JSON.stringify({ pressed, appimageHref, debHref })}`,
+      );
+    }
+  } finally {
+    await manualArchCtx.close();
+  }
 }
 
 const preview = startPreview();
@@ -299,10 +451,57 @@ try {
   await tabs.nth(0).click();
   await frame.locator('[data-active="true"]:has(> [data-testid="home-panel"])').waitFor();
 
+  // Verify the download section's tablist navigation, Linux arch switcher, and
+  // uniform desktop height before and after toggling the page language.
+  await page.locator("#download").scrollIntoViewIfNeeded();
+  await page.evaluate(() => document.fonts.ready);
+  await waitForAttribute(page.locator(".download-rail"), "aria-orientation", "vertical");
+  await assertUniformDesktopDownloadPanel(page, "1280px en");
+
+  const macosTab = page.locator('[data-download-tab="macos"]');
+  await macosTab.click();
+  await macosTab.focus();
+  await page.keyboard.press("ArrowDown");
+  await waitForAttribute(page.locator('[data-download-tab="windows"]'), "aria-selected", "true");
+  await page.keyboard.press("End");
+  await waitForAttribute(page.locator('[data-download-tab="android"]'), "aria-selected", "true");
+  await page.keyboard.press("ArrowLeft");
+  await waitForAttribute(page.locator('[data-download-tab="linux"]'), "aria-selected", "true");
+  for (const shortcut of ["Alt+ArrowLeft", "Meta+ArrowRight", "Control+ArrowDown", "Shift+ArrowRight"]) {
+    await page.keyboard.press(shortcut);
+    if ((await page.locator('[data-download-tab="linux"]').getAttribute("aria-selected")) !== "true") {
+      throw new Error(`download tablist intercepted modified shortcut ${shortcut}`);
+    }
+  }
+
+  await page.locator('[data-linux-arch="amd64"]').click();
+  await waitForAttribute(page.locator('[data-linux-arch="amd64"]'), "aria-pressed", "true");
+  if (!(await page.locator('[data-linux-format="appimage"]').getAttribute("href"))?.endsWith("_amd64.AppImage")) {
+    throw new Error("Linux x64 toggle did not update AppImage href");
+  }
+  await page.locator('[data-linux-arch="arm64"]').click();
+  await waitForAttribute(page.locator('[data-linux-arch="arm64"]'), "aria-pressed", "true");
+  const armAppImage = await page.locator('[data-linux-format="appimage"]').getAttribute("href");
+  const armDeb = await page.locator('[data-linux-format="deb"]').getAttribute("href");
+  const armFile = (await page.locator('[data-linux-file="appimage"]').textContent())?.trim();
+  if (!armAppImage?.endsWith("_aarch64.AppImage") || !armDeb?.endsWith("_arm64.deb") || !armFile?.endsWith("_aarch64.AppImage")) {
+    throw new Error(
+      `Linux arm64 toggle did not update links/filenames: ${JSON.stringify({ armAppImage, armDeb, armFile })}`,
+    );
+  }
+
   await page.locator(".nav-language").click();
   await frame.getByRole("button", { name: "应用", exact: true }).waitFor({
     timeout: 10_000,
   });
+  if (
+    (await page.locator('[data-download-tab="linux"]').getAttribute("aria-selected")) !== "true" ||
+    (await page.locator('[data-linux-arch="arm64"]').getAttribute("aria-pressed")) !== "true"
+  ) {
+    throw new Error("language switch did not preserve active download platform and Linux arch");
+  }
+  await waitForText(page.locator('[data-linux-format="appimage"] .download-action'), "下载 AppImage");
+  await assertUniformDesktopDownloadPanel(page, "1280px zh");
 
   // Theme changes travel through the same storage bridge as the language: the
   // frame follows a write from the app, and the app follows a write from the
@@ -348,6 +547,7 @@ try {
     throw new Error("capture mode must not mark the subscription fixtures as expired");
   }
   await captureContext.close();
+  await verifyDownloadDesktopAndMobile(browser);
 
   console.log("smoke-mobile-demo: OK");
 } catch (error) {

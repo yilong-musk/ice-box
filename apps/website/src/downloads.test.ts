@@ -9,6 +9,7 @@ import {
   installerFilename,
   linuxInstallerDownloadUrl,
   linuxInstallerFilename,
+  linuxInstallerVariantsForArch,
   linuxPrimaryInstallerVariant,
   refineLinuxArch,
 } from "./downloads.ts";
@@ -52,6 +53,22 @@ test("linux installer variants match all four published release packages", () =>
   assert.equal(
     linuxInstallerDownloadUrl("0.4.0", "deb-arm64"),
     "https://github.com/yilong-musk/ice-box/releases/download/v0.4.0/ice-box_0.4.0_arm64.deb",
+  );
+  assert.deepEqual(linuxInstallerVariantsForArch("amd64"), {
+    appimage: "appimage-amd64",
+    deb: "deb-amd64",
+  });
+  assert.deepEqual(linuxInstallerVariantsForArch("arm64"), {
+    appimage: "appimage-aarch64",
+    deb: "deb-arm64",
+  });
+  assert.equal(
+    linuxPrimaryInstallerVariant("amd64"),
+    linuxInstallerVariantsForArch("amd64").appimage,
+  );
+  assert.equal(
+    linuxPrimaryInstallerVariant("arm64"),
+    linuxInstallerVariantsForArch("arm64").appimage,
   );
 });
 

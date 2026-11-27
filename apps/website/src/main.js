@@ -25,6 +25,7 @@ import {
   installerFilename,
   linuxInstallerDownloadUrl,
   linuxInstallerFilename,
+  linuxInstallerVariantsForArch,
   linuxPrimaryInstallerVariant,
   refineLinuxArch,
 } from "./downloads";
@@ -148,21 +149,10 @@ const windowLights = `<span class="window-lights" aria-hidden="true"><i></i><i><
 
 const currentPlatform = detectPlatform(navigator.userAgent, navigator.maxTouchPoints);
 let selectedPlatform = currentPlatform ?? "macos";
-let detectedLinuxArch = detectLinuxArch(navigator.userAgent);
+let detectedLinuxArch =
+  currentPlatform === "linux" ? detectLinuxArch(navigator.userAgent) : "amd64";
 let selectedLinuxArch = detectedLinuxArch;
 let linuxArchManuallySelected = false;
-
-function linuxVariantsForArch(arch) {
-  return arch === "arm64"
-    ? { appimage: "appimage-aarch64", deb: "deb-arm64" }
-    : { appimage: "appimage-amd64", deb: "deb-amd64" };
-}
-
-function platformPrimaryFilename(platform) {
-  return platform === "linux"
-    ? linuxInstallerFilename(appVersion, linuxPrimaryInstallerVariant(detectedLinuxArch))
-    : installerFilename(appVersion, platform);
-}
 
 function platformPrimaryUrl(platform) {
   return platform === "linux"
@@ -341,8 +331,8 @@ root.innerHTML = `
             ${
               platform === "linux"
                 ? `<div class="download-action-row download-action-row-linux">
-              <a class="button button-primary button-large download-button" data-linux-format="appimage" href="${linuxInstallerDownloadUrl(appVersion, linuxVariantsForArch(selectedLinuxArch).appimage)}">${icon("download")}<span class="download-action"></span></a>
-              <a class="button button-large download-button-secondary" data-linux-format="deb" href="${linuxInstallerDownloadUrl(appVersion, linuxVariantsForArch(selectedLinuxArch).deb)}">${icon("download")}<span class="download-action-secondary"></span></a>
+              <a class="button button-primary button-large download-button" data-linux-format="appimage" href="${linuxInstallerDownloadUrl(appVersion, linuxInstallerVariantsForArch(selectedLinuxArch).appimage)}">${icon("download")}<span class="download-action"></span></a>
+              <a class="button button-large download-button-secondary" data-linux-format="deb" href="${linuxInstallerDownloadUrl(appVersion, linuxInstallerVariantsForArch(selectedLinuxArch).deb)}">${icon("download")}<span class="download-action-secondary"></span></a>
             </div>
             <p class="download-files"><span data-linux-file="appimage"></span><span class="dot-sep" aria-hidden="true"></span><span data-linux-file="deb"></span></p>`
                 : `<div class="download-action-row">
@@ -541,6 +531,18 @@ function setUpReveal() {
 
 setUpReveal();
 
+const downloadRailHorizontal = window.matchMedia?.("(max-width: 960px)");
+
+function syncDownloadRailOrientation() {
+  parts.downloadRail.setAttribute(
+    "aria-orientation",
+    downloadRailHorizontal?.matches ? "horizontal" : "vertical",
+  );
+}
+
+syncDownloadRailOrientation();
+downloadRailHorizontal?.addEventListener?.("change", syncDownloadRailOrientation);
+
 function selectDownloadPlatform(platform, { focusTab = false } = {}) {
   selectedPlatform = platform;
   for (const candidate of INSTALLER_PLATFORMS) {
@@ -563,6 +565,7 @@ parts.downloadRail.addEventListener("click", (event) => {
 });
 
 parts.downloadRail.addEventListener("keydown", (event) => {
+  if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
   const tab = event.target.closest("[data-download-tab]");
   if (!tab) return;
   const index = INSTALLER_PLATFORMS.indexOf(tab.dataset.downloadTab);
@@ -632,7 +635,7 @@ function applyDownloadCopy(next) {
 
     if (platform === "linux") {
       const archLabel = selectedLinuxArch === "arm64" ? "arm64" : "x64";
-      const variants = linuxVariantsForArch(selectedLinuxArch);
+      const variants = linuxInstallerVariantsForArch(selectedLinuxArch);
       const appimageFile = linuxInstallerFilename(appVersion, variants.appimage);
       const debFile = linuxInstallerFilename(appVersion, variants.deb);
       const appimageLabel = marketingText("download.linux.appimageAction", next);
@@ -667,7 +670,7 @@ function applyDownloadCopy(next) {
       next,
     );
     pane.querySelector(".download-file").textContent =
-      platformPrimaryFilename(platform);
+      installerFilename(appVersion, platform);
 
     const button = pane.querySelector(".download-button");
     button.href = platformPrimaryUrl(platform);
@@ -749,7 +752,7 @@ if (currentPlatform === "linux") {
     parts.heroDownload.href = platformPrimaryUrl(currentPlatform);
     if (!linuxArchManuallySelected) {
       selectedLinuxArch = refinedArch;
+      applyDownloadCopy(language);
     }
-    applyDownloadCopy(language);
   });
 }
