@@ -299,10 +299,33 @@ try {
   await tabs.nth(0).click();
   await frame.locator('[data-active="true"]:has(> [data-testid="home-panel"])').waitFor();
 
-  await page.locator(".nav-language").click();
+  async function pickSiteLanguage(code) {
+    await page.locator(".nav-language").click();
+    await page.locator(`.nav-language-option[data-language="${code}"]`).click();
+  }
+
+  await pickSiteLanguage("zh");
   await frame.getByRole("button", { name: "应用", exact: true }).waitFor({
     timeout: 10_000,
   });
+
+  // Persian and Arabic switch both the landing page and the embedded phone app to RTL.
+  await pickSiteLanguage("fa");
+  await waitForAttribute(page.locator("html"), "dir", "rtl");
+  await waitForAttribute(frame.locator("html"), "dir", "rtl");
+  await frame.getByRole("button", { name: "برنامه‌ها", exact: true }).waitFor({
+    timeout: 10_000,
+  });
+
+  await pickSiteLanguage("ar");
+  await waitForAttribute(page.locator("html"), "dir", "rtl");
+  await waitForAttribute(frame.locator("html"), "dir", "rtl");
+  await waitForAttribute(frame.locator("html"), "lang", "ar");
+
+  // Switching back to an LTR locale restores `dir="ltr"` everywhere.
+  await pickSiteLanguage("en");
+  await waitForAttribute(page.locator("html"), "dir", "ltr");
+  await waitForAttribute(frame.locator("html"), "dir", "ltr");
 
   // Theme changes travel through the same storage bridge as the language: the
   // frame follows a write from the app, and the app follows a write from the
@@ -319,6 +342,21 @@ try {
     window.localStorage.setItem("ice-box.theme", "light");
   });
   await waitForTheme(frame, false);
+  // Returning to a previously visited Settings tab (<Activity mode="hidden">)
+  // must keep the light theme instead of re-applying its stale dark state.
+  await frame
+    .getByTestId("phone-tab-bar")
+    .getByRole("button", { name: "Settings", exact: true })
+    .click();
+  await frame
+    .locator('[data-testid="settings-stack"][data-loaded="true"]')
+    .waitFor({ timeout: 15_000 });
+  await waitForTheme(frame, false);
+  if ((await frame.locator("#settings-theme").inputValue()) !== "light") {
+    throw new Error(
+      `Settings theme select must reflect "light" after returning from hidden Activity, got ${JSON.stringify(await frame.locator("#settings-theme").inputValue())}`,
+    );
+  }
 
   if (errors.length > 0) {
     throw new Error(`browser console errors:\n${errors.join("\n")}`);

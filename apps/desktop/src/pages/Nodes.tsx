@@ -128,7 +128,7 @@ function FavoriteButton({
       className={cn(
         // Same right inset as the card's delay button below it, so the star and
         // the delay/test glyph line up on the card's right edge.
-        "relative z-10 -mr-1.5 flex h-6 shrink-0 items-center justify-end rounded px-1.5 transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50",
+        "relative z-10 -me-1.5 flex h-6 shrink-0 items-center justify-end rounded px-1.5 transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50",
         favorite ? "text-warn" : "text-muted-foreground/80 hover:text-foreground dark:text-muted-foreground/70",
       )}
       disabled={pending}
@@ -279,7 +279,7 @@ const NodeCard = memo(function NodeCard({
         {running && node ? (
           <button
             type="button"
-            className="relative z-10 -mr-1.5 flex h-5 shrink-0 items-center justify-end rounded px-1.5 hover:bg-muted disabled:pointer-events-none"
+            className="relative z-10 -me-1.5 flex h-5 shrink-0 items-center justify-end rounded px-1.5 hover:bg-muted disabled:pointer-events-none"
             disabled={busy}
             aria-label={t("nodes.testNodeAria", { node: tag })}
             title={t("nodes.test")}

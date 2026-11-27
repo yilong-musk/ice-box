@@ -20,7 +20,7 @@
 
 [**下载**](https://github.com/yilong-musk/ice-box/releases/latest) · [**在线演示**](https://yilong-musk.github.io/ice-box/) · [安装](#安装) · [TUN](#tun-模式) · [文档](#文档) · [更新日志](CHANGELOG.md)
 
-[English](README.md) · 简体中文
+[Bahasa Indonesia](README.id.md) · [Deutsch](README.de.md) · [English](README.md) · [Español](README.es.md) · [Français](README.fr.md) · [Português (BR)](README.pt-BR.md) · [Tiếng Việt](README.vi.md) · [Türkçe](README.tr.md)<br>[Русский](README.ru.md) · [Українська](README.uk.md) · [العربية](README.ar.md) · [فارسی](README.fa.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · **简体中文** · [繁體中文](README.zh-TW.md)
 
 <br>
 
@@ -41,7 +41,7 @@
 - **流量接管。** 桌面端使用系统代理或 TUN；Android 使用系统 VPN，并支持按应用分流（跟随规则、代理、直连或拦截）。
 - **托盘。** 不打开窗口即可启停代理服务，切换模式、订阅和出口节点。macOS 的菜单栏项还会显示实时网速，菜单内可以测延迟。
 - **Agent 接入。** 可选的本地 MCP 服务，让 Agent 操作同一个正在运行的会话。
-- **省心。** 开机自启、经签名校验的应用内更新、主页上的实时流量与内存读数、中英文界面、浅色与深色主题。
+- **省心。** 开机自启、经签名校验的应用内更新、主页上的实时流量与内存读数、16 种界面语言（Bahasa Indonesia、Deutsch、English、Español、Français、Português (BR)、Tiếng Việt、Türkçe、Русский、Українська、العربية、فارسی、日本語、한국어、简体中文、繁體中文，含完整 RTL 适配）、浅色与深色主题。
 
 ## 安装
 

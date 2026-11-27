@@ -29,6 +29,7 @@ import { MemoryCard } from "../components/MemoryCard";
 import { TrafficChart } from "../components/TrafficChart";
 import { ConnectionStatsCard } from "../components/ConnectionStatsCard";
 import { ProxyModePicker } from "../components/ProxyModePicker";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -708,8 +709,10 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   const memory = status?.memory;
   const powerOn = phone ? vpnActive : proxyOn;
   const canToggle = phone ? !busy : canToggleProxy;
-  // The button names the backend it starts/stops: TUN when configured (or
-  // active), otherwise the system proxy (docs/tun.md).
+  const effectiveConfiguredTun = (tunOverride ?? configuredTun) && !tunUiHidden;
+  // The accessible name and tooltip name the exact capture backend (system
+  // proxy vs TUN, docs/tun.md); the visible desktop button stays concise
+  // while the card header badge shows the active or configured backend.
   const powerTitle = phone
     ? vpnActive
       ? t("home.power.vpnStop")
@@ -718,9 +721,14 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
       ? tunActive
         ? t("home.power.stopTun")
         : t("home.power.stopSystem")
-      : configuredTun
+      : effectiveConfiguredTun
         ? t("home.power.startTun")
         : t("home.power.startSystem");
+  const powerLabel = proxyOn ? t("home.power.stop") : t("home.power.start");
+  const activeBackendTun = proxyOn ? tunActive : effectiveConfiguredTun;
+  const proxyBackendLabel = activeBackendTun
+    ? t("home.backend.tun")
+    : t("home.backend.system");
   // One wiring for the phone's round button and the desktop's labelled one.
   const powerButtonProps = {
     type: "button",
@@ -880,9 +888,35 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
         ) : (
         <Card size="sm" className="w-full min-w-0">
           <CardHeader>
-            <CardTitle className="text-xs font-medium text-muted-foreground">
+            <CardTitle
+              className="truncate text-xs font-medium text-muted-foreground"
+              title={t("home.proxyStatus")}
+            >
               {t("home.proxyStatus")}
             </CardTitle>
+            {(proxyAvailable || configuredTun || tunActive) && (
+              <CardAction>
+                <Badge
+                  variant="secondary"
+                  className={cn(
+                    "-my-0.5 h-5 gap-1 px-1.5 text-[11px]",
+                    proxyOn
+                      ? "bg-ok/12 text-ok dark:bg-ok/18"
+                      : "text-muted-foreground",
+                  )}
+                  data-testid="home-backend-badge"
+                >
+                  <span
+                    aria-hidden="true"
+                    className={cn(
+                      "size-1.5 shrink-0 rounded-full",
+                      proxyOn ? "bg-ok" : "bg-muted-foreground/45",
+                    )}
+                  />
+                  {proxyBackendLabel}
+                </Badge>
+              </CardAction>
+            )}
           </CardHeader>
           <CardContent className="flex flex-1 flex-col">
             {proxyAvailable || configuredTun || tunActive ? (
@@ -890,10 +924,13 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                 <Button
                   {...powerButtonProps}
                   size="lg"
-                  className="h-auto min-h-11 w-full justify-center gap-2 py-2"
+                  title={powerTitle}
+                  className="h-auto min-h-11 w-full justify-center gap-1.5 px-2.5 py-2 whitespace-normal"
                 >
                   <Power />
-                  <span className="text-sm font-medium">{powerTitle}</span>
+                  <span className="min-w-0 text-center text-sm/snug font-medium text-balance wrap-break-word [word-break:auto-phrase]">
+                    {powerLabel}
+                  </span>
                 </Button>
                 {tunCardVisible && (
                   <div className="flex items-center gap-3 whitespace-nowrap">
@@ -909,7 +946,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                       </span>
                     )}
                     {!phone && (
-                      <div className="ml-auto flex shrink-0 items-center">
+                      <div className="ms-auto flex shrink-0 items-center">
                         <Switch
                           checked={tunOverride ?? configuredTun}
                           onCheckedChange={(pressed) => {
@@ -992,7 +1029,10 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
         {!phone && (
         <Card size="sm" className="w-full min-w-0">
           <CardHeader className="[container-type:normal]">
-            <CardTitle className="whitespace-nowrap text-xs font-medium text-muted-foreground">
+            <CardTitle
+              className="truncate text-xs font-medium text-muted-foreground"
+              title={t("home.modeAria")}
+            >
               {t("home.modeAria")}
             </CardTitle>
           </CardHeader>
@@ -1024,7 +1064,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                     type="button"
                     variant="ghost"
                     size="icon-xs"
-                    className="-my-1.5 -mr-1.5 text-muted-foreground"
+                    className="-my-1.5 -me-1.5 text-muted-foreground"
                     aria-label={t("home.landingMap.expand")}
                     title={t("home.landingMap.expand")}
                     data-testid="home-landing-expand"

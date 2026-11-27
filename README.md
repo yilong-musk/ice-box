@@ -20,7 +20,7 @@ Easy to set up, quick to start, quiet once it runs, and agent-friendly — built
 
 [**Download**](https://github.com/yilong-musk/ice-box/releases/latest) · [**Live Demo**](https://yilong-musk.github.io/ice-box/) · [Install](#install) · [TUN](#tun-mode) · [Docs](#documentation) · [Changelog](CHANGELOG.md)
 
-English · [简体中文](README.zh-CN.md)
+[Bahasa Indonesia](README.id.md) · [Deutsch](README.de.md) · **English** · [Español](README.es.md) · [Français](README.fr.md) · [Português (BR)](README.pt-BR.md) · [Tiếng Việt](README.vi.md) · [Türkçe](README.tr.md)<br>[Русский](README.ru.md) · [Українська](README.uk.md) · [العربية](README.ar.md) · [فارسی](README.fa.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [简体中文](README.zh-CN.md) · [繁體中文](README.zh-TW.md)
 
 <br>
 
@@ -41,7 +41,7 @@ English · [简体中文](README.zh-CN.md)
 - **Capture.** System proxy or TUN on desktop; the system VPN on Android, with per-app routing (follow the rules, proxy, direct, or block).
 - **Tray.** Start and stop the proxy service and switch the mode, subscription, or exit node without opening the window. On macOS the menu bar item also shows live traffic and the menu runs delay tests.
 - **Agent access.** An opt-in local MCP service lets an Agent operate the same running session.
-- **Quiet upkeep.** Launch at login, signature-verified in-app updates, live traffic and memory readouts on Home, English and 简体中文, light and dark themes.
+- **Quiet upkeep.** Launch at login, signature-verified in-app updates, live traffic and memory readouts on Home, 16 languages with full RTL support (Bahasa Indonesia, Deutsch, English, Español, Français, Português (BR), Tiếng Việt, Türkçe, Русский, Українська, العربية, فارسی, 日本語, 한국어, 简体中文, 繁體中文), light and dark themes.
 
 ## Install
 

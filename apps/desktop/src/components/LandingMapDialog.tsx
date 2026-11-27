@@ -394,7 +394,8 @@ export function LandingMapDialog({
                 {exitLabel}
                 {ip ? (
                   <span
-                    className="ml-2 font-mono tabular-nums text-muted-foreground"
+                    dir="ltr"
+                    className="ms-2 inline-block font-mono tabular-nums text-muted-foreground"
                     data-selectable=""
                   >
                     {ip}

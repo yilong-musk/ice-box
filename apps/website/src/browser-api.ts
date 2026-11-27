@@ -505,11 +505,31 @@ function demoNextVersion(): string {
   return `${major}.${minor + 1}.0`;
 }
 
+const DEMO_INSTALL_MESSAGES: Record<
+  ReturnType<typeof resolveLanguage>,
+  string
+> = {
+  zh: "这是在线演示，不会真的安装更新。请前往下载页安装正式版。",
+  "zh-TW": "這是線上演示，不會真的安裝更新。請前往下載區安裝正式版。",
+  en: "This is the Live Demo, so the update is not installed. Get the real app from the download section.",
+  ru: "Это онлайн-демо, поэтому обновление не устанавливается. Скачайте настоящее приложение в разделе загрузки.",
+  ja: "これはライブデモのため、更新は実際にはインストールされません。ダウンロードセクションから正式版を入手してください。",
+  fa: "این دموی آنلاین است و بروزرسانی واقعاً نصب نمی‌شود. نسخه اصلی برنامه را از بخش دانلود دریافت کنید.",
+  ar: "هذه نسخة تجريبية عبر الإنترنت، لذا لن يتم تثبيت التحديث. احصل على التطبيق الفعلي من قسم التنزيل.",
+  ko: "온라인 데모이므로 업데이트가 실제로 설치되지 않습니다. 다운로드 섹션에서 정식 앱을 받아 주세요.",
+  tr: "Bu çevrimiçi bir demodur, bu yüzden güncelleme yüklenmez. Gerçek uygulamayı indirme bölümünden edinin.",
+  vi: "Đây là bản demo trực tuyến nên bản cập nhật sẽ không được cài đặt. Hãy tải ứng dụng chính thức ở mục tải xuống.",
+  id: "Ini adalah Demo Langsung, sehingga pembaruan tidak benar-benar dipasang. Unduh aplikasi aslinya di bagian unduhan.",
+  es: "Esta es la demostración en vivo, por lo que la actualización no se instala. Descarga la aplicación real en la sección de descargas.",
+  de: "Dies ist die Live-Demo, daher wird das Update nicht installiert. Lade die echte App im Download-Bereich herunter.",
+  fr: "Ceci est la démo en ligne, la mise à jour n'est donc pas installée. Téléchargez la véritable application depuis la section de téléchargement.",
+  "pt-BR": "Esta é a demonstração ao vivo, portanto a atualização não é instalada. Baixe o aplicativo oficial na seção de downloads.",
+  uk: "Це онлайн-демо, тому оновлення не встановлюється. Завантажте справжній застосунок у розділі завантажень.",
+};
+
 /** Shown under the update row once the simulated download finishes. */
 function demoInstallMessage(): string {
-  return resolveLanguage(readLanguagePreference()) === "zh"
-    ? "这是在线演示，不会真的安装更新。请前往下载页安装正式版。"
-    : "This is the Live Demo, so the update is not installed. Get the real app from the download section.";
+  return DEMO_INSTALL_MESSAGES[resolveLanguage(readLanguagePreference())];
 }
 
 function demoSingboxConfig(): string {
@@ -519,12 +539,14 @@ function demoSingboxConfig(): string {
 export const api = {
   async getStatus(): Promise<StatusResponse> {
     await delay();
+    const tunLive = running && settings.tun.enabled;
+    const systemProxyLive = running && !settings.tun.enabled;
     return {
       core: { status: running ? "running" : "stopped", message: null, inbound_host: "127.0.0.1", inbound_port: 17890 },
       subscription_count: subscriptions.length,
       proxy_recovery_warning: [],
-      system_proxy_applied: running,
-      system_proxy_recorded: running,
+      system_proxy_applied: systemProxyLive,
+      system_proxy_recorded: systemProxyLive,
       system_proxy_available: true,
       // Green-band demo figure: the Live Demo and its screenshots must show a
       // real number, never `—`.
@@ -541,10 +563,10 @@ export const api = {
             total_bytes: 38 * 1024 * 1024,
             bands: { warn_mb: 60, bad_mb: 100 },
           },
-      traffic_capture: running ? "system_proxy" : "inactive",
+      traffic_capture: tunLive ? "tun" : systemProxyLive ? "system_proxy" : "inactive",
       configured_tun: settings.tun.enabled,
-      tun_status: settings.tun.enabled ? "enabled" : "disabled",
-      tun_interface: null,
+      tun_status: tunLive ? "enabled" : "disabled",
+      tun_interface: tunLive ? "utun4" : null,
       tun_error: null,
       capture_transition_id: null,
       tun_available: true,
@@ -593,9 +615,10 @@ export const api = {
   },
   async saveSettings(patch: SettingsPatch): Promise<void> {
     await delay();
-    Object.assign(settings, structuredClone(patch));
-    if (patch.tun) {
-      settings.tun = { ...settings.tun, ...structuredClone(patch.tun) };
+    const { tun, ...rest } = structuredClone(patch);
+    Object.assign(settings, rest);
+    if (tun) {
+      settings.tun = { ...settings.tun, ...tun };
     }
     if (settings.prefer_ipv6) settings.ipv6 = true;
     if (!settings.ipv6) settings.prefer_ipv6 = false;

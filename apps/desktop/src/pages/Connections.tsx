@@ -103,7 +103,7 @@ function ConnectionItem({
         <div
           aria-hidden="true"
           className={cn(
-            "pointer-events-none absolute inset-y-0 left-0 rounded-md bg-linear-to-r transition-[width] duration-500",
+            "pointer-events-none absolute inset-y-0 start-0 rounded-md bg-linear-to-r rtl:bg-linear-to-l transition-[width] duration-500",
             TONE_WASH.ok,
           )}
           style={{ width: `${usage * 100}%` }}
@@ -174,7 +174,7 @@ function ConnectionItem({
       <ItemActions className="relative">
         {/* Fixed width so the rows do not shift as the figures change. */}
         <span
-          className="w-40 shrink-0 whitespace-nowrap text-right text-xs tabular-nums text-muted-foreground"
+          className="w-40 shrink-0 whitespace-nowrap text-end text-xs tabular-nums text-muted-foreground"
           data-testid="connection-traffic"
         >
           <TrafficPair down={row.download} up={row.upload} />
@@ -414,7 +414,7 @@ export function Connections({ active = true }: { active?: boolean }) {
               ))}
             </NativeSelect>
             <span
-              className="ml-auto min-w-0 truncate text-xs tabular-nums text-muted-foreground"
+              className="ms-auto min-w-0 truncate text-xs tabular-nums text-muted-foreground"
               data-testid="connections-summary"
             >
               {filtering

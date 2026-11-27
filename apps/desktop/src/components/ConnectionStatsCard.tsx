@@ -48,7 +48,7 @@ function StatCell({
   className?: string;
 }) {
   return (
-    <div className={cn("flex min-w-0 flex-1 items-center gap-2 px-3 first:pl-0 last:pr-0", className)}>
+    <div className={cn("flex min-w-0 flex-1 items-center gap-2 px-3 first:ps-0 last:pe-0", className)}>
       <span
         aria-hidden="true"
         className={cn(
@@ -150,14 +150,14 @@ export function ConnectionStatsCard({ running, active, paused = false, className
       title={error ? t("traffic.samplingInterrupted", { error }) : undefined}
       data-testid="home-connection-stats"
     >
-      <CardContent className="flex items-center divide-x divide-border/70">
+      <CardContent className="flex items-center divide-x divide-border/70 rtl:divide-x-reverse">
         <StatCell
           icon={Cable}
           label={t("home.stats.connections")}
           value={stats ? String(stats.count) : dash}
           tone="neutral"
           testId="home-stats-connections"
-          className="flex-none pr-4"
+          className="flex-none pe-4"
         />
         <StatCell
           icon={ArrowDown}

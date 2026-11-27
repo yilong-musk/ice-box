@@ -67,7 +67,7 @@ export function ProxyModePicker({ variant, value, disabled, onChange, className 
             className="h-9 min-w-0 flex-1 gap-1.5 rounded-lg text-muted-foreground hover:bg-transparent hover:text-foreground data-[state=on]:bg-card data-[state=on]:font-semibold data-[state=on]:text-foreground data-[state=on]:shadow-sm dark:data-[state=on]:bg-background"
           >
             <Icon aria-hidden="true" />
-            {t(labelKey)}
+            <span className="min-w-0 truncate">{t(labelKey)}</span>
           </ToggleGroupItem>
         ) : (
           <ToggleGroupItem
@@ -76,8 +76,8 @@ export function ProxyModePicker({ variant, value, disabled, onChange, className 
             title={t(hintKey)}
             className="group/mode h-auto w-full flex-1 justify-start gap-2.5 rounded-lg px-2.5 text-muted-foreground hover:bg-muted/60 hover:text-foreground data-[state=on]:bg-primary/10 data-[state=on]:font-semibold data-[state=on]:text-foreground hover:data-[state=on]:bg-primary/14 [&>svg:first-child]:group-data-[state=on]/mode:text-primary"
           >
-            <Icon aria-hidden="true" />
-            <span className="flex-1 text-left">{t(labelKey)}</span>
+            <Icon className={mode === "direct" ? "rtl:rotate-180" : undefined} aria-hidden="true" />
+            <span className="min-w-0 flex-1 truncate text-start">{t(labelKey)}</span>
             <Check
               aria-hidden="true"
               className="text-primary opacity-0 transition-opacity group-data-[state=on]/mode:opacity-100"

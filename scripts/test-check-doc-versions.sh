@@ -57,6 +57,10 @@ expect_fail stale-readme "README.md: sing-box badge says 1.14.4, pinned core is 
 write_repo 1.15.0 1.15.0 1.14.4 1.15.0
 expect_fail stale-readme-zh "README.zh-CN.md: sing-box badge says 1.14.4, pinned core is 1.15.0"
 
+write_repo 1.15.0 1.15.0 1.15.0 1.15.0
+badge 1.14.4 >"$TMP/repo/README.ja.md"
+expect_fail stale-readme-extra "README.ja.md: sing-box badge says 1.14.4, pinned core is 1.15.0"
+
 write_repo 1.15.0 1.15.0 1.15.0 1.14.4
 expect_fail stale-tun "docs/tun.md: sing-box version says 1.14.4, pinned core is 1.15.0"
 
