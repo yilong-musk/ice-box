@@ -493,6 +493,10 @@ main {
   outline-offset: 3px;
 }
 
+.download-arch-option:focus-visible {
+  outline-offset: 1px;
+}
+
 /* ---------- Hero ---------- */
 
 .hero {
@@ -1304,6 +1308,10 @@ main {
   margin-top: 22px;
 }
 
+.download-action-row:not(.download-action-row-linux) {
+  margin-bottom: 18px;
+}
+
 .download-action-row-linux {
   gap: 10px 12px;
 }
@@ -1332,6 +1340,7 @@ main {
   align-items: center;
   gap: 6px 10px;
   margin-top: 10px;
+  margin-bottom: 18px;
   color: var(--muted);
   font: 12.5px/1.45 var(--mono);
   overflow-wrap: anywhere;
@@ -1351,15 +1360,6 @@ main {
 
 :root[data-theme="dark"] .download-note-box {
   background: var(--bg-sunken);
-  box-shadow: inset 0 0 0 1px var(--line);
-}
-
-.download-action-row + .download-note-box {
-  margin-top: auto;
-}
-
-.download-files + .download-note-box {
-  margin-top: 18px;
 }
 
 .download-note-icon {
@@ -1587,9 +1587,7 @@ main {
     grid-template-columns: minmax(0, 1fr);
     max-width: 640px;
   }
-}
 
-@media (max-width: 860px) {
   .download-panel {
     grid-template-columns: minmax(0, 1fr);
     max-width: 600px;
@@ -1647,8 +1645,12 @@ main {
     padding: 28px 24px 24px;
   }
 
-  .download-action-row + .download-note-box,
-  .download-files + .download-note-box {
+  .download-action-row:not(.download-action-row-linux),
+  .download-files {
+    margin-bottom: 0;
+  }
+
+  .download-note-box {
     margin-top: 22px;
   }
 }
