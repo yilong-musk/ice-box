@@ -137,8 +137,10 @@ def sha256_retry(url: str, expected: str) -> str:
 
 
 # Linux desktop assets and updater entries were introduced after v0.4.0.
+# Cross-platform CLI archives were introduced after v0.4.1.
 core_version = tuple(int(part) for part in version.split("-", 1)[0].split("."))
 expects_linux = core_version > (0, 4, 0)
+expects_cli = core_version > (0, 4, 1)
 
 expected = {
     f"ice-box_{version}_aarch64.dmg",
@@ -161,6 +163,15 @@ if expects_linux:
             f"ice-box_{version}_arm64.deb",
             f"ice-box_{version}_aarch64.AppImage",
             f"ice-box_{version}_aarch64.AppImage.sig",
+        }
+    )
+if expects_cli:
+    expected.update(
+        {
+            f"ice-box-cli_{version}_darwin_aarch64.tar.gz",
+            f"ice-box-cli_{version}_windows_x86_64.zip",
+            f"ice-box-cli_{version}_linux_x86_64.tar.gz",
+            f"ice-box-cli_{version}_linux_aarch64.tar.gz",
         }
     )
 if not prerelease:

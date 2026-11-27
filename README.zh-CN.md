@@ -105,6 +105,7 @@ npm run dev
 | `npm run fetch-singbox -- win && npm run build:win` | 构建 Windows NSIS 安装包 |
 | `npm run fetch-singbox -- linux-x64 && npm run build:linux` | 构建 Linux `.deb` 与 `.AppImage`（arm64 主机请使用 `linux-arm64`） |
 | `npm run acceptance` / `acceptance:tun` / `acceptance:win` / `acceptance:linux` / `acceptance:linux-tun` | 在真实主机上运行的验收门禁 |
+| `bash scripts/package-cli.sh` | 构建并校验当前主机的跨平台纯 CLI 压缩包 |
 | `bash scripts/build-android-apk.sh debug arm64` | 用于 arm64 设备的调试 APK |
 | `bash scripts/build-android-apk.sh debug amd64` | 用于模拟器的调试 APK |
 
@@ -120,6 +121,7 @@ crates/         Rust 工作区（主要 crate）：ice-app、ice-config、ice-co
 | 文档 | 内容 |
 |---|---|
 | [`docs/architecture.md`](docs/architecture.md) | 系统结构、模块职责、数据流与设计边界 |
+| [`docs/cli.md`](docs/cli.md) | 跨平台无头 CLI、守护进程与 Agent 自动化 |
 | [`docs/mcp.md`](docs/mcp.md) | 桌面端 MCP 设置、共享运行时、工具与安全边界 |
 | [`docs/tun.md`](docs/tun.md) | TUN 行为、恢复机制、平台配置与限制 |
 | [`docs/testing.md`](docs/testing.md) | 本地与 CI 门禁范围、手动实机测试 |

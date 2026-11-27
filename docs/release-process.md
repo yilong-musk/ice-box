@@ -18,12 +18,12 @@ created either by the `Release` workflow's manual `release` mode or by pushing
 it by hand; both run `.github/workflows/release.yml`, which first validates the
 tag, version sources, changelog, CI status of the commit, updater key, and
 Android keystore in a fast preflight job. It does not re-run the gate: the
-required CI checks on `main` already ran it for the same commit. It then builds
-the macOS arm64 `.dmg` (plus updater
-`.app.tar.gz` / `.sig`), the Windows NSIS `.exe` (plus `.exe.sig`), the Linux
-`x86_64` and `arm64` `.deb` and `.AppImage` bundles (plus `.AppImage.sig`), and
-one signed Android `arm64-v8a` APK, and stages everything as a **draft** GitHub
-Release. The publish job verifies the assets and updater signatures, writes
+required CI checks on `main` already ran it for the same commit. It then builds the macOS arm64 `.dmg` (plus updater `.app.tar.gz` / `.sig`),
+the Windows NSIS `.exe` (plus `.exe.sig`), the Linux `x86_64` and `arm64` `.deb`
+and `.AppImage` bundles (plus `.AppImage.sig`), the cross-platform headless CLI
+archives (`ice-box-cli_<version>_<os>_<arch>.tar.gz` / `.zip` for macOS arm64,
+Windows x64, and Linux x64/arm64), and one signed Android `arm64-v8a` APK, and
+stages everything as a **draft** GitHub Release. The publish job verifies the assets and updater signatures, writes
 `SHA256SUMS`, and only then publishes; publishing makes the release the updater
 feed target.
 Pre-release tags (`vX.Y.Z-rc.N`) are published as GitHub pre-releases and do

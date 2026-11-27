@@ -116,7 +116,8 @@ classify() {
 
   # Cross-bucket inputs: files one bucket owns that another bucket's tests read.
   case "$path" in
-  apps/desktop/src-tauri/src/application/* | crates/ice-app/Cargo.toml | \
+  crates/ice-runtime/src/application/* | crates/ice-runtime/Cargo.toml | \
+    crates/ice-cli/Cargo.toml | crates/ice-app/Cargo.toml | \
     apps/website/vite.config.ts | apps/website/src/browser-shell.ts | \
     apps/website/mobile-demo.html | apps/website/src/main.js | \
     apps/mobile/src/shell.ts)
@@ -409,14 +410,18 @@ if [[ "${#shells[@]}" -gt 0 ]] && shell_deps_available; then
 fi
 
 run_tun_integration=0
+run_cli_integration=0
 if [[ "$run_rust" == 1 ]]; then
   if [[ "$rust_all" == 1 ]]; then
     run_tun_integration=1
+    run_cli_integration=1
   else
     for crate in ${rust_crates[@]+"${rust_crates[@]}"}; do
       if [[ "$crate" == "ice-tun-sys" ]]; then
         run_tun_integration=1
-        break
+      fi
+      if [[ "$crate" == "ice-cli" ]]; then
+        run_cli_integration=1
       fi
     done
   fi
@@ -688,10 +693,14 @@ run_rust_bucket() {
     fi
   fi
 
-  # 3. Host-free TUN integration tests when ice-tun-sys is affected.
+  # 3. Host-free TUN and CLI integration tests when affected.
   if [[ "$run_tun_integration" == 1 ]]; then
     echo "== cargo test (ice-tun-sys integration) =="
     cargo test -p ice-tun-sys --tests || return $?
+  fi
+  if [[ "$run_cli_integration" == 1 ]]; then
+    echo "== cargo test (ice-cli integration) =="
+    cargo test -p ice-cli --tests || return $?
   fi
 
   # 4. Tauri shell library tests when runnable.
@@ -776,6 +785,7 @@ run_fixtures_bucket() {
     scripts/test-verify-android-apk.sh \
     scripts/test-check-glibc-floor.sh \
     scripts/test-verify-linux-bundles.sh \
+    scripts/test-verify-cli-archive.sh \
     scripts/test-retry-tauri-build.sh; do
     if [[ -f "$ROOT/$fixture" ]]; then
       batch_add "$(basename "$fixture" .sh)" bash "$ROOT/$fixture"

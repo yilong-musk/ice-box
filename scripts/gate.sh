@@ -118,6 +118,9 @@ if [[ "$SCOPE" == all || "$SCOPE" == frontend ]]; then
   echo "== linux bundle verifier fixtures =="
   bash "$ROOT/scripts/test-verify-linux-bundles.sh"
 
+  echo "== CLI archive verifier fixtures =="
+  bash "$ROOT/scripts/test-verify-cli-archive.sh"
+
   echo "== tauri build retry fixtures =="
   bash "$ROOT/scripts/test-retry-tauri-build.sh"
 

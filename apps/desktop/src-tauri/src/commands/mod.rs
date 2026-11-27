@@ -13,10 +13,13 @@ mod status;
 mod subscription;
 mod tun;
 
+use crate::app_host::{mcp_context, tauri_host};
 use crate::application::*;
 use crate::tray::{self, TrayLanguage};
+use crate::AppState;
 pub use connections::*;
 pub use core::*;
+use ice_config::{AppError, ErrorCode};
 pub use logs::*;
 pub use mcp::*;
 pub use nodes::*;

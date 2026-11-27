@@ -22,7 +22,8 @@ pub async fn add_subscription(
 ) -> Result<serde_json::Value, AppError> {
     run_blocking("add_subscription", move || {
         let state = app.state::<AppState>();
-        add_subscription_use_case(&app, state.inner(), req)
+        let host = tauri_host(&app);
+        add_subscription_use_case(&host, state.inner(), req)
     })
     .await
 }
@@ -34,7 +35,8 @@ pub async fn import_subscription_file(
 ) -> Result<serde_json::Value, AppError> {
     run_blocking("import_subscription_file", move || {
         let state = app.state::<AppState>();
-        import_subscription_file_use_case(&app, state.inner(), req)
+        let host = tauri_host(&app);
+        import_subscription_file_use_case(&host, state.inner(), req)
     })
     .await
 }
@@ -46,7 +48,8 @@ pub async fn remove_subscription(
 ) -> Result<serde_json::Value, AppError> {
     run_blocking("remove_subscription", move || {
         let state = app.state::<AppState>();
-        remove_subscription_use_case(&app, state.inner(), req)
+        let host = tauri_host(&app);
+        remove_subscription_use_case(&host, state.inner(), req)
     })
     .await
 }
@@ -58,7 +61,8 @@ pub async fn update_subscription(
 ) -> Result<serde_json::Value, AppError> {
     run_blocking("update_subscription", move || {
         let state = app.state::<AppState>();
-        update_subscription_use_case(&app, state.inner(), req)
+        let host = tauri_host(&app);
+        update_subscription_use_case(&host, state.inner(), req)
     })
     .await
 }
@@ -70,7 +74,8 @@ pub async fn set_active_subscription(
 ) -> Result<serde_json::Value, AppError> {
     run_blocking("set_active_subscription", move || {
         let state = app.state::<AppState>();
-        set_active_subscription_use_case(&app, state.inner(), req)
+        let host = tauri_host(&app);
+        set_active_subscription_use_case(&host, state.inner(), req)
     })
     .await
 }
@@ -170,7 +175,8 @@ pub async fn set_auto_update_subscription(
 ) -> Result<serde_json::Value, AppError> {
     run_blocking("set_auto_update_subscription", move || {
         let state = app.state::<AppState>();
-        set_auto_update_subscription_use_case(&app, state.inner(), req)
+        let host = tauri_host(&app);
+        set_auto_update_subscription_use_case(&host, state.inner(), req)
     })
     .await
 }

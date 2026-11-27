@@ -307,7 +307,8 @@ fn stop_for_update(app: &AppHandle) -> Result<(), AppError> {
     let Some(state) = app.try_state::<AppState>() else {
         return Ok(());
     };
-    let binary = crate::application::binary_for(app).unwrap_or_default();
+    let host = crate::app_host::tauri_host(app);
+    let binary = crate::application::binary_for(&host).unwrap_or_default();
     let _pause = state.workers.pause();
     graceful_stop_for_update(state.inner(), binary)
 }
@@ -595,13 +596,8 @@ pub async fn open_app_download(app: AppHandle) -> Result<(), AppError> {
 }
 
 /// Persist-only when the user flipped the auto-check switch and nothing else.
-pub fn only_check_app_updates_changed(previous: &AppSettings, next: &AppSettings) -> bool {
-    let mut left = previous.clone();
-    let mut right = next.clone();
-    left.check_app_updates = true;
-    right.check_app_updates = true;
-    left == right && previous.check_app_updates != next.check_app_updates
-}
+#[cfg(test)]
+use ice_runtime::application::only_check_app_updates_changed;
 
 #[cfg(test)]
 mod tests {

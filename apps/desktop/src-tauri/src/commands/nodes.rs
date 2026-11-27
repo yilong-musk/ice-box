@@ -50,7 +50,8 @@ pub async fn get_rule_set_status(
 pub async fn refresh_rule_sets(app: AppHandle) -> Result<Vec<ice_engine::RuleSetStatus>, AppError> {
     run_blocking("refresh_rule_sets", move || {
         let state = app.state::<AppState>();
-        refresh_rule_sets_use_case(&app, state.inner())
+        let host = tauri_host(&app);
+        refresh_rule_sets_use_case(&host, state.inner())
     })
     .await
 }
@@ -76,7 +77,8 @@ pub async fn set_rule_disabled(
 ) -> Result<serde_json::Value, AppError> {
     run_blocking("set_rule_disabled", move || {
         let state = app.state::<AppState>();
-        set_rule_disabled_use_case(&app, state.inner(), req)
+        let host = tauri_host(&app);
+        set_rule_disabled_use_case(&host, state.inner(), req)
     })
     .await
 }
@@ -89,7 +91,8 @@ pub async fn add_custom_rule(
 ) -> Result<serde_json::Value, AppError> {
     run_blocking("add_custom_rule", move || {
         let state = app.state::<AppState>();
-        add_custom_rule_use_case(&app, state.inner(), req)
+        let host = tauri_host(&app);
+        add_custom_rule_use_case(&host, state.inner(), req)
     })
     .await
 }
@@ -102,7 +105,8 @@ pub async fn update_custom_rule(
 ) -> Result<serde_json::Value, AppError> {
     run_blocking("update_custom_rule", move || {
         let state = app.state::<AppState>();
-        update_custom_rule_use_case(&app, state.inner(), req)
+        let host = tauri_host(&app);
+        update_custom_rule_use_case(&host, state.inner(), req)
     })
     .await
 }
@@ -115,7 +119,8 @@ pub async fn remove_custom_rule(
 ) -> Result<serde_json::Value, AppError> {
     run_blocking("remove_custom_rule", move || {
         let state = app.state::<AppState>();
-        remove_custom_rule_use_case(&app, state.inner(), req)
+        let host = tauri_host(&app);
+        remove_custom_rule_use_case(&host, state.inner(), req)
     })
     .await
 }
@@ -124,7 +129,8 @@ pub async fn remove_custom_rule(
 pub async fn set_selected_node(app: AppHandle, req: TagRequest) -> Result<(), AppError> {
     run_blocking("set_selected_node", move || {
         let state = app.state::<AppState>();
-        set_selected_node_use_case(&app, state.inner(), req)
+        let host = tauri_host(&app);
+        set_selected_node_use_case(&host, state.inner(), req)
     })
     .await
 }
@@ -152,7 +158,8 @@ pub async fn set_group_selection(
 ) -> Result<GroupSelectionResponse, AppError> {
     run_blocking("set_group_selection", move || {
         let state = app.state::<AppState>();
-        set_group_selection_use_case(&app, state.inner(), req)
+        let host = tauri_host(&app);
+        set_group_selection_use_case(&host, state.inner(), req)
     })
     .await
 }

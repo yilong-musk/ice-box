@@ -16,7 +16,9 @@ pub async fn get_mcp_status(app: AppHandle) -> Result<McpStatus, AppError> {
 pub async fn set_mcp_enabled(app: AppHandle, enabled: bool) -> Result<McpStatus, AppError> {
     run_blocking("set_mcp_enabled", move || {
         let mcp = app.state::<McpService>();
-        let status = mcp.set_enabled(&app, enabled)?;
+        let ctx = mcp_context(&app)
+            .ok_or_else(|| AppError::new(ErrorCode::ConfigInvalid, "app state unavailable"))?;
+        let status = mcp.set_enabled(&ctx, enabled)?;
         crate::tray::sync_view(&app);
         Ok(status)
     })
@@ -27,7 +29,9 @@ pub async fn set_mcp_enabled(app: AppHandle, enabled: bool) -> Result<McpStatus,
 pub async fn restart_mcp(app: AppHandle) -> Result<McpStatus, AppError> {
     run_blocking("restart_mcp", move || {
         let mcp = app.state::<McpService>();
-        mcp.restart(&app)
+        let ctx = mcp_context(&app)
+            .ok_or_else(|| AppError::new(ErrorCode::ConfigInvalid, "app state unavailable"))?;
+        mcp.restart(&ctx)
     })
     .await
 }

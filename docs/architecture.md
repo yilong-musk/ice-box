@@ -178,15 +178,7 @@ operations from racing to replace the core or restore the same OS state.
 
 ### Application services and shell adapters
 
-Shared use cases live in `src-tauri/src/application`: core/capture lifecycle,
-settings, subscriptions, node/rule selection, profile caches, and log reads.
-Tauri commands marshal IPC arguments and schedule blocking work; tray actions
-and subscription workers call the same application services, never commands.
-`AppResources` and `AppHost` expose resource paths and post-mutation events.
-Their Tauri implementation lives in `app_host.rs`, outside the service layer.
-This is a module-level boundary, not a separate headless crate: `AppState` and
-the shell build still depend on Tauri. The configuration-only scope of
-`ice-engine` and the existing capture rollback paths are unchanged.
+Shared runtime and use cases live in [`crates/ice-runtime`](../crates/ice-runtime): `AppState`, core/capture lifecycle, settings, subscriptions, node/rule selection, profile caches, log reads, background watchdogs, and the local MCP/control server. Tauri commands marshal IPC arguments and schedule blocking work; tray actions, background workers, and [`crates/ice-cli`](../crates/ice-cli) call the same application services, never Tauri commands. `AppResources` and `AppHost` expose resource paths, post-mutation notifications, and interactive elevation policy. The Tauri implementation (`TauriHost`) lives in `apps/desktop/src-tauri/src/app_host.rs`, outside `ice-runtime`, keeping `ice-runtime` and `ice-cli` completely free of Tauri and GUI toolkit dependencies. The configuration-only scope of `ice-engine` and the existing capture rollback paths are unchanged.
 
 ### MCP control surface
 
@@ -432,6 +424,7 @@ turning automatic checks off clears both.
 ## Further reading
 
 - [README](../README.md): installation, usage, and local development.
+- [CLI](cli.md): cross-platform headless daemon, CLI commands, and Agent automation.
 - [TUN](tun.md): capture behavior, platform configuration, privileges, and limits.
 - [Testing](testing.md): local/CI coverage and manual acceptance tests.
 - [Release process](release-process.md): versioning, signing, packaging, and publication.

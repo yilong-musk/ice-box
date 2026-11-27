@@ -1,0 +1,2416 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+use super::*;
+use crate::capture::CaptureController;
+use crate::orchestrate::generate_config;
+use ice_config::{
+    load_node_favorites, set_node_favorite, set_proxy_service_enabled, AppPaths, NormalizedOutbound,
+};
+use ice_engine::{
+    load_index, read_profile, write_subscription_success, SubscriptionFormat, SubscriptionMeta,
+    SubscriptionPaths,
+};
+use ice_proxy_sys::is_proxy_applied_on_disk;
+use std::fs;
+use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
+use uuid::Uuid;
+
+fn temp_state_with_node(label: &str) -> AppState {
+    let nodes = vec![NormalizedOutbound {
+        tag: "n1".into(),
+        outbound: std::sync::Arc::new(
+            serde_json::json!({"type":"socks","tag":"n1","server":"1.1.1.1","server_port":1}),
+        ),
+    }];
+    temp_state_with_profile(
+        label,
+        &ice_config::NormalizedProfile::from_nodes_only(nodes),
+    )
+}
+
+/// App state whose active subscription holds `profile`.
+fn temp_state_with_profile(label: &str, profile: &ice_config::NormalizedProfile) -> AppState {
+    let dir = std::env::temp_dir().join(format!(
+        "ice-box-cmd-{label}-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let paths = AppPaths::new(&dir);
+    paths.ensure_dirs().unwrap();
+    let sub = SubscriptionPaths::from_app(&paths);
+    let id = Uuid::new_v4();
+    let meta = SubscriptionMeta {
+        id,
+        name: "t".into(),
+        url: "https://example.com/s".into(),
+        active: true,
+        format: SubscriptionFormat::SingBox,
+        node_count: 1,
+        group_count: 0,
+        rule_count: 0,
+        has_dns: false,
+        parse_warnings: vec![],
+        last_updated: None,
+        last_error: None,
+        etag: None,
+        last_modified: None,
+        fetched_as: None,
+        userinfo: None,
+        provider_info: vec![],
+        auto_update: false,
+        auto_update_interval: None,
+        source: ice_engine::SubscriptionSource::Remote,
+    };
+    write_subscription_success(&sub, &meta, "{}", profile).unwrap();
+
+    let (core, core_snapshot) = crate::core_snapshot::wrap_core(Box::new(
+        ice_core::CoreController::default(),
+    )
+        as Box<dyn ice_core::CoreHandle>);
+    AppState {
+        paths: paths.clone(),
+        core,
+        core_snapshot,
+        runtime_status: crate::runtime_status::RuntimeReadModel::default(),
+        workers: crate::workers::WorkerSupervisor::default(),
+        proxy: Mutex::new(Box::new(ice_proxy_sys::NoopSystemProxy)),
+        orchestrate: Mutex::new(()),
+        proxy_recovery_warning: Mutex::new(Vec::new()),
+        proxy_applied_cache: Mutex::new(None),
+        system_proxy_available: false,
+        capabilities: crate::HostCapabilities::headless(),
+        shutdown_requested: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        instance_lock: crate::test_instance_lock(&paths),
+        traffic: ice_core::TrafficMonitor::new(),
+        capture: CaptureController::new(paths.clone(), None),
+        profile_cache: Mutex::new(None),
+        profile_parse_cache: std::sync::Arc::new(ice_engine::ProfileCache::new()),
+        subscription_watchdog_alive: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        helper_probe_cache: Mutex::new(None),
+        tun_task_cache: Mutex::new(None),
+        clash_live_mode_cache: Mutex::new(true),
+        launch_proxy_restore_attempted: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+            false,
+        )),
+        live_cache: crate::application::LiveCache::default(),
+    }
+}
+
+fn temp_state_with_rules(label: &str, rules: Vec<serde_json::Value>) -> AppState {
+    let dir = std::env::temp_dir().join(format!(
+        "ice-box-cmd-{label}-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let paths = AppPaths::new(&dir);
+    paths.ensure_dirs().unwrap();
+    let sub = SubscriptionPaths::from_app(&paths);
+    let id = Uuid::new_v4();
+    let meta = SubscriptionMeta {
+        id,
+        name: "t".into(),
+        url: "https://example.com/s".into(),
+        active: true,
+        format: SubscriptionFormat::SingBox,
+        node_count: 1,
+        group_count: 0,
+        rule_count: rules.len(),
+        has_dns: false,
+        parse_warnings: vec![],
+        last_updated: None,
+        last_error: None,
+        etag: None,
+        last_modified: None,
+        fetched_as: None,
+        userinfo: None,
+        provider_info: vec![],
+        auto_update: false,
+        auto_update_interval: None,
+        source: ice_engine::SubscriptionSource::Remote,
+    };
+    let mut profile = ice_config::NormalizedProfile::from_nodes_only(vec![NormalizedOutbound {
+        tag: "n1".into(),
+        outbound: std::sync::Arc::new(
+            serde_json::json!({"type":"socks","tag":"n1","server":"1.1.1.1","server_port":1}),
+        ),
+    }]);
+    profile.route.rules = rules;
+    write_subscription_success(&sub, &meta, "{}", &profile).unwrap();
+
+    let (core, core_snapshot) = crate::core_snapshot::wrap_core(Box::new(
+        ice_core::CoreController::default(),
+    )
+        as Box<dyn ice_core::CoreHandle>);
+    AppState {
+        paths: paths.clone(),
+        core,
+        core_snapshot,
+        runtime_status: crate::runtime_status::RuntimeReadModel::default(),
+        workers: crate::workers::WorkerSupervisor::default(),
+        proxy: Mutex::new(Box::new(ice_proxy_sys::NoopSystemProxy)),
+        orchestrate: Mutex::new(()),
+        proxy_recovery_warning: Mutex::new(Vec::new()),
+        proxy_applied_cache: Mutex::new(None),
+        system_proxy_available: false,
+        capabilities: crate::HostCapabilities::headless(),
+        shutdown_requested: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        instance_lock: crate::test_instance_lock(&paths),
+        traffic: ice_core::TrafficMonitor::new(),
+        capture: CaptureController::new(paths.clone(), None),
+        profile_cache: Mutex::new(None),
+        profile_parse_cache: std::sync::Arc::new(ice_engine::ProfileCache::new()),
+        subscription_watchdog_alive: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        helper_probe_cache: Mutex::new(None),
+        tun_task_cache: Mutex::new(None),
+        clash_live_mode_cache: Mutex::new(true),
+        launch_proxy_restore_attempted: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+            false,
+        )),
+        live_cache: crate::application::LiveCache::default(),
+    }
+}
+
+#[test]
+fn collect_status_does_not_block_on_core_lock() {
+    let state = std::sync::Arc::new(temp_state_with_node("orch1-status"));
+    *state.helper_probe_cache.lock().unwrap() = Some((Instant::now(), false));
+    let _ = crate::helper_install::helper_core_stale(state.capture.resource_dir());
+    let _ = cached_tun_task_ready(&state);
+    collect_status(state.as_ref()).expect("warmup");
+    let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+    let bg = state.clone();
+    let handle = std::thread::spawn(move || {
+        let _held = bg.core.lock().unwrap();
+        locked_tx.send(()).unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(3));
+    });
+    locked_rx.recv().expect("core lock held");
+    let t0 = Instant::now();
+    collect_status(state.as_ref()).expect("status");
+    let elapsed = t0.elapsed();
+    assert!(
+        state.core.try_lock().is_err(),
+        "core lock must still be held; collect_status must not have waited for it"
+    );
+    // Holder sleeps 3s. 50ms was a false fail under parallel `cargo test`:
+    // `load_index` recovered leftover dirs under a process-wide commit lock.
+    // Status now reads the index without that lock; 500ms matches the
+    // sibling proxy-lock poll budget and is still well under the hold.
+    assert!(
+        elapsed < std::time::Duration::from_millis(500),
+        "collect_status waited {elapsed:?}; it must not take the core lock"
+    );
+    handle.join().expect("holder");
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn launch_restores_proxy_service_only_when_flag_is_on() {
+    let state = temp_state_with_node("launch-flag");
+    assert!(
+        !take_launch_proxy_restore(&state).unwrap(),
+        "fresh data dir must not restore capture"
+    );
+    assert!(!state.launch_proxy_restore_attempted.load(Ordering::SeqCst));
+
+    set_proxy_service_enabled(&state.paths.settings(), true).unwrap();
+    assert!(take_launch_proxy_restore(&state).unwrap());
+    assert!(
+        !take_launch_proxy_restore(&state).unwrap(),
+        "StrictMode remount must not restore twice"
+    );
+    let _ = fs::remove_dir_all(state.paths.root());
+
+    let skipped = temp_state_with_node("launch-flag-off");
+    set_proxy_service_enabled(&skipped.paths.settings(), false).unwrap();
+    assert!(!take_launch_proxy_restore(&skipped).unwrap());
+    assert!(!skipped
+        .launch_proxy_restore_attempted
+        .load(Ordering::SeqCst));
+    let _ = fs::remove_dir_all(skipped.paths.root());
+}
+
+#[test]
+fn launch_proxy_restore_skips_when_shutting_down_or_already_capturing() {
+    let shutting_down = temp_state_with_node("launch-flag-quit");
+    set_proxy_service_enabled(&shutting_down.paths.settings(), true).unwrap();
+    shutting_down
+        .shutdown_requested
+        .store(true, Ordering::SeqCst);
+    assert!(!take_launch_proxy_restore(&shutting_down).unwrap());
+    assert!(!shutting_down
+        .launch_proxy_restore_attempted
+        .load(Ordering::SeqCst));
+    let _ = fs::remove_dir_all(shutting_down.paths.root());
+
+    let already_on = temp_state_with_node("launch-flag-active");
+    set_proxy_service_enabled(&already_on.paths.settings(), true).unwrap();
+    already_on.capture.set_system_proxy_active().unwrap();
+    assert!(!take_launch_proxy_restore(&already_on).unwrap());
+    assert!(!already_on
+        .launch_proxy_restore_attempted
+        .load(Ordering::SeqCst));
+    let _ = fs::remove_dir_all(already_on.paths.root());
+}
+
+#[test]
+fn recover_launch_leftovers_is_a_noop_on_a_fresh_data_dir() {
+    let state = temp_state_with_node("launch-recover-fresh");
+    recover_launch_leftovers(&state);
+    assert!(state.proxy_recovery_warning.lock().unwrap().is_empty());
+    assert_eq!(state.capture.active_backend(), TrafficCapture::Inactive);
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn recover_launch_leftovers_clears_applied_proxy_backup_without_enabling_capture() {
+    let state = temp_state_with_node("launch-recover-proxy");
+    fs::write(
+        state.paths.proxy_backup(),
+        r#"{
+            "applied": true,
+            "pending_apply": false,
+            "applied_at": null,
+            "endpoints": {"http_host": "127.0.0.1", "http_port": 17890},
+            "backup": {"enabled": false, "http": null, "https": null, "socks": null, "extra": {}}
+        }"#,
+    )
+    .unwrap();
+    recover_launch_leftovers(&state);
+    assert!(!is_proxy_applied_on_disk(&state.paths.proxy_backup()));
+    assert_eq!(state.capture.active_backend(), TrafficCapture::Inactive);
+    assert!(state.proxy_recovery_warning.lock().unwrap().is_empty());
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn parse_proxy_mode_accepts_valid_and_rejects_unknown() {
+    assert_eq!(parse_proxy_mode("rule").unwrap(), ProxyMode::Rule);
+    assert_eq!(parse_proxy_mode("global").unwrap(), ProxyMode::Global);
+    assert_eq!(parse_proxy_mode("direct").unwrap(), ProxyMode::Direct);
+    let err = parse_proxy_mode("nope").expect_err("unknown mode");
+    assert_eq!(err.code, "config.invalid");
+    assert!(err.message.contains("unknown proxy mode"));
+}
+
+#[test]
+fn proxy_posture_counts_live_recorded_or_tun_as_engaged() {
+    // Mirrors Home's `proxyOn`; the tray menu renders the same answer.
+    let off = ProxyServicePosture {
+        live: Some(false),
+        recorded: Some(false),
+    };
+    assert!(!off.engaged(false));
+    assert!(off.engaged(true), "TUN owns capture on its own");
+    assert!(ProxyServicePosture {
+        live: Some(true),
+        recorded: Some(false),
+    }
+    .engaged(false));
+    assert!(
+        ProxyServicePosture {
+            live: Some(false),
+            recorded: Some(true),
+        }
+        .engaged(false),
+        "an on-disk record must stay stoppable"
+    );
+    let unknown = ProxyServicePosture {
+        live: None,
+        recorded: None,
+    };
+    assert!(!unknown.engaged(false), "stopped core is off");
+}
+
+#[test]
+fn selected_now_reuses_a_fresh_group_head() {
+    use std::time::Duration;
+
+    let cache = crate::application::LiveCache::default();
+    let endpoints = ice_core::HealthEndpoints::new("127.0.0.1", 9);
+    cache.seed_group_heads_for_test(
+        endpoints.clone(),
+        3,
+        vec![ice_core::GroupHead {
+            tag: "proxy".into(),
+            now: "hk".into(),
+        }],
+        Duration::from_secs(0),
+    );
+    // A fresh head must answer without opening a Clash connection.
+    assert_eq!(
+        crate::application::load_selected_now(&cache, &endpoints, 3, "proxy", true).as_deref(),
+        Some("hk")
+    );
+    assert_eq!(
+        crate::application::load_selected_now(&cache, &endpoints, 3, "missing", false).as_deref(),
+        None
+    );
+}
+
+#[test]
+fn record_group_now_replaces_a_fresh_exit_without_a_fetch() {
+    use std::time::Duration;
+
+    let cache = crate::application::LiveCache::default();
+    let endpoints = ice_core::HealthEndpoints::new("127.0.0.1", 9);
+    cache.seed_group_heads_for_test(
+        endpoints.clone(),
+        3,
+        vec![
+            ice_core::GroupHead {
+                tag: "auto".into(),
+                now: "a".into(),
+            },
+            ice_core::GroupHead {
+                tag: "proxy".into(),
+                now: "hk".into(),
+            },
+        ],
+        Duration::from_secs(0),
+    );
+    cache.record_group_now(&endpoints, 3, "proxy", "jp");
+
+    assert_eq!(
+        crate::application::load_selected_now(&cache, &endpoints, 3, "proxy", true).as_deref(),
+        Some("jp")
+    );
+    let groups =
+        crate::application::load_proxy_groups(&cache, &endpoints, 3, true).expect("cached heads");
+    assert_eq!(groups.len(), 2);
+    assert_eq!(groups[0].now, "a");
+    assert_eq!(groups[1].tag, "proxy");
+    assert_eq!(groups[1].now, "jp");
+    // A different core generation must not see the patched sample.
+    assert_eq!(
+        crate::application::load_selected_now(&cache, &endpoints, 4, "proxy", false).as_deref(),
+        None
+    );
+}
+
+#[test]
+fn collect_status_snapshots_stopped_core() {
+    let state = temp_state_with_node("status");
+    let status = collect_status(&state).expect("status");
+    assert_eq!(status.core.status, ice_core::CoreStatus::Stopped);
+    assert_eq!(status.subscription_count, 1);
+    assert_eq!(status.system_proxy_recorded, None);
+    assert_eq!(status.system_proxy_applied, None);
+    assert!(!status.system_proxy_available);
+    assert!(status.has_nodes);
+    let outbound = status.selected_outbound.expect("selected outbound");
+    assert_eq!(outbound.tag, "n1");
+    assert_eq!(outbound.outbound_type, "socks");
+    assert_eq!(outbound.group_now, None);
+    let again = collect_status(&state).expect("status");
+    assert_eq!(again.revision, status.revision);
+    assert_eq!(again.sampled_at_ms, status.sampled_at_ms);
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn status_keeps_one_committed_revision_while_a_mutation_is_inflight() {
+    let state = temp_state_with_node("status-transaction");
+    let before = collect_status(&state).unwrap();
+    let guard = lock_orchestrate(&state).unwrap();
+    let mut settings = current_settings(&state.paths).unwrap();
+    settings.tun.enabled = true;
+    persist_settings(&state.paths.settings(), &settings, host_platform()).unwrap();
+    let mut core = state.core_snapshot.load().state.clone();
+    core.status = CoreStatus::Running;
+    state.core_snapshot.publish(core);
+    let during = collect_status(&state).unwrap();
+    assert_eq!(during.revision, before.revision);
+    assert_eq!(during.core.status, before.core.status);
+    assert_eq!(during.configured_tun, before.configured_tun);
+    assert!(during.refresh_pending);
+    drop(guard);
+    let after = state.runtime_status.latest().unwrap();
+    assert!(after.revision > before.revision);
+    assert_eq!(after.core.status, CoreStatus::Running);
+    assert!(after.configured_tun);
+    assert!(!after.refresh_pending);
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn status_does_not_wait_for_a_slow_probe() {
+    let state = temp_state_with_node("status-probe");
+    let _probe = state.runtime_status.probe_refresh.lock().unwrap();
+    let status = collect_status(&state).unwrap();
+    assert!(status.revision > 0);
+    assert!(status.diagnostics.stale);
+    assert!(status.diagnostics.checked_at_ms.is_none());
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn concurrent_status_reads_do_not_report_a_mutation() {
+    let state = Arc::new(temp_state_with_node("parallel-status"));
+    let barrier = Arc::new(std::sync::Barrier::new(4));
+    let handles: Vec<_> = (0..4)
+        .map(|_| {
+            let state = state.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                let status = collect_status(&state).unwrap();
+                assert!(!status.refresh_pending);
+                status.revision
+            })
+        })
+        .collect();
+    let revisions: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+    assert!(
+        revisions.windows(2).all(|pair| pair[0] == pair[1]),
+        "quiet parallel reads share one committed revision, got {revisions:?}"
+    );
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn a_probe_from_an_older_core_or_settings_is_explicitly_stale() {
+    let state = temp_state_with_node("probe-context");
+    state.runtime_status.complete_probe(
+        0,
+        Ok(crate::runtime_status::ProbeValues {
+            core_generation: state.core_snapshot.load().generation,
+            settings_signature: file_sig(&state.paths.settings()),
+            ..Default::default()
+        }),
+        Instant::now(),
+    );
+    assert!(!collect_status(&state).unwrap().diagnostics.stale);
+    state
+        .core_snapshot
+        .publish(state.core_snapshot.load().state.clone());
+    assert!(collect_status(&state).unwrap().diagnostics.stale);
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn system_proxy_applied_does_not_blink_while_a_probe_refresh_is_due_or_requested() {
+    use crate::runtime_status::{ProbeValues, PROBE_INTERVAL, PROBE_MAX_AGE};
+    let mut state = temp_state_with_node("probe-grace");
+    state.system_proxy_available = true;
+    let mut core = state.core_snapshot.load().state.clone();
+    core.status = CoreStatus::Running;
+    state.core_snapshot.publish(core);
+    let sample = |state: &AppState, at: Instant| {
+        let values = ProbeValues {
+            core_generation: state.core_snapshot.load().generation,
+            settings_signature: file_sig(&state.paths.settings()),
+            system_proxy_applied: Some(true),
+            ..ProbeValues::default()
+        };
+        let epoch = state.runtime_status.probe_epoch();
+        state.runtime_status.complete_probe(epoch, Ok(values), at)
+    };
+
+    // One interval old: the worker's refresh is due, but Home still reads the
+    // value instead of dropping to `None` for the length of the probe.
+    let aged = Instant::now()
+        .checked_sub(PROBE_INTERVAL + std::time::Duration::from_millis(100))
+        .expect("monotonic clock");
+    sample(&state, aged);
+    assert!(state.runtime_status.begin_refresh(Instant::now()).is_some());
+    let status = collect_status(&state).unwrap();
+    assert_eq!(status.system_proxy_applied, Some(true));
+    assert!(!status.diagnostics.stale);
+
+    // Past the serving window the sample is withheld.
+    let expired = Instant::now()
+        .checked_sub(PROBE_MAX_AGE + std::time::Duration::from_millis(100))
+        .expect("monotonic clock");
+    sample(&state, expired);
+    assert_eq!(collect_status(&state).unwrap().system_proxy_applied, None);
+
+    // A refresh request (window focus) keeps the current sample; a mutation's
+    // invalidation withholds it.
+    sample(&state, Instant::now());
+    state.runtime_status.request_refresh();
+    assert_eq!(
+        collect_status(&state).unwrap().system_proxy_applied,
+        Some(true)
+    );
+    state.runtime_status.invalidate_probes();
+    assert_eq!(collect_status(&state).unwrap().system_proxy_applied, None);
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn application_ports_work_without_a_tauri_runtime() {
+    struct Host {
+        notifications: std::cell::Cell<usize>,
+    }
+    impl AppResources for Host {
+        fn resource_dir(&self) -> Option<std::path::PathBuf> {
+            Some("bundled-resources".into())
+        }
+    }
+    impl AppHost for Host {
+        fn state_changed(&self) {
+            self.notifications.set(self.notifications.get() + 1);
+        }
+    }
+    let host = Host {
+        notifications: std::cell::Cell::new(0),
+    };
+    assert_eq!(resource_dir(&host), Some("bundled-resources".into()));
+    broadcast_state_change(&host);
+    assert_eq!(host.notifications.get(), 1);
+    let state = temp_state_with_node("headless-use-case");
+    let subscriptions = list_subscriptions_use_case(&state).unwrap();
+    assert_eq!(subscriptions.as_array().unwrap().len(), 1);
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn collect_status_reports_app_memory_and_skips_a_stopped_core() {
+    let state = temp_state_with_node("memory-stopped");
+    let status = collect_status(&state).expect("status");
+    let app = status
+        .memory
+        .app_bytes
+        .expect("app memory must be readable");
+    assert!(app > 0, "app memory must be positive, got {app}");
+    assert_eq!(status.memory.core_bytes, None);
+    assert_eq!(status.memory.total_bytes, app);
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn subscription_auto_update_announces_the_shared_state_change() {
+    struct Host {
+        notifications: std::cell::Cell<usize>,
+    }
+    impl AppResources for Host {
+        fn resource_dir(&self) -> Option<std::path::PathBuf> {
+            None
+        }
+    }
+    impl AppHost for Host {
+        fn state_changed(&self) {
+            self.notifications.set(self.notifications.get() + 1);
+        }
+    }
+
+    let state = temp_state_with_node("auto-update-notify");
+    let paths = SubscriptionPaths::from_app(&state.paths);
+    let id = load_index(&paths).unwrap().items[0].id;
+    let host = Host {
+        notifications: std::cell::Cell::new(0),
+    };
+
+    set_auto_update_subscription_use_case(
+        &host,
+        &state,
+        SetAutoUpdateRequest {
+            id,
+            auto_update: true,
+            auto_update_interval: Some(ice_engine::AutoUpdateInterval::ThreeHours),
+        },
+    )
+    .expect("set auto update");
+
+    assert_eq!(host.notifications.get(), 1);
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn rule_mutations_announce_even_when_the_mutation_fails() {
+    struct Host {
+        notifications: std::cell::Cell<usize>,
+    }
+    impl AppResources for Host {
+        fn resource_dir(&self) -> Option<std::path::PathBuf> {
+            None
+        }
+    }
+    impl AppHost for Host {
+        fn state_changed(&self) {
+            self.notifications.set(self.notifications.get() + 1);
+        }
+    }
+
+    let state = temp_state_with_rules("rule-notify", sample_rules());
+    let host = Host {
+        notifications: std::cell::Cell::new(0),
+    };
+    let error = set_rule_disabled_use_case(
+        &host,
+        &state,
+        SetRuleDisabledRequest {
+            fingerprint: "missing".into(),
+            disabled: true,
+        },
+    )
+    .expect_err("unknown rule");
+
+    assert_eq!(error.code, ErrorCode::ConfigInvalid.as_str());
+    assert_eq!(host.notifications.get(), 1);
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn startup_is_rejected_while_the_application_is_quitting() {
+    struct Host;
+    impl AppResources for Host {
+        fn resource_dir(&self) -> Option<std::path::PathBuf> {
+            None
+        }
+    }
+    impl AppHost for Host {
+        fn state_changed(&self) {}
+    }
+
+    let state = temp_state_with_node("quit-start-guard");
+    state
+        .shutdown_requested
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let error = start_core_inner(&Host, &state).expect_err("start while quitting");
+    assert_eq!(error.code, ErrorCode::CoreInvalidState.as_str());
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn stopping_the_core_clears_the_next_launch_proxy_service_desire() {
+    let state = temp_state_with_node("stop-core-proxy-desire");
+    set_proxy_service_enabled(&state.paths.settings(), true).expect("proxy desire");
+
+    stop_core_with_binary(&state, std::env::current_exe().expect("test executable"))
+        .expect("stop core");
+
+    assert!(
+        !current_settings(&state.paths)
+            .unwrap()
+            .proxy_service_enabled
+    );
+    assert!(
+        !state
+            .shutdown_requested
+            .load(std::sync::atomic::Ordering::SeqCst),
+        "an explicit stop must allow a later start"
+    );
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn collect_status_reads_core_memory_from_a_live_pid() {
+    let state = temp_state_with_node("memory-running");
+    // The test process stands in for the core: a live pid whose memory figure
+    // is readable without elevation.
+    ice_core::write_pid(&state.paths.pid(), std::process::id()).expect("pid file");
+    let mut core = state.core_snapshot.load().state.clone();
+    core.status = ice_core::CoreStatus::Running;
+    state.core_snapshot.publish(core);
+
+    let status = collect_status(&state).expect("status");
+    let core_bytes = status.memory.core_bytes.expect("core memory");
+    assert!(
+        core_bytes > 0,
+        "core memory must be positive, got {core_bytes}"
+    );
+    let app = status.memory.app_bytes.expect("app memory");
+    assert_eq!(status.memory.total_bytes, app + core_bytes);
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn collect_status_skips_core_memory_without_a_usable_pid_file() {
+    let state = temp_state_with_node("memory-no-pid");
+    let mut core = state.core_snapshot.load().state.clone();
+    core.status = ice_core::CoreStatus::Running;
+    state.core_snapshot.publish(core);
+
+    // Running, but no pid file yet (startup window): the core figure stays
+    // unknown instead of erroring the poll.
+    let status = collect_status(&state).expect("status");
+    assert_eq!(status.memory.core_bytes, None);
+
+    fs::write(state.paths.pid(), b"not-a-pid").expect("seed");
+    let status = collect_status(&state).expect("status");
+    assert_eq!(status.memory.core_bytes, None);
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn collect_status_does_not_block_on_held_proxy_lock() {
+    let state = temp_state_with_node("proxy-held");
+    // Warm one-time / first-probe work outside the measured window: SHA-256
+    // of the bundled core (macOS helper drift) and the Windows scheduled-
+    // task pin probe (`schtasks /Query /XML`, easily >500ms on CI). The
+    // poll itself must stay cheap and must not wait on `state.proxy`.
+    let _ = crate::helper_install::helper_core_stale(state.capture.resource_dir());
+    let _ = cached_tun_task_ready(&state);
+    let _guard = state.proxy.lock().unwrap();
+    let started = std::time::Instant::now();
+    let status = collect_status(&state).expect("status");
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(500),
+        "status poll must not wait on system-proxy apply/restore"
+    );
+    assert_eq!(status.core.status, ice_core::CoreStatus::Stopped);
+    assert!(
+        !status.system_proxy_available,
+        "Noop backend must not flip to available while proxy lock is held"
+    );
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn cached_system_proxy_applied_ignores_expired_memo_when_proxy_busy() {
+    let state = temp_state_with_node("stale-cache");
+    let settings = ice_config::AppSettings::default();
+    let endpoints = endpoints_from_settings(&settings);
+    {
+        let mut cache = state.proxy_applied_cache.lock().unwrap();
+        *cache = Some((
+            endpoints.clone(),
+            std::time::Instant::now()
+                .checked_sub(std::time::Duration::from_secs(60))
+                .expect("monotonic clock"),
+            true,
+        ));
+    }
+    let _guard = state.proxy.lock().unwrap();
+    assert_eq!(
+        cached_system_proxy_applied(&state, &settings),
+        None,
+        "expired memo must not be served while apply/restore holds the proxy lock"
+    );
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn probe_refresh_keeps_last_system_proxy_value_when_proxy_lock_is_busy() {
+    use crate::runtime_status::{ProbeValues, PROBE_INTERVAL};
+    let mut state = temp_state_with_node("probe-busy-proxy");
+    state.system_proxy_available = true;
+    let mut core = state.core_snapshot.load().state.clone();
+    core.status = CoreStatus::Running;
+    state.core_snapshot.publish(core);
+    let aged = Instant::now()
+        .checked_sub(PROBE_INTERVAL + std::time::Duration::from_millis(100))
+        .expect("monotonic clock");
+    let values = ProbeValues {
+        core_generation: state.core_snapshot.load().generation,
+        settings_signature: file_sig(&state.paths.settings()),
+        system_proxy_applied: Some(true),
+        ..ProbeValues::default()
+    };
+    let epoch = state.runtime_status.probe_epoch();
+    state.runtime_status.complete_probe(epoch, Ok(values), aged);
+    {
+        let _busy = state.proxy.lock().unwrap();
+        refresh_runtime_probes(&state);
+    }
+    let status = collect_status(&state).unwrap();
+    assert!(!status.diagnostics.stale);
+    assert!(status.diagnostics.error.is_none());
+    assert_eq!(status.system_proxy_applied, Some(true));
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn probe_refresh_does_not_reuse_a_pre_mutation_value_when_proxy_lock_is_busy() {
+    use crate::runtime_status::{ProbeValues, PROBE_INTERVAL};
+    let mut state = temp_state_with_node("probe-busy-after-mutation");
+    state.system_proxy_available = true;
+    let mut core = state.core_snapshot.load().state.clone();
+    core.status = CoreStatus::Running;
+    state.core_snapshot.publish(core);
+    let aged = Instant::now()
+        .checked_sub(PROBE_INTERVAL + std::time::Duration::from_millis(100))
+        .expect("monotonic clock");
+    let values = ProbeValues {
+        core_generation: state.core_snapshot.load().generation,
+        settings_signature: file_sig(&state.paths.settings()),
+        system_proxy_applied: Some(true),
+        ..ProbeValues::default()
+    };
+    let epoch = state.runtime_status.probe_epoch();
+    state.runtime_status.complete_probe(epoch, Ok(values), aged);
+    state.runtime_status.invalidate_probes();
+    {
+        let _busy = state.proxy.lock().unwrap();
+        refresh_runtime_probes(&state);
+    }
+    let status = collect_status(&state).unwrap();
+    assert_eq!(status.system_proxy_applied, None);
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn cached_system_proxy_applied_serves_fresh_memo_without_proxy_lock() {
+    let state = temp_state_with_node("fresh-cache");
+    let settings = ice_config::AppSettings::default();
+    let endpoints = endpoints_from_settings(&settings);
+    {
+        let mut cache = state.proxy_applied_cache.lock().unwrap();
+        *cache = Some((endpoints, std::time::Instant::now(), true));
+    }
+    let _guard = state.proxy.lock().unwrap();
+    assert_eq!(cached_system_proxy_applied(&state, &settings), Some(true));
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn require_known_node_tag_rejects_unknown() {
+    let state = temp_state_with_node("tag");
+    let err = require_known_node_tag(&state, "missing").expect_err("unknown tag");
+    assert_eq!(err.code, "config.invalid");
+    assert!(err.message.contains("unknown node tag"));
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn require_known_node_tag_accepts_merged_node() {
+    let state = temp_state_with_node("ok");
+    require_known_node_tag(&state, "n1").expect("known tag");
+    let first = active_profile(&state).unwrap();
+    let second = active_profile(&state).unwrap();
+    assert!(
+        Arc::ptr_eq(&first, &second),
+        "read paths must share the cached profile allocation"
+    );
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn profile_cache_serves_unchanged_and_invalidates_on_update() {
+    let state = temp_state_with_node("cache");
+    let first = merged_outbounds_opt(&state).unwrap().unwrap();
+    assert_eq!(first[0].tag, "n1");
+    // mtime unchanged: the second read must come from the cache.
+    let second = merged_outbounds_opt(&state).unwrap().unwrap();
+    assert_eq!(second[0].tag, "n1");
+    assert!(
+        state.profile_cache.lock().unwrap().is_some(),
+        "cache must be populated after a read"
+    );
+
+    // Simulate a subscription update: profile.json + index.json are
+    // rewritten atomically, which must invalidate the cached entry.
+    let sub = SubscriptionPaths::from_app(&state.paths);
+    let index = load_index(&sub).unwrap();
+    let meta = ice_engine::active_subscription(&index).unwrap().clone();
+    let nodes = vec![NormalizedOutbound {
+        tag: "n2".into(),
+        outbound: std::sync::Arc::new(
+            serde_json::json!({"type":"socks","tag":"n2","server":"2.2.2.2","server_port":1}),
+        ),
+    }];
+    write_subscription_success(
+        &sub,
+        &meta,
+        "{}",
+        &ice_config::NormalizedProfile::from_nodes_only(nodes),
+    )
+    .unwrap();
+    let updated = merged_outbounds_opt(&state).unwrap().unwrap();
+    assert_eq!(updated[0].tag, "n2", "stale cache must not be served");
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+/// A nodes-only profile (a share-link subscription) declares no
+/// `route.rule_set`; its rule-sets come from the built-in `geosite` /
+/// `geoip` defaults, which the resident cache does not hold.
+#[test]
+fn rule_set_status_lists_legacy_geo_sets_of_a_nodes_only_profile() {
+    let state = temp_state_with_node("rule-set-status-geo");
+    // Warm the resident cache first: the status must not read from it.
+    let entry = cached_profile(&state).unwrap().unwrap();
+    assert!(entry.profile.route.rules.is_empty());
+    assert!(entry.profile.route.rule_sets.is_empty());
+
+    let statuses = rule_set_status(&state).unwrap();
+    let tags: Vec<&str> = statuses.iter().map(|s| s.tag.as_str()).collect();
+    for tag in ["geosite-cn", "geoip-cn"] {
+        assert!(tags.contains(&tag), "{tag} missing from {tags:?}");
+    }
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn resident_profile_omits_rules_until_the_rules_page_loads_them() {
+    let state = temp_state_with_rules("resident-rules", sample_rules());
+    let entry = cached_profile(&state).unwrap().unwrap();
+    assert!(
+        entry.profile.route.rules.is_empty(),
+        "status and the tray must not retain route rules"
+    );
+    assert!(entry.profile.dns.is_none());
+    assert!(
+        entry.profile.nodes[0].outbound.get("server").is_none(),
+        "status and the tray must not retain node connection fields"
+    );
+    assert_eq!(
+        entry.profile.nodes[0]
+            .outbound
+            .get("type")
+            .and_then(|value| value.as_str()),
+        Some("socks")
+    );
+    assert!(
+        !subscription_rules_retained(&state),
+        "rules stay on disk until the Rules page reads them"
+    );
+
+    let overview = rule_overview(&state).unwrap();
+    assert_eq!(overview.total, 4);
+    assert!(subscription_rules_retained(&state));
+    let still = cached_profile(&state).unwrap().unwrap();
+    assert!(still.profile.route.rules.is_empty());
+
+    drop_rule_keyword_cache(&state);
+    assert!(!subscription_rules_retained(&state));
+    let listed = query_rules(
+        &state,
+        &ListRulesRequest {
+            keyword: None,
+            rule_type: None,
+            disabled: None,
+            custom: None,
+            offset: 0,
+            limit: 10,
+        },
+    )
+    .unwrap();
+    assert_eq!(listed.total, 4);
+    assert!(subscription_rules_retained(&state));
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn releasing_rules_does_not_hold_the_profile_cache_while_a_read_is_in_flight() {
+    let state = temp_state_with_rules("release-in-flight", sample_rules());
+    rule_overview(&state).unwrap();
+    let entry = cached_profile(&state).unwrap().unwrap();
+    let slot = rule_page_slot_for_test(&entry);
+    // Hold the slot like a Rules-page read that is still parsing the profile.
+    let held = slot.lock().unwrap();
+    std::thread::scope(|scope| {
+        let release = scope.spawn(|| drop_rule_keyword_cache(&state));
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(
+            state.profile_cache.try_lock().is_ok(),
+            "other commands must still reach the cached profile while release waits"
+        );
+        assert!(
+            !release.is_finished(),
+            "release waits for the read in flight"
+        );
+        drop(held);
+        release.join().unwrap();
+    });
+    assert!(!subscription_rules_retained(&state));
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn config_build_reloads_connection_fields_then_releases_them() {
+    let state = temp_state_with_node("resident-build");
+    let entry = cached_profile(&state).unwrap().unwrap();
+    assert!(entry.profile.nodes[0].outbound.get("server").is_none());
+
+    let settings = ice_config::load_settings(&state.paths.settings()).unwrap();
+    crate::orchestrate::generate_config_with_cache(
+        &state.paths,
+        &settings,
+        None,
+        ice_config::CaptureIntent::Diagnostic,
+        Some(state.profile_parse_cache.as_ref()),
+    )
+    .unwrap();
+
+    let config: serde_json::Value =
+        serde_json::from_slice(&fs::read(state.paths.config()).unwrap()).unwrap();
+    let node = config["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|outbound| outbound["tag"] == "n1")
+        .expect("generated node");
+    assert_eq!(node["server"], "1.1.1.1");
+
+    let after = cached_profile(&state).unwrap().unwrap();
+    assert!(after.profile.nodes[0].outbound.get("server").is_none());
+    assert_eq!(
+        after.profile.nodes[0]
+            .outbound
+            .get("type")
+            .and_then(|value| value.as_str()),
+        Some("socks")
+    );
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn validate_static_group_member_accepts_member() {
+    let outbounds = vec![NormalizedOutbound {
+        tag: "Proxies".into(),
+        outbound: std::sync::Arc::new(serde_json::json!({
+            "type": "selector",
+            "tag": "Proxies",
+            "outbounds": ["n1", "n2"],
+        })),
+    }];
+    validate_static_group_member(&outbounds, "Proxies", "n2").expect("member");
+}
+
+#[test]
+fn validate_static_group_member_rejects_unknown_group() {
+    let outbounds = vec![NormalizedOutbound {
+        tag: "Proxies".into(),
+        outbound: std::sync::Arc::new(serde_json::json!({"type": "selector", "outbounds": ["n1"]})),
+    }];
+    let err = validate_static_group_member(&outbounds, "missing", "n1").expect_err("unknown");
+    assert_eq!(err.code, "config.invalid");
+    assert!(err.message.contains("unknown strategy group"));
+}
+
+#[test]
+fn validate_static_group_member_rejects_non_member() {
+    let outbounds = vec![NormalizedOutbound {
+        tag: "Proxies".into(),
+        outbound: std::sync::Arc::new(serde_json::json!({"type": "selector", "outbounds": ["n1"]})),
+    }];
+    let err = validate_static_group_member(&outbounds, "Proxies", "nope").expect_err("non member");
+    assert_eq!(err.code, "config.invalid");
+    assert!(err.message.contains("is not a member"));
+}
+
+#[test]
+fn validate_static_group_member_rejects_non_selector() {
+    let outbounds = vec![NormalizedOutbound {
+        tag: "auto".into(),
+        outbound: std::sync::Arc::new(serde_json::json!({"type": "urltest", "outbounds": ["n1"]})),
+    }];
+    let err = validate_static_group_member(&outbounds, "auto", "n1").expect_err("not selector");
+    assert_eq!(err.code, "config.invalid");
+    assert!(err.message.contains("is not a selector group"));
+}
+
+#[test]
+fn selection_group_for_flat_profile_is_none() {
+    let profile = NormalizedProfile::from_nodes_only(vec![NormalizedOutbound {
+        tag: "n1".into(),
+        outbound: std::sync::Arc::new(serde_json::json!({"type": "socks", "tag": "n1"})),
+    }]);
+    assert_eq!(profile.selection_group_for("n1"), None);
+}
+
+#[test]
+fn selection_group_for_prefers_top_level_group() {
+    let profile = NormalizedProfile {
+        nodes: vec![NormalizedOutbound {
+            tag: "HK".into(),
+            outbound: std::sync::Arc::new(serde_json::json!({"type": "socks", "tag": "HK"})),
+        }],
+        groups: vec![
+            NormalizedOutbound {
+                tag: "Proxies".into(),
+                outbound: std::sync::Arc::new(serde_json::json!({
+                    "type": "selector",
+                    "tag": "Proxies",
+                    "outbounds": ["auto", "HK", "direct"],
+                })),
+            },
+            NormalizedOutbound {
+                tag: "auto".into(),
+                outbound: std::sync::Arc::new(serde_json::json!({
+                    "type": "urltest",
+                    "tag": "auto",
+                    "outbounds": ["HK", "JP"],
+                })),
+            },
+        ],
+        route: Default::default(),
+        dns: None,
+        default_outbound: Some("Proxies".into()),
+        parse_stats: Default::default(),
+    };
+    assert_eq!(
+        profile.selection_group_for("HK").as_deref(),
+        Some("Proxies"),
+        "leaf in top group selects there"
+    );
+    assert_eq!(
+        profile.selection_group_for("auto").as_deref(),
+        Some("Proxies"),
+        "sub-group in top group selects there"
+    );
+    assert_eq!(
+        profile.selection_group_for("JP").as_deref(),
+        Some("auto"),
+        "leaf only in sub-group selects there"
+    );
+    assert_eq!(
+        profile.selection_group_for("Proxies").as_deref(),
+        None,
+        "selecting the top group itself is a no-op"
+    );
+    assert!(profile.is_unselectable_group("Proxies"));
+    assert!(!profile.is_unselectable_group("auto"));
+    assert!(!profile.is_unselectable_group("HK"));
+}
+
+fn sample_rules() -> Vec<serde_json::Value> {
+    vec![
+        serde_json::json!({ "domain_suffix": ["youtube.com"], "outbound": "n1" }),
+        serde_json::json!({ "domain_suffix": ["google.com"], "outbound": "n1" }),
+        serde_json::json!({ "geoip": ["cn"], "outbound": "direct" }),
+        serde_json::json!({ "ip_is_private": true, "outbound": "direct" }),
+    ]
+}
+
+#[test]
+fn list_rules_returns_all_with_indexes_and_filters() {
+    let state = temp_state_with_rules("rules-all", sample_rules());
+    let resp = query_rules(
+        &state,
+        &ListRulesRequest {
+            keyword: None,
+            rule_type: None,
+            disabled: None,
+            custom: None,
+            offset: 0,
+            limit: 2,
+        },
+    )
+    .unwrap();
+    assert_eq!(resp.total, 4);
+    assert_eq!(resp.items.len(), 2);
+    assert_eq!(resp.items[0].index, Some(0));
+    assert_eq!(resp.items[1].index, Some(1));
+
+    let filtered = query_rules(
+        &state,
+        &ListRulesRequest {
+            keyword: Some("geo".into()),
+            rule_type: None,
+            disabled: None,
+            custom: None,
+            offset: 0,
+            limit: 50,
+        },
+    )
+    .unwrap();
+    assert_eq!(filtered.total, 1);
+    assert_eq!(filtered.items[0].rule_type, "geoip");
+
+    let typed = query_rules(
+        &state,
+        &ListRulesRequest {
+            keyword: None,
+            rule_type: Some("domain_suffix".into()),
+            disabled: None,
+            custom: None,
+            offset: 1,
+            limit: 50,
+        },
+    )
+    .unwrap();
+    assert_eq!(typed.total, 2);
+    assert_eq!(typed.items[0].index, Some(1));
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn rule_overview_counts_types_and_disabled() {
+    let state = temp_state_with_rules("rules-overview", sample_rules());
+    let fp = rule_fingerprint(&sample_rules()[0]);
+    let mut overrides = load_rule_overrides(&state.paths.rule_overrides());
+    overrides.set_disabled(fp, true);
+    save_rule_overrides(&state.paths.rule_overrides(), &overrides).unwrap();
+
+    let overview = rule_overview(&state).unwrap();
+    assert_eq!(overview.total, 4);
+    assert_eq!(overview.disabled, 1);
+    assert_eq!(overview.rule_sets, 0);
+    assert_eq!(overview.custom, 0);
+    let suffix = overview
+        .types
+        .iter()
+        .find(|t| t.rule_type == "domain_suffix")
+        .unwrap();
+    assert_eq!(suffix.count, 2);
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn set_rule_disabled_persists_and_generates_config_without_rule() {
+    let state = temp_state_with_rules("rules-disable", sample_rules());
+    let fp = rule_fingerprint(&sample_rules()[0]);
+    persist_rule_disabled(
+        &state,
+        &SetRuleDisabledRequest {
+            fingerprint: fp.clone(),
+            disabled: true,
+        },
+    )
+    .unwrap();
+
+    generate_config(
+        &state.paths,
+        &AppSettings::default(),
+        None,
+        CaptureIntent::Diagnostic,
+    )
+    .unwrap();
+    let config: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(state.paths.config()).unwrap()).unwrap();
+    let rules = config["route"]["rules"].as_array().unwrap();
+    assert_eq!(
+        rules.len(),
+        5,
+        "2 clash_mode rules + 3 remaining sample rules after the disabled one dropped"
+    );
+    assert!(!serde_json::to_string(rules)
+        .unwrap()
+        .contains("youtube.com"));
+
+    let listed = query_rules(
+        &state,
+        &ListRulesRequest {
+            keyword: None,
+            rule_type: None,
+            disabled: Some("disabled".into()),
+            custom: None,
+            offset: 0,
+            limit: 50,
+        },
+    )
+    .unwrap();
+    assert_eq!(listed.total, 1);
+    assert_eq!(listed.items[0].fingerprint, fp);
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn set_rule_disabled_rejects_unknown_fingerprint() {
+    let state = temp_state_with_rules("rules-unknown", sample_rules());
+    let err = persist_rule_disabled(
+        &state,
+        &SetRuleDisabledRequest {
+            fingerprint: "nope".into(),
+            disabled: true,
+        },
+    )
+    .expect_err("unknown fingerprint");
+    assert_eq!(err.code, "config.invalid");
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn add_remove_custom_rule_round_trip_and_validation() {
+    let state = temp_state_with_rules("rules-custom", sample_rules());
+    let custom = serde_json::json!({ "domain": ["example.com"], "outbound": "block" });
+    let fp = persist_add_custom_rule(
+        &state,
+        &AddCustomRuleRequest {
+            rule: custom.clone(),
+        },
+    )
+    .unwrap();
+
+    let listed = query_rules(
+        &state,
+        &ListRulesRequest {
+            keyword: Some("example".into()),
+            rule_type: None,
+            disabled: None,
+            custom: None,
+            offset: 0,
+            limit: 50,
+        },
+    )
+    .unwrap();
+    assert_eq!(listed.total, 1);
+    assert!(listed.items[0].custom);
+    assert_eq!(listed.items[0].index, None);
+
+    let custom_only = query_rules(
+        &state,
+        &ListRulesRequest {
+            keyword: None,
+            rule_type: None,
+            disabled: None,
+            custom: Some(true),
+            offset: 0,
+            limit: 50,
+        },
+    )
+    .unwrap();
+    assert_eq!(custom_only.total, 1);
+    assert!(custom_only.items[0].custom);
+
+    let subscription_only = query_rules(
+        &state,
+        &ListRulesRequest {
+            keyword: None,
+            rule_type: None,
+            disabled: None,
+            custom: Some(false),
+            offset: 0,
+            limit: 50,
+        },
+    )
+    .unwrap();
+    assert_eq!(subscription_only.total, 4);
+    assert!(subscription_only.items.iter().all(|r| !r.custom));
+
+    let overview = rule_overview(&state).unwrap();
+    assert_eq!(overview.custom, 1);
+
+    persist_remove_custom_rule(&state, &RemoveCustomRuleRequest { fingerprint: fp }).unwrap();
+
+    let overview = rule_overview(&state).unwrap();
+    assert_eq!(overview.custom, 0);
+
+    let err = persist_add_custom_rule(
+        &state,
+        &AddCustomRuleRequest {
+            rule: serde_json::json!("not-an-object"),
+        },
+    )
+    .expect_err("non object");
+    assert_eq!(err.code, "config.invalid");
+
+    let err = persist_add_custom_rule(
+        &state,
+        &AddCustomRuleRequest {
+            rule: serde_json::json!({ "domain": ["x.com"] }),
+        },
+    )
+    .expect_err("missing outbound");
+    assert_eq!(err.code, "config.invalid");
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn add_custom_rule_rejects_geoip_and_geosite_matchers() {
+    let state = temp_state_with_rules("rules-custom-geo", sample_rules());
+    for key in ["geoip", "geosite"] {
+        let err = persist_add_custom_rule(
+            &state,
+            &AddCustomRuleRequest {
+                rule: serde_json::json!({ key: ["cn"], "outbound": "direct" }),
+            },
+        )
+        .expect_err(&format!("{key} must be rejected"));
+        assert_eq!(err.code, "config.invalid");
+        assert!(
+            err.message.contains(key),
+            "message should name the matcher: {err}"
+        );
+    }
+    let overrides = load_rule_overrides(&state.paths.rule_overrides());
+    assert_eq!(overrides.custom.len(), 0, "nothing persisted");
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn add_custom_rule_rejects_string_port_matchers() {
+    let state = temp_state_with_rules("rules-custom-port", sample_rules());
+    let err = persist_add_custom_rule(
+        &state,
+        &AddCustomRuleRequest {
+            rule: serde_json::json!({ "port": ["443"], "outbound": "direct" }),
+        },
+    )
+    .expect_err("string port must be rejected");
+    assert_eq!(err.code, "config.invalid");
+    assert!(err.message.contains("port"), "{}", err.message);
+
+    let fp = persist_add_custom_rule(
+        &state,
+        &AddCustomRuleRequest {
+            rule: serde_json::json!({ "port": [443, 8443], "outbound": "direct" }),
+        },
+    )
+    .expect("numeric ports accepted");
+    assert!(!fp.is_empty());
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn add_custom_rule_validates_rule_set_references() {
+    let state = temp_state_with_rules("rules-custom-set", vec![]);
+    let sub = SubscriptionPaths::from_app(&state.paths);
+    let index = load_index(&sub).unwrap();
+    let id = index.items[0].id;
+    let mut profile = read_profile(&sub, id).unwrap();
+    profile.route.rule_sets = vec![serde_json::json!({
+        "type": "remote",
+        "tag": "cn",
+        "url": "https://example.com/cn.srs",
+    })];
+    fs::write(sub.profile(id), serde_json::to_vec(&profile).unwrap()).unwrap();
+
+    let fp = persist_add_custom_rule(
+        &state,
+        &AddCustomRuleRequest {
+            rule: serde_json::json!({ "rule_set": ["cn"], "outbound": "direct" }),
+        },
+    )
+    .expect("known rule_set accepted");
+    assert!(!fp.is_empty());
+
+    let err = persist_add_custom_rule(
+        &state,
+        &AddCustomRuleRequest {
+            rule: serde_json::json!({ "rule_set": ["missing"], "outbound": "direct" }),
+        },
+    )
+    .expect_err("unknown rule_set");
+    assert_eq!(err.code, "config.invalid");
+    assert!(err.message.contains("unknown rule_set"));
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn custom_rule_legacy_disabled_mark_is_deleted() {
+    let state = temp_state_with_rules("rules-custom-off", sample_rules());
+    let custom = serde_json::json!({ "domain": ["blockme.com"], "outbound": "block" });
+    let fp = rule_fingerprint(&custom);
+    let mut overrides = load_rule_overrides(&state.paths.rule_overrides());
+    overrides.custom.push(custom.clone());
+    overrides.set_disabled(fp, true);
+    save_rule_overrides(&state.paths.rule_overrides(), &overrides).unwrap();
+
+    generate_config(
+        &state.paths,
+        &AppSettings::default(),
+        None,
+        CaptureIntent::Diagnostic,
+    )
+    .unwrap();
+    let config: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(state.paths.config()).unwrap()).unwrap();
+    let rules = config["route"]["rules"].as_array().unwrap();
+    assert!(
+        !serde_json::to_string(rules)
+            .unwrap()
+            .contains("blockme.com"),
+        "a custom rule disabled by an older version must not be re-enabled"
+    );
+
+    let overrides = load_rule_overrides(&state.paths.rule_overrides());
+    assert!(overrides.custom.is_empty());
+    assert!(!overrides.is_rule_disabled(&custom));
+    assert!(overrides.disabled.is_empty());
+
+    let listed = query_rules(
+        &state,
+        &ListRulesRequest {
+            keyword: Some("blockme".into()),
+            rule_type: None,
+            disabled: None,
+            custom: Some(true),
+            offset: 0,
+            limit: 50,
+        },
+    )
+    .unwrap();
+    assert_eq!(listed.total, 0);
+    assert_eq!(rule_overview(&state).unwrap().disabled, 0);
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn set_rule_disabled_rejects_custom_rules() {
+    let state = temp_state_with_rules("rules-custom-disable", sample_rules());
+    let custom = serde_json::json!({ "domain": ["example.com"], "outbound": "block" });
+    let fp = persist_add_custom_rule(
+        &state,
+        &AddCustomRuleRequest {
+            rule: custom.clone(),
+        },
+    )
+    .unwrap();
+
+    let err = persist_rule_disabled(
+        &state,
+        &SetRuleDisabledRequest {
+            fingerprint: fp,
+            disabled: true,
+        },
+    )
+    .expect_err("custom rules cannot be disabled");
+    assert_eq!(err.code, "config.invalid");
+    assert!(err.message.contains("cannot be disabled"));
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn update_custom_rule_replaces_in_place() {
+    let state = temp_state_with_rules("rules-custom-update", sample_rules());
+    let original = serde_json::json!({ "domain": ["old.com"], "outbound": "block" });
+    let fingerprint =
+        persist_add_custom_rule(&state, &AddCustomRuleRequest { rule: original }).unwrap();
+
+    let updated = serde_json::json!({
+        "domain_suffix": ["new.com"],
+        "outbound": "direct",
+    });
+    let new_fingerprint = persist_update_custom_rule(
+        &state,
+        &UpdateCustomRuleRequest {
+            fingerprint,
+            rule: updated.clone(),
+        },
+    )
+    .unwrap();
+    assert_eq!(new_fingerprint, rule_fingerprint(&updated));
+
+    let overrides = load_rule_overrides(&state.paths.rule_overrides());
+    assert_eq!(overrides.custom, vec![updated.clone()]);
+
+    let err = persist_update_custom_rule(
+        &state,
+        &UpdateCustomRuleRequest {
+            fingerprint: "missing".into(),
+            rule: updated,
+        },
+    )
+    .expect_err("unknown custom rule");
+    assert_eq!(err.code, "config.invalid");
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn update_custom_rule_rejects_duplicate_content() {
+    let state = temp_state_with_rules("rules-custom-duplicate", sample_rules());
+    let first = serde_json::json!({ "domain": ["a.com"], "outbound": "block" });
+    let second = serde_json::json!({ "domain": ["b.com"], "outbound": "block" });
+    let first_fp = persist_add_custom_rule(
+        &state,
+        &AddCustomRuleRequest {
+            rule: first.clone(),
+        },
+    )
+    .unwrap();
+    persist_add_custom_rule(
+        &state,
+        &AddCustomRuleRequest {
+            rule: second.clone(),
+        },
+    )
+    .unwrap();
+
+    let err = persist_update_custom_rule(
+        &state,
+        &UpdateCustomRuleRequest {
+            fingerprint: first_fp,
+            rule: second,
+        },
+    )
+    .expect_err("editing into an existing rule must fail");
+    assert_eq!(err.code, "config.invalid");
+    assert!(err.message.contains("already exists"));
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn launch_at_login_is_synced_when_combined_with_runtime_settings() {
+    use crate::application::settings::save_settings_inner_with_autostart;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    struct Host {
+        resources: PathBuf,
+    }
+
+    impl AppResources for Host {
+        fn resource_dir(&self) -> Option<PathBuf> {
+            Some(self.resources.clone())
+        }
+    }
+
+    impl AppHost for Host {
+        fn state_changed(&self) {}
+    }
+
+    let state = temp_state_with_node("launch-at-login-combined");
+    let resources = state.paths.root().join("resources");
+    fs::create_dir_all(&resources).unwrap();
+    let binary_name = if cfg!(windows) {
+        "sing-box.exe"
+    } else {
+        "sing-box"
+    };
+    fs::write(resources.join(binary_name), b"test binary").unwrap();
+    let host = Host { resources };
+    let calls = Arc::new(Mutex::new(Vec::new()));
+
+    save_settings_inner_with_autostart(
+        &host,
+        &state,
+        SettingsPatch {
+            launch_at_login: Some(true),
+            mixed_port: Some(18080),
+            ..SettingsPatch::default()
+        },
+        |enabled| {
+            calls.lock().unwrap().push(enabled);
+            Ok(())
+        },
+    )
+    .expect("combined enable");
+    let enabled = current_settings(&state.paths).unwrap();
+    assert!(enabled.launch_at_login);
+    assert_eq!(enabled.mixed_port, 18080);
+
+    save_settings_inner_with_autostart(
+        &host,
+        &state,
+        SettingsPatch {
+            launch_at_login: Some(false),
+            mixed_port: Some(18081),
+            ..SettingsPatch::default()
+        },
+        |enabled| {
+            calls.lock().unwrap().push(enabled);
+            Ok(())
+        },
+    )
+    .expect("combined disable");
+    let disabled = current_settings(&state.paths).unwrap();
+    assert!(!disabled.launch_at_login);
+    assert_eq!(disabled.mixed_port, 18081);
+    assert_eq!(*calls.lock().unwrap(), vec![true, false]);
+
+    let err = save_settings_inner_with_autostart(
+        &host,
+        &state,
+        SettingsPatch {
+            launch_at_login: Some(true),
+            mixed_port: Some(18082),
+            ..SettingsPatch::default()
+        },
+        |_enabled| Err("login item write refused".to_string()),
+    )
+    .expect_err("autostart failure must abort the combined save");
+    assert_eq!(err.code, "app.autostart_failed");
+    let unchanged = current_settings(&state.paths).unwrap();
+    assert!(!unchanged.launch_at_login);
+    assert_eq!(unchanged.mixed_port, 18081);
+
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn saving_tun_enabled_while_system_proxy_is_live_switches_transactionally() {
+    use crate::core_snapshot::wrap_core;
+    use ice_core::{CoreError, CoreHandle, CorePaths, CoreState, ReloadOutcome};
+    use ice_proxy_sys::{ProxyBackup, ProxyEndpoints, ProxySysError, SystemProxy};
+    use ice_tun_sys::fake::FakeTunBackend;
+    use std::path::{Path, PathBuf};
+
+    struct RunningCore {
+        status: CoreStatus,
+    }
+
+    impl CoreHandle for RunningCore {
+        fn state(&self) -> CoreState {
+            CoreState {
+                status: self.status,
+                message: None,
+                inbound_host: Some("127.0.0.1".into()),
+                inbound_port: Some(17890),
+            }
+        }
+
+        fn start(&mut self, _paths: &CorePaths) -> Result<(), CoreError> {
+            self.status = CoreStatus::Running;
+            Ok(())
+        }
+
+        fn stop(&mut self, _pid_file: &Path) -> Result<(), CoreError> {
+            self.status = CoreStatus::Stopped;
+            Ok(())
+        }
+
+        fn reload(&mut self, _paths: &CorePaths) -> Result<ReloadOutcome, CoreError> {
+            Ok(ReloadOutcome::HotReloaded)
+        }
+
+        fn needs_proxy_restore(&self) -> bool {
+            false
+        }
+
+        fn clear_needs_proxy_restore(&mut self) {}
+
+        fn reap_exited_child(&mut self, _pid_file: &Path) -> bool {
+            false
+        }
+
+        fn adopt_external(&mut self, _pid: u32, _paths: &CorePaths) -> Result<(), CoreError> {
+            self.status = CoreStatus::Running;
+            Ok(())
+        }
+
+        fn reclaim_orphan_pid(
+            &mut self,
+            _pid_file: &Path,
+            _cores: &[&Path],
+        ) -> Result<(), CoreError> {
+            self.status = CoreStatus::Stopped;
+            Ok(())
+        }
+    }
+
+    struct Host {
+        resources: PathBuf,
+    }
+
+    impl AppResources for Host {
+        fn resource_dir(&self) -> Option<PathBuf> {
+            Some(self.resources.clone())
+        }
+    }
+
+    impl AppHost for Host {
+        fn state_changed(&self) {}
+    }
+
+    struct LiveProxy;
+
+    impl SystemProxy for LiveProxy {
+        fn backup(&self) -> Result<ProxyBackup, ProxySysError> {
+            Ok(ProxyBackup::default())
+        }
+
+        fn apply(&self, _endpoints: &ProxyEndpoints) -> Result<(), ProxySysError> {
+            Ok(())
+        }
+
+        fn restore(&self, _backup: &ProxyBackup) -> Result<(), ProxySysError> {
+            Ok(())
+        }
+    }
+
+    let mut state = temp_state_with_node("live-tun-settings");
+    let paths = state.paths.clone();
+    state.capture = CaptureController::with_backend_for_tests(
+        paths.clone(),
+        Box::new(FakeTunBackend::new("ice-box:test")),
+    );
+    let (core, core_snapshot) = wrap_core(Box::new(RunningCore {
+        status: CoreStatus::Running,
+    }));
+    state.core = core;
+    state.core_snapshot = core_snapshot;
+
+    let mut settings = current_settings(&paths).unwrap();
+    settings.tun.interface_name = Some("utun420".into());
+    settings.proxy_service_enabled = true;
+    persist_settings(&paths.settings(), &settings, host_platform()).unwrap();
+    state.capture.set_system_proxy_active().unwrap();
+
+    let resources = paths.root().join("resources");
+    fs::create_dir_all(&resources).unwrap();
+    let binary_name = if cfg!(windows) {
+        "sing-box.exe"
+    } else {
+        "sing-box"
+    };
+    fs::write(resources.join(binary_name), b"test binary").unwrap();
+    let host = Host { resources };
+
+    save_settings_inner(
+        &host,
+        &state,
+        SettingsPatch {
+            tun: Some(ice_config::TunSettingsPatch {
+                enabled: Some(true),
+                ..Default::default()
+            }),
+            ..SettingsPatch::default()
+        },
+    )
+    .expect("live TUN switch");
+
+    assert_eq!(state.capture.active_backend(), TrafficCapture::Tun);
+    let on_disk = current_settings(&paths).unwrap();
+    assert!(on_disk.tun.enabled);
+    assert!(on_disk.proxy_service_enabled);
+    assert!(!paths.pending_settings().exists());
+
+    // A combined patch must not bypass the live switch: before the fix it
+    // persisted `tun.enabled = false` and then re-enabled TUN from the same
+    // candidate, leaving the switch UI showing off while capture stayed on.
+    state.proxy = Mutex::new(Box::new(LiveProxy));
+    save_settings_inner(
+        &host,
+        &state,
+        SettingsPatch {
+            tun: Some(ice_config::TunSettingsPatch {
+                enabled: Some(false),
+                ..Default::default()
+            }),
+            probe_exit_ip: Some(false),
+            ..SettingsPatch::default()
+        },
+    )
+    .expect("combined live TUN disable");
+
+    assert_eq!(
+        state.capture.active_backend(),
+        TrafficCapture::SystemProxy,
+        "the combined patch must tear down TUN instead of rebuilding it"
+    );
+    let off_disk = current_settings(&paths).unwrap();
+    assert!(!off_disk.tun.enabled);
+    assert!(
+        !off_disk.probe_exit_ip,
+        "the other patch fields still apply"
+    );
+    assert!(!paths.pending_settings().exists());
+    let _ = fs::remove_dir_all(paths.root());
+}
+
+#[test]
+fn only_tray_display_mode_changed_ignores_other_fields() {
+    use crate::application::settings::only_tray_display_mode_changed;
+
+    let both = AppSettings::default();
+    let speed = AppSettings {
+        tray_display_mode: TrayDisplayMode::Speed,
+        ..AppSettings::default()
+    };
+    assert!(only_tray_display_mode_changed(&both, &speed));
+    // A save that also touches anything else is a full apply, not this
+    // persist-only path.
+    let mut other = speed.clone();
+    other.mixed_port = 18080;
+    assert!(!only_tray_display_mode_changed(&both, &other));
+    // Unchanged mode: nothing to do.
+    assert!(!only_tray_display_mode_changed(&both, &both));
+}
+
+#[test]
+fn only_probe_exit_ip_changed_ignores_other_fields() {
+    use crate::application::settings::only_probe_exit_ip_changed;
+
+    let on = AppSettings::default();
+    let off = AppSettings {
+        probe_exit_ip: false,
+        ..AppSettings::default()
+    };
+    assert!(only_probe_exit_ip_changed(&on, &off));
+    assert!(only_probe_exit_ip_changed(&off, &on));
+
+    let mut other = off.clone();
+    other.mixed_port = 18080;
+    assert!(!only_probe_exit_ip_changed(&on, &other));
+    assert!(!only_probe_exit_ip_changed(&on, &on));
+}
+
+#[test]
+fn saving_probe_exit_ip_only_does_not_touch_the_live_core() {
+    use crate::core_snapshot::wrap_core;
+    use ice_core::{CoreError, CoreHandle, CorePaths, CoreState, CoreStatus, ReloadOutcome};
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    struct CountingCore {
+        status: CoreStatus,
+        start_calls: Arc<AtomicUsize>,
+        stop_calls: Arc<AtomicUsize>,
+        reload_calls: Arc<AtomicUsize>,
+    }
+
+    impl CoreHandle for CountingCore {
+        fn state(&self) -> CoreState {
+            CoreState {
+                status: self.status,
+                message: None,
+                inbound_host: Some("127.0.0.1".into()),
+                inbound_port: Some(17890),
+            }
+        }
+
+        fn start(&mut self, _paths: &CorePaths) -> Result<(), CoreError> {
+            self.start_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn stop(&mut self, _pid_file: &Path) -> Result<(), CoreError> {
+            self.stop_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn reload(&mut self, _paths: &CorePaths) -> Result<ReloadOutcome, CoreError> {
+            self.reload_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(ReloadOutcome::HotReloaded)
+        }
+
+        fn needs_proxy_restore(&self) -> bool {
+            false
+        }
+
+        fn clear_needs_proxy_restore(&mut self) {}
+
+        fn reap_exited_child(&mut self, _pid_file: &Path) -> bool {
+            false
+        }
+
+        fn adopt_external(&mut self, _pid: u32, _paths: &CorePaths) -> Result<(), CoreError> {
+            Ok(())
+        }
+
+        fn reclaim_orphan_pid(
+            &mut self,
+            _pid_file: &Path,
+            _cores: &[&Path],
+        ) -> Result<(), CoreError> {
+            Ok(())
+        }
+    }
+
+    struct Host {
+        resources: PathBuf,
+    }
+
+    impl AppResources for Host {
+        fn resource_dir(&self) -> Option<PathBuf> {
+            Some(self.resources.clone())
+        }
+    }
+
+    impl AppHost for Host {
+        fn state_changed(&self) {}
+    }
+
+    let mut state = temp_state_with_node("probe-exit-persist-only");
+    let start_calls = Arc::new(AtomicUsize::new(0));
+    let stop_calls = Arc::new(AtomicUsize::new(0));
+    let reload_calls = Arc::new(AtomicUsize::new(0));
+    let (core, core_snapshot) = wrap_core(Box::new(CountingCore {
+        status: CoreStatus::Running,
+        start_calls: start_calls.clone(),
+        stop_calls: stop_calls.clone(),
+        reload_calls: reload_calls.clone(),
+    }));
+    state.core = core;
+    state.core_snapshot = core_snapshot;
+
+    // A resolvable binary keeps this test honest on the pre-fix path, where a
+    // normal settings apply would generate config and reload the running core.
+    let resources = state.paths.root().join("resources");
+    fs::create_dir_all(&resources).unwrap();
+    let binary_name = if cfg!(windows) {
+        "sing-box.exe"
+    } else {
+        "sing-box"
+    };
+    fs::write(resources.join(binary_name), b"test binary").unwrap();
+    let host = Host { resources };
+    fs::write(state.paths.config(), b"runtime config sentinel").unwrap();
+
+    save_settings_inner(
+        &host,
+        &state,
+        SettingsPatch {
+            probe_exit_ip: Some(false),
+            ..SettingsPatch::default()
+        },
+    )
+    .expect("probe preference should persist");
+
+    assert!(!current_settings(&state.paths).unwrap().probe_exit_ip);
+    assert_eq!(
+        fs::read(state.paths.config()).unwrap(),
+        b"runtime config sentinel"
+    );
+    assert_eq!(start_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(stop_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(reload_calls.load(Ordering::SeqCst), 0);
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn exit_probe_fails_closed_without_settings_and_cache_key_tracks_route_state() {
+    use crate::application::nodes::{exit_probe_cache_key, probe_exit_ip_enabled};
+
+    assert!(!probe_exit_ip_enabled(None));
+    let off = AppSettings {
+        probe_exit_ip: false,
+        ..AppSettings::default()
+    };
+    assert!(!probe_exit_ip_enabled(Some(&off)));
+    assert!(probe_exit_ip_enabled(Some(&AppSettings::default())));
+
+    let rule = AppSettings::default();
+    let proxy_url = "http://127.0.0.1:17890";
+    let rule_key = exit_probe_cache_key(&rule, proxy_url, "Proxy", Some("HK-1"));
+
+    let mut global = rule.clone();
+    global.proxy_mode = ProxyMode::Global;
+    assert_ne!(
+        rule_key,
+        exit_probe_cache_key(&global, proxy_url, "Proxy", Some("HK-1"))
+    );
+
+    let mut moved = rule.clone();
+    moved.mixed_port = 18080;
+    assert_ne!(
+        rule_key,
+        exit_probe_cache_key(&moved, proxy_url, "Proxy", Some("HK-1"))
+    );
+}
+
+#[test]
+fn collect_nodes_marks_the_active_subscriptions_favorites() {
+    let state = temp_state_with_node("favorite-mark");
+    let paths = SubscriptionPaths::from_app(&state.paths);
+    let first = load_index(&paths).unwrap().items[0].id;
+    set_node_favorite(&state.paths.node_favorites(), first, "n1", true).unwrap();
+
+    let nodes = collect_nodes(&state).unwrap();
+    assert_eq!(nodes.len(), 1);
+    assert!(nodes[0].favorite);
+    assert_eq!(nodes[0].favorite_rank, Some(0));
+
+    let second = Uuid::new_v4();
+    let meta = SubscriptionMeta {
+        id: second,
+        name: "second".into(),
+        url: "https://example.com/second".into(),
+        active: false,
+        format: SubscriptionFormat::SingBox,
+        node_count: 1,
+        group_count: 0,
+        rule_count: 0,
+        has_dns: false,
+        parse_warnings: vec![],
+        last_updated: None,
+        last_error: None,
+        etag: None,
+        last_modified: None,
+        fetched_as: None,
+        userinfo: None,
+        provider_info: vec![],
+        auto_update: false,
+        auto_update_interval: None,
+        source: ice_engine::SubscriptionSource::Remote,
+    };
+    let profile = ice_config::NormalizedProfile::from_nodes_only(vec![NormalizedOutbound {
+        tag: "n2".into(),
+        outbound: std::sync::Arc::new(
+            serde_json::json!({"type":"socks","tag":"n2","server":"1.1.1.1","server_port":2}),
+        ),
+    }]);
+    write_subscription_success(&paths, &meta, "{}", &profile).unwrap();
+    ice_engine::set_active(&paths, second, true).unwrap();
+
+    let nodes = collect_nodes(&state).unwrap();
+    assert_eq!(nodes[0].tag, "n2");
+    assert!(!nodes[0].favorite);
+    assert_eq!(nodes[0].favorite_rank, None);
+
+    ice_engine::set_active(&paths, first, true).unwrap();
+    let nodes = collect_nodes(&state).unwrap();
+    assert_eq!(nodes[0].tag, "n1");
+    assert!(nodes[0].favorite);
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn set_node_favorite_validates_the_active_profile_and_does_not_rewrite_config() {
+    let state = temp_state_with_node("favorite-toggle");
+    fs::write(state.paths.config(), b"runtime-config").unwrap();
+    set_node_favorite_use_case(
+        &state,
+        SetNodeFavoriteRequest {
+            tag: "n1".into(),
+            favorite: true,
+        },
+    )
+    .expect("favorite");
+    assert_eq!(
+        fs::read_to_string(state.paths.config()).unwrap(),
+        "runtime-config",
+        "a favorite must not regenerate the runtime config"
+    );
+
+    let err = set_node_favorite_use_case(
+        &state,
+        SetNodeFavoriteRequest {
+            tag: "missing".into(),
+            favorite: true,
+        },
+    )
+    .expect_err("unknown tag");
+    assert_eq!(err.code, ErrorCode::ConfigInvalid.as_str());
+
+    let paths = SubscriptionPaths::from_app(&state.paths);
+    let id = load_index(&paths).unwrap().items[0].id;
+    ice_engine::remove_subscription(&paths, id).unwrap();
+    let err = set_node_favorite_use_case(
+        &state,
+        SetNodeFavoriteRequest {
+            tag: "n1".into(),
+            favorite: false,
+        },
+    )
+    .expect_err("no active subscription");
+    assert_eq!(err.code, ErrorCode::ConfigEmptyOutbounds.as_str());
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn remove_subscription_use_case_purges_that_subscriptions_favorites() {
+    struct Host;
+
+    impl AppResources for Host {
+        fn resource_dir(&self) -> Option<std::path::PathBuf> {
+            None
+        }
+    }
+
+    impl AppHost for Host {
+        fn state_changed(&self) {}
+    }
+
+    let state = temp_state_with_node("favorite-remove");
+    let paths = SubscriptionPaths::from_app(&state.paths);
+    let id = load_index(&paths).unwrap().items[0].id;
+    set_node_favorite(&state.paths.node_favorites(), id, "n1", true).unwrap();
+    assert!(load_node_favorites(&state.paths.node_favorites()).contains(id, "n1"));
+
+    remove_subscription_use_case(&Host, &state, IdRequest { id }).expect("remove subscription");
+    assert!(
+        load_node_favorites(&state.paths.node_favorites())
+            .tags(id)
+            .is_empty(),
+        "removing a subscription must purge its favorites"
+    );
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn mixed_port_on_the_clash_api_port_moves_the_clash_api() {
+    use crate::application::settings::save_settings_inner_with_autostart;
+    use std::path::PathBuf;
+
+    struct Host {
+        resources: PathBuf,
+    }
+
+    impl AppResources for Host {
+        fn resource_dir(&self) -> Option<PathBuf> {
+            Some(self.resources.clone())
+        }
+    }
+
+    impl AppHost for Host {
+        fn state_changed(&self) {}
+    }
+
+    let state = temp_state_with_node("mixed-on-clash-port");
+    let resources = state.paths.root().join("resources");
+    fs::create_dir_all(&resources).unwrap();
+    let binary_name = if cfg!(windows) {
+        "sing-box.exe"
+    } else {
+        "sing-box"
+    };
+    fs::write(resources.join(binary_name), b"test binary").unwrap();
+    let host = Host { resources };
+
+    let clash_port = current_settings(&state.paths).unwrap().clash_api_port;
+    save_settings_inner_with_autostart(
+        &host,
+        &state,
+        SettingsPatch {
+            mixed_port: Some(clash_port),
+            ..SettingsPatch::default()
+        },
+        |_| Ok(()),
+    )
+    .expect("a mixed port on the hidden clash API port must not be rejected");
+    let saved = current_settings(&state.paths).unwrap();
+    assert_eq!(saved.mixed_port, clash_port);
+    assert_ne!(saved.clash_api_port, clash_port);
+    saved.validate().unwrap();
+
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+/// A grouped profile shaped like a typical subscription: a main selector
+/// (the default exit) holding an urltest group and the nodes, plus a
+/// per-service selector.
+fn grouped_profile() -> ice_config::NormalizedProfile {
+    let outbound = |value: serde_json::Value| NormalizedOutbound {
+        tag: value["tag"].as_str().unwrap().into(),
+        outbound: std::sync::Arc::new(value),
+    };
+    let mut profile = ice_config::NormalizedProfile::from_nodes_only(vec![
+        outbound(serde_json::json!({"type":"socks","tag":"hk","server":"1.1.1.1","server_port":1})),
+        outbound(serde_json::json!({"type":"socks","tag":"jp","server":"1.1.1.2","server_port":1})),
+    ]);
+    profile.groups = vec![
+        outbound(
+            serde_json::json!({"type":"selector","tag":"main","outbounds":["auto","hk","jp"]}),
+        ),
+        outbound(serde_json::json!({"type":"urltest","tag":"auto","outbounds":["hk","jp"]})),
+        outbound(serde_json::json!({"type":"selector","tag":"video","outbounds":["main","jp"]})),
+    ];
+    profile.default_outbound = Some("main".into());
+    profile.route.final_outbound = "main".into();
+    profile
+}
+
+#[test]
+fn a_main_group_pick_moves_the_selected_node() {
+    struct Host;
+    impl AppResources for Host {
+        fn resource_dir(&self) -> Option<std::path::PathBuf> {
+            None
+        }
+    }
+    impl AppHost for Host {
+        fn state_changed(&self) {}
+    }
+
+    let state = temp_state_with_profile("main-group-pick", &grouped_profile());
+    let selected = |state: &AppState| current_settings(&state.paths).unwrap().selected_tag;
+
+    // The Nodes page and the tray switch exits through group picks; Home
+    // reads `selected_tag`, so a pick in the main group must move it.
+    let returned = select_group_member(&Host, &state, "main", "jp").expect("pick jp");
+    assert_eq!(returned.as_deref(), Some("jp"));
+    assert_eq!(selected(&state).as_deref(), Some("jp"));
+    select_group_member(&Host, &state, "main", "auto").expect("pick auto");
+    assert_eq!(selected(&state).as_deref(), Some("auto"));
+
+    // A per-service group is not where a node pick lands: Home keeps its node.
+    let returned = select_group_member(&Host, &state, "video", "jp").expect("pick video exit");
+    assert_eq!(returned.as_deref(), Some("auto"));
+    assert_eq!(selected(&state).as_deref(), Some("auto"));
+    let selections = load_group_selections(&state.paths.group_selections());
+    assert_eq!(selections.get("video").map(String::as_str), Some("jp"));
+    assert_eq!(selections.get("main").map(String::as_str), Some("auto"));
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn only_a_main_group_pick_moves_the_selected_node() {
+    let mut profile = grouped_profile();
+    assert!(profile.picks_selected_node("main", "hk"));
+    assert!(profile.picks_selected_node("main", "auto"));
+    assert!(!profile.picks_selected_node("video", "jp"));
+    // A per-service group is never the main group, even when it is the only
+    // group holding the member.
+    assert!(!profile.picks_selected_node("video", "main"));
+
+    // A per-service selector listed before the urltest that the main group
+    // leads to: the group order must not turn its picks into node picks.
+    let outbound = |value: serde_json::Value| NormalizedOutbound {
+        tag: value["tag"].as_str().unwrap().into(),
+        outbound: std::sync::Arc::new(value),
+    };
+    profile.groups = vec![
+        outbound(serde_json::json!({"type":"selector","tag":"main","outbounds":["auto","direct"]})),
+        outbound(serde_json::json!({"type":"selector","tag":"netflix","outbounds":["hk","jp"]})),
+        outbound(serde_json::json!({"type":"urltest","tag":"auto","outbounds":["hk","jp"]})),
+    ];
+    assert!(!profile.picks_selected_node("netflix", "hk"));
+    assert!(profile.picks_selected_node("main", "auto"));
+    // A member the profile does not define (a built-in such as `direct`) is
+    // not a node Home can name, so it leaves the selected node alone.
+    assert!(!profile.picks_selected_node("main", "direct"));
+}
+
+#[test]
+fn a_failed_live_group_pick_restores_the_selected_node() {
+    use crate::core_snapshot::wrap_core;
+    use ice_core::{CoreError, CoreHandle, CorePaths, CoreState, ReloadOutcome};
+    use std::path::Path;
+
+    struct RunningCore;
+
+    impl CoreHandle for RunningCore {
+        fn state(&self) -> CoreState {
+            CoreState {
+                status: CoreStatus::Running,
+                message: None,
+                inbound_host: Some("127.0.0.1".into()),
+                inbound_port: Some(17890),
+            }
+        }
+        fn start(&mut self, _paths: &CorePaths) -> Result<(), CoreError> {
+            Ok(())
+        }
+        fn stop(&mut self, _pid_file: &Path) -> Result<(), CoreError> {
+            Ok(())
+        }
+        fn reload(&mut self, _paths: &CorePaths) -> Result<ReloadOutcome, CoreError> {
+            Ok(ReloadOutcome::HotReloaded)
+        }
+        fn needs_proxy_restore(&self) -> bool {
+            false
+        }
+        fn clear_needs_proxy_restore(&mut self) {}
+        fn reap_exited_child(&mut self, _pid_file: &Path) -> bool {
+            false
+        }
+        fn adopt_external(&mut self, _pid: u32, _paths: &CorePaths) -> Result<(), CoreError> {
+            Ok(())
+        }
+        fn reclaim_orphan_pid(
+            &mut self,
+            _pid_file: &Path,
+            _cores: &[&Path],
+        ) -> Result<(), CoreError> {
+            Ok(())
+        }
+    }
+
+    struct Host;
+    impl AppResources for Host {
+        fn resource_dir(&self) -> Option<std::path::PathBuf> {
+            None
+        }
+    }
+    impl AppHost for Host {
+        fn state_changed(&self) {}
+    }
+
+    let mut state = temp_state_with_profile("failed-live-group-pick", &grouped_profile());
+    let (core, core_snapshot) = wrap_core(Box::new(RunningCore));
+    state.core = core;
+    state.core_snapshot = core_snapshot;
+
+    // Point the Clash API at a closed port so the live switch fails.
+    let closed_port = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap().port()
+    };
+    let mut settings = current_settings(&state.paths).unwrap();
+    settings.clash_api_port = closed_port;
+    settings.selected_tag = Some("hk".into());
+    persist_settings(&state.paths.settings(), &settings, host_platform()).unwrap();
+    let mut selections = load_group_selections(&state.paths.group_selections());
+    selections.insert("main".into(), "hk".into());
+    save_group_selections(&state.paths.group_selections(), &selections).unwrap();
+
+    select_group_member(&Host, &state, "main", "jp").expect_err("live switch must fail");
+
+    // Home must not name an exit the core never switched to.
+    let after = current_settings(&state.paths).unwrap();
+    assert_eq!(after.selected_tag.as_deref(), Some("hk"));
+    let selections = load_group_selections(&state.paths.group_selections());
+    assert_eq!(selections.get("main").map(String::as_str), Some("hk"));
+    let _ = fs::remove_dir_all(state.paths.root());
+}

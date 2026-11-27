@@ -15,7 +15,8 @@ pub async fn get_settings(app: AppHandle) -> Result<AppSettings, AppError> {
 pub async fn save_settings(app: AppHandle, patch: SettingsPatch) -> Result<(), AppError> {
     run_blocking("save_settings", move || {
         let state = app.state::<AppState>();
-        save_settings_inner(&app, &state, patch)
+        let host = tauri_host(&app);
+        save_settings_inner(&host, state.inner(), patch)
     })
     .await
 }
@@ -56,7 +57,8 @@ pub async fn set_tray_update_available(
 pub async fn set_proxy_mode(app: AppHandle, req: SetProxyModeRequest) -> Result<(), AppError> {
     run_blocking("set_proxy_mode", move || {
         let state = app.state::<AppState>();
-        set_proxy_mode_inner(&app, &state, req)
+        let host = tauri_host(&app);
+        set_proxy_mode_inner(&host, state.inner(), req)
     })
     .await
 }
