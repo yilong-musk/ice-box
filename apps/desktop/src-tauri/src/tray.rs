@@ -13,6 +13,13 @@
 //! While an update is waiting, the window mirrors the sidebar arrow into the
 //! menu: a green-arrow prompt that opens Settings → App Updates. Native menu
 //! text cannot be coloured, so the arrow travels as the item's icon.
+//!
+//! **Cross-platform parity**: Keep the macOS native menu (`tray.rs`,
+//! `tray_delay_view.rs`) and the Windows custom tray panel (`tray_panel.rs`,
+//! `apps/desktop/src/tray-panel/TrayPanel.tsx`, `tray-panel.css`) visually and
+//! structurally in sync. Any change to items, order, labels, separators,
+//! icons, colours, or delay styling on one platform must be updated on the
+//! other in the same change.
 
 use crate::application::{
     apply_after_subscription_change, apply_proxy_mode, broadcast_state_change, collect_nodes,
@@ -24,7 +31,6 @@ use crate::capture::TrafficCapture;
 use crate::core_snapshot::APP_STATE_CHANGED;
 use crate::mcp::McpService;
 use crate::shutdown::{request_tray_quit, QuitOutcome};
-#[cfg(any(target_os = "macos", test))]
 use crate::tray_delay::{delay_tone, DelayOutcome, DelayScope, DelayTone, DelayView};
 use crate::AppState;
 use ice_config::{AppError, ErrorCode, LanguagePreference, ProxyMode};
@@ -38,18 +44,22 @@ use objc2::{AllocAnyThread, MainThreadMarker};
 use objc2_app_kit::{NSColor, NSForegroundColorAttributeName, NSMenu, NSMenuItem};
 #[cfg(target_os = "macos")]
 use objc2_foundation::{NSMutableAttributedString, NSRange, NSSize, NSString};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+#[cfg(any(not(target_os = "windows"), test))]
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(not(target_os = "windows"))]
+use std::time::Instant;
+#[cfg(not(target_os = "windows"))]
+use tauri::menu::{
+    CheckMenuItem, IconMenuItem, IsMenuItem, Menu, MenuItem, MenuItemKind, PredefinedMenuItem,
+    Submenu,
+};
 use tauri::{
     image::Image,
-    menu::{
-        CheckMenuItem, IconMenuItem, IsMenuItem, Menu, MenuItem, MenuItemKind, PredefinedMenuItem,
-        Submenu,
-    },
-    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, Wry,
 };
 use uuid::Uuid;
@@ -60,6 +70,7 @@ use uuid::Uuid;
 /// action anyway). The `proxy_applied_cache` is shared with the poll, so while
 /// the window is open the probe is usually a cache hit.
 const SYNC_INTERVAL: Duration = Duration::from_secs(5);
+#[cfg(not(target_os = "windows"))]
 const NODE_SYNC_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Tray icon id. The macOS speed readout looks the icon up by id instead of
@@ -433,6 +444,7 @@ fn system_locale_tag() -> String {
         .unwrap_or_else(|| "en".into())
 }
 
+#[cfg(any(not(target_os = "windows"), test))]
 fn mode_code(mode: ProxyMode) -> u8 {
     match mode {
         ProxyMode::Rule => 0,
@@ -441,6 +453,7 @@ fn mode_code(mode: ProxyMode) -> u8 {
     }
 }
 
+#[cfg(any(not(target_os = "windows"), test))]
 fn mode_from_code(code: u8) -> ProxyMode {
     match code {
         1 => ProxyMode::Global,
@@ -496,7 +509,6 @@ impl TrayLabels {
     }
 
     /// Text of the button whose page has a test in flight: `延迟测试中 3/8`.
-    #[cfg(any(target_os = "macos", test))]
     fn delay_progress_text(self, index: usize, total: usize) -> String {
         self.delay_progress
             .replacen("{}", &index.to_string(), 1)
@@ -853,14 +865,17 @@ fn update_prompt_text(language: TrayLanguage, version: &str) -> String {
 
 /// Menu icon size. Win32 draws menu bitmaps at 16×16, and muda sizes the macOS
 /// `NSImage` from the pixels, so one bitmap serves both.
+#[cfg(any(not(target_os = "windows"), test))]
 const UPDATE_ARROW_SIZE: u32 = 16;
 
 /// The sidebar arrow's colour (`text-green-500` in the web UI).
+#[cfg(any(not(target_os = "windows"), test))]
 const UPDATE_ARROW_GREEN: [u8; 3] = [34, 197, 94];
 
 /// Green up-arrow on a transparent bitmap: the tray twin of the sidebar's
 /// arrow. Native menu text cannot be coloured, so this is what carries the
-/// green on both platforms.
+/// green on native menu platforms.
+#[cfg(any(not(target_os = "windows"), test))]
 fn update_arrow_icon() -> Image<'static> {
     const SAMPLES: u32 = 4;
     let size = UPDATE_ARROW_SIZE;
@@ -893,6 +908,7 @@ fn update_arrow_icon() -> Image<'static> {
 
 /// Point test for the arrow inside a unit box: a head triangle from the apex
 /// down to the base, over a shaft that runs to the bottom edge.
+#[cfg(any(not(target_os = "windows"), test))]
 fn arrow_covers(u: f32, v: f32) -> bool {
     const APEX_V: f32 = 0.08;
     const BASE_V: f32 = 0.52;
@@ -939,7 +955,6 @@ impl NodeAction {
 
     /// The tag the row stands for: the node it picks, or the member it switches
     /// its group to. What the delay decoration looks the newest result up by.
-    #[cfg(any(target_os = "macos", test))]
     fn tag(&self) -> &str {
         match self {
             Self::SelectNode(tag) => tag,
@@ -978,14 +993,12 @@ struct NodeMenuItem {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct NodeMenuGroup {
     /// Tag of the group itself; the group page's test button names it.
-    #[cfg(any(target_os = "macos", test))]
     tag: String,
     label: String,
     /// Live member the group exits through, when it has one. The group label
     /// carries that member's delay result.
-    #[cfg(any(target_os = "macos", test))]
     now: Option<String>,
-    /// Delay test button at the top of the group page (macOS-only feature).
+    /// Delay test button at the top of the group page (native macOS menu).
     #[cfg(any(target_os = "macos", test))]
     delay: Option<DelayButton>,
     members: Vec<NodeMenuItem>,
@@ -995,9 +1008,7 @@ impl NodeMenuGroup {
     fn new(tag: &str, now: Option<&str>, members: Vec<NodeMenuItem>) -> Self {
         Self {
             label: group_label(tag, now),
-            #[cfg(any(target_os = "macos", test))]
             tag: tag.to_string(),
-            #[cfg(any(target_os = "macos", test))]
             now: now.map(str::to_string),
             #[cfg(any(target_os = "macos", test))]
             delay: None,
@@ -1010,7 +1021,7 @@ impl NodeMenuGroup {
 /// the submenu is rebuilt only when this value changes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum NodeMenuEntry {
-    /// Page-level delay test button (macOS-only feature).
+    /// Page-level delay test button (native macOS menu).
     #[cfg(any(target_os = "macos", test))]
     Delay(DelayButton),
     Item(NodeMenuItem),
@@ -1018,7 +1029,6 @@ enum NodeMenuEntry {
 }
 
 /// One page's delay test button, as the menu should draw it now.
-#[cfg(any(target_os = "macos", test))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DelayButton {
     label: String,
@@ -1028,17 +1038,17 @@ struct DelayButton {
 
 /// Rows one page's delay button brings with it: the item itself, and the
 /// separator under it.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(all(not(target_os = "windows"), any(target_os = "macos", test)))]
 const DELAY_BUTTON_ROWS: usize = 2;
 
 /// A rendered page button: the item, and the separator under it.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(all(not(target_os = "windows"), any(target_os = "macos", test)))]
 struct DelayRows {
     button: MenuItem<Wry>,
     separator: PredefinedMenuItem<Wry>,
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(all(not(target_os = "windows"), any(target_os = "macos", test)))]
 impl DelayRows {
     fn refs(&self) -> [&dyn IsMenuItem<Wry>; 2] {
         [&self.button, &self.separator]
@@ -1164,6 +1174,7 @@ fn subscription_menu_entries(metas: &[SubscriptionMeta]) -> Vec<SubscriptionMenu
 /// muda reads `&` as a mnemonic marker on Windows and strips a lone `&` on
 /// macOS; doubling keeps node tags and subscription names containing `&`
 /// literal. GTK uses the text as-is.
+#[cfg(any(not(target_os = "windows"), test))]
 fn menu_text(text: &str) -> Cow<'_, str> {
     if cfg!(any(target_os = "windows", target_os = "macos")) && text.contains('&') {
         Cow::Owned(text.replace('&', "&&"))
@@ -1174,6 +1185,7 @@ fn menu_text(text: &str) -> Cow<'_, str> {
 
 /// Tray menu plumbing failures all surface as `ConfigInvalid`; the message keeps
 /// the failing step identifiable in logs.
+#[cfg(not(target_os = "windows"))]
 fn tray_error(step: &str, err: impl std::fmt::Display) -> AppError {
     AppError::new(ErrorCode::ConfigInvalid, format!("{step}: {err}"))
 }
@@ -1205,18 +1217,8 @@ impl Default for TrayView {
     }
 }
 
-/// The update prompt the window reports and the label the menu carries. The
-/// pair is compared as rendered text, so a language switch re-texts the item
-/// like any other change.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-struct UpdatePrompt {
-    /// Version the window last reported as available, if any.
-    wanted: Option<String>,
-    /// Label attached to the menu item, if it is in the menu.
-    shown: Option<String>,
-}
-
 /// What the menu must do to move the prompt from `shown` to `wanted`.
+#[cfg(any(not(target_os = "windows"), test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum UpdatePromptStep {
     /// The menu already shows what the window asked for.
@@ -1229,6 +1231,7 @@ enum UpdatePromptStep {
     Detach,
 }
 
+#[cfg(any(not(target_os = "windows"), test))]
 fn update_prompt_step(wanted: Option<&str>, shown: Option<&str>) -> UpdatePromptStep {
     match (wanted, shown) {
         (None, None) => UpdatePromptStep::Settled,
@@ -1239,6 +1242,123 @@ fn update_prompt_step(wanted: Option<&str>, shown: Option<&str>) -> UpdatePrompt
     }
 }
 
+/// Platform-neutral tray runtime state managed on every desktop target.
+/// Native menus (macOS / Linux) pair this with [`TrayMenuState`]; Windows uses
+/// it directly to feed the custom WebView tray panel.
+struct TrayRuntimeState {
+    language: AtomicU8,
+    service_on: AtomicBool,
+    #[cfg(not(target_os = "windows"))]
+    mcp_on: AtomicBool,
+    /// Set for the life of one start/stop so a second click cannot queue the
+    /// same action (the label is read before the worker runs).
+    service_busy: AtomicBool,
+    mcp_busy: AtomicBool,
+    #[cfg(not(target_os = "windows"))]
+    mode_value: AtomicU8,
+    /// Version the window last reported as available, if any.
+    update_wanted: Mutex<Option<String>>,
+}
+
+impl TrayRuntimeState {
+    fn new(language: TrayLanguage, view: TrayView) -> Self {
+        Self {
+            language: AtomicU8::new(language.code()),
+            service_on: AtomicBool::new(view.service_on),
+            #[cfg(not(target_os = "windows"))]
+            mcp_on: AtomicBool::new(view.mcp_enabled),
+            service_busy: AtomicBool::new(false),
+            mcp_busy: AtomicBool::new(false),
+            #[cfg(not(target_os = "windows"))]
+            mode_value: AtomicU8::new(mode_code(view.mode)),
+            update_wanted: Mutex::new(None),
+        }
+    }
+
+    fn language(&self) -> TrayLanguage {
+        TrayLanguage::from_code(self.language.load(Ordering::SeqCst))
+    }
+
+    fn set_language(&self, language: TrayLanguage) {
+        self.language.store(language.code(), Ordering::SeqCst);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn labels(&self) -> TrayLabels {
+        labels(self.language())
+    }
+
+    fn service_on(&self) -> bool {
+        self.service_on.load(Ordering::SeqCst)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn mcp_on(&self) -> bool {
+        self.mcp_on.load(Ordering::SeqCst)
+    }
+
+    fn service_busy(&self) -> bool {
+        self.service_busy.load(Ordering::SeqCst)
+    }
+
+    fn mcp_busy(&self) -> bool {
+        self.mcp_busy.load(Ordering::SeqCst)
+    }
+
+    /// `true` if this click owns the switch. A second click while the first
+    /// worker is still running is ignored, like the Home power button.
+    fn try_begin_service_switch(&self) -> bool {
+        !self.service_busy.swap(true, Ordering::SeqCst)
+    }
+
+    fn end_service_switch(&self) {
+        self.service_busy.store(false, Ordering::SeqCst);
+    }
+
+    /// `true` if this click owns the MCP switch.
+    fn try_begin_mcp_switch(&self) -> bool {
+        !self.mcp_busy.swap(true, Ordering::SeqCst)
+    }
+
+    fn end_mcp_switch(&self) {
+        self.mcp_busy.store(false, Ordering::SeqCst);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn mode(&self) -> ProxyMode {
+        mode_from_code(self.mode_value.load(Ordering::SeqCst))
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn set_mode(&self, mode: ProxyMode) {
+        self.mode_value.store(mode_code(mode), Ordering::SeqCst);
+    }
+
+    fn update_wanted(&self) -> Option<String> {
+        self.update_wanted
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    fn set_update_wanted(&self, wanted: Option<String>) {
+        *self
+            .update_wanted
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = wanted;
+    }
+
+    fn apply_view(&self, view: TrayView) {
+        self.service_on.store(view.service_on, Ordering::SeqCst);
+        #[cfg(not(target_os = "windows"))]
+        {
+            self.mcp_on.store(view.mcp_enabled, Ordering::SeqCst);
+            self.set_mode(view.mode);
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
 struct TrayMenuState {
     service: MenuItem<Wry>,
     mcp: MenuItem<Wry>,
@@ -1276,78 +1396,32 @@ struct TrayMenuState {
     menu: Menu<Wry>,
     /// Update prompt item. Kept out of the menu until a version is reported.
     update_item: IconMenuItem<Wry>,
-    /// Locked only off the main thread, like `nodes_model`: attaching the item
-    /// blocks on main-thread menu mutations, so a main-thread caller holding
-    /// this would deadlock against the watchdog.
-    update: Mutex<UpdatePrompt>,
-    language: AtomicU8,
-    service_on: AtomicBool,
-    mcp_on: AtomicBool,
-    /// Set for the life of one start/stop so a second click cannot queue the
-    /// same action (the label is read before the worker runs).
-    service_busy: AtomicBool,
-    mcp_busy: AtomicBool,
-    mode_value: AtomicU8,
+    /// Label currently attached to `update_item`, if it is in the menu. Locked
+    /// only off the main thread, like `nodes_model`.
+    update_shown: Mutex<Option<String>>,
 }
 
+#[cfg(not(target_os = "windows"))]
 impl TrayMenuState {
-    fn labels(&self) -> TrayLabels {
-        labels(TrayLanguage::from_code(
-            self.language.load(Ordering::SeqCst),
-        ))
-    }
-
-    fn service_on(&self) -> bool {
-        self.service_on.load(Ordering::SeqCst)
-    }
-
-    fn mcp_on(&self) -> bool {
-        self.mcp_on.load(Ordering::SeqCst)
-    }
-
-    fn service_busy(&self) -> bool {
-        self.service_busy.load(Ordering::SeqCst)
-    }
-
-    fn mcp_busy(&self) -> bool {
-        self.mcp_busy.load(Ordering::SeqCst)
-    }
-
-    /// `true` if this click owns the switch. A second click while the first
-    /// worker is still running is ignored, like the Home power button.
-    fn try_begin_service_switch(&self) -> bool {
-        !self.service_busy.swap(true, Ordering::SeqCst)
-    }
-
-    fn end_service_switch(&self) {
-        self.service_busy.store(false, Ordering::SeqCst);
-    }
-
-    /// `true` if this click owns the MCP switch.
-    fn try_begin_mcp_switch(&self) -> bool {
-        !self.mcp_busy.swap(true, Ordering::SeqCst)
-    }
-
-    fn end_mcp_switch(&self) {
-        self.mcp_busy.store(false, Ordering::SeqCst);
-    }
-
-    fn mode(&self) -> ProxyMode {
-        mode_from_code(self.mode_value.load(Ordering::SeqCst))
-    }
-
     fn update_label(&self, what: &str, result: tauri::Result<()>) -> Result<(), AppError> {
         result.map_err(|err| tray_error(&format!("update tray {what} label"), err))
     }
 
     /// Rewrite every label for `language` and remember the choice.
-    fn apply_language(&self, language: TrayLanguage) -> Result<(), AppError> {
+    fn apply_language(
+        &self,
+        runtime: &TrayRuntimeState,
+        language: TrayLanguage,
+    ) -> Result<(), AppError> {
         let labels = labels(language);
         self.update_label(
             "service",
-            self.service.set_text(labels.service(self.service_on())),
+            self.service.set_text(labels.service(runtime.service_on())),
         )?;
-        self.update_label("MCP service", self.mcp.set_text(labels.mcp(self.mcp_on())))?;
+        self.update_label(
+            "MCP service",
+            self.mcp.set_text(labels.mcp(runtime.mcp_on())),
+        )?;
         self.update_label(
             "copy MCP config",
             self.copy_mcp_config.set_text(labels.copy_mcp_config),
@@ -1368,24 +1442,20 @@ impl TrayMenuState {
         )?;
         self.update_label("Show", self.show.set_text(labels.show))?;
         self.update_label("Quit", self.quit.set_text(labels.quit))?;
-        self.language.store(language.code(), Ordering::SeqCst);
+        runtime.set_language(language);
         Ok(())
     }
 
     /// Attach the derived node body, rebuilding the submenu only when the model
     /// changed. The submenu handle is stable, so the language refresh can keep
     /// rewriting its title without touching this path.
-    fn apply_nodes(&self, app: &AppHandle, entries: &[NodeMenuEntry]) -> Result<(), AppError> {
+    fn apply_nodes(
+        &self,
+        app: &AppHandle,
+        runtime: &TrayRuntimeState,
+        entries: &[NodeMenuEntry],
+    ) -> Result<(), AppError> {
         let dirty = self.nodes_dirty.load(Ordering::SeqCst);
-        // Win32 `TrackPopupMenu` runs a nested message loop; muda hops menu
-        // mutations onto that thread, so tearing the HMENU down while the
-        // popup is open can dismiss it or corrupt the menu. A click sets
-        // `nodes_dirty` and needs a rebuild even then (the platform has
-        // already toggled the check mark); live urltest/fallback `now`
-        // changes wait until the popup closes.
-        if skip_live_node_rebuild(dirty, tray_popup_menu_open()) {
-            return Ok(());
-        }
         let mut applied = self
             .nodes_model
             .lock()
@@ -1405,10 +1475,12 @@ impl TrayMenuState {
             self.nodes_dirty.store(false, Ordering::SeqCst);
             #[cfg(target_os = "macos")]
             {
-                let labels = self.labels();
+                let labels = runtime.labels();
                 colorize_delay_results(app, &labels);
                 attach_delay_buttons(app, entries, &labels);
             }
+            #[cfg(not(target_os = "macos"))]
+            let _ = runtime;
             return Ok(());
         }
         clear_node_children(&self.nodes)?;
@@ -1427,10 +1499,12 @@ impl TrayMenuState {
         // ones (`colorize_delay_results`, `attach_delay_buttons`).
         #[cfg(target_os = "macos")]
         {
-            let labels = self.labels();
+            let labels = runtime.labels();
             colorize_delay_results(app, &labels);
             attach_delay_buttons(app, entries, &labels);
         }
+        #[cfg(not(target_os = "macos"))]
+        let _ = runtime;
         Ok(())
     }
 
@@ -1464,43 +1538,20 @@ impl TrayMenuState {
         Ok(())
     }
 
-    /// Record the version the window reports as available (`None` = nothing to
-    /// offer) and reconcile the menu item.
-    fn apply_update(&self, wanted: Option<String>) -> Result<(), AppError> {
-        let mut prompt = self
-            .update
+    /// Attach, re-text, or drop the prompt item from `runtime.update_wanted()`.
+    /// Only ever called off the main thread.
+    fn sync_update(&self, runtime: &TrayRuntimeState) -> Result<(), AppError> {
+        let mut shown = self
+            .update_shown
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        prompt.wanted = wanted;
-        self.reconcile_update(&mut prompt)
-    }
-
-    /// Retry a prompt change the Windows popup blocked, or one the window made
-    /// before the watchdog started. Only ever called off the main thread.
-    fn sync_update(&self) -> Result<(), AppError> {
-        let mut prompt = self
-            .update
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        self.reconcile_update(&mut prompt)
-    }
-
-    /// Attach, re-text, or drop the prompt item. A skipped change stays
-    /// pending (`wanted` and `shown` keep differing) for the next sync.
-    fn reconcile_update(&self, prompt: &mut UpdatePrompt) -> Result<(), AppError> {
-        let language = TrayLanguage::from_code(self.language.load(Ordering::SeqCst));
-        let wanted = prompt
-            .wanted
+        let language = runtime.language();
+        let wanted = runtime
+            .update_wanted()
             .as_deref()
             .map(|version| update_prompt_text(language, version));
-        let step = update_prompt_step(wanted.as_deref(), prompt.shown.as_deref());
+        let step = update_prompt_step(wanted.as_deref(), shown.as_deref());
         if step == UpdatePromptStep::Settled {
-            return Ok(());
-        }
-        // Win32 `TrackPopupMenu` runs its own message loop over the open menu;
-        // tearing the item down inside it can dismiss the popup. The watchdog
-        // retries once it closes, like the node submenu rebuilds.
-        if tray_popup_menu_open() {
             return Ok(());
         }
         match step {
@@ -1516,13 +1567,13 @@ impl TrayMenuState {
                         .insert(&self.update_item, 0)
                         .map_err(|err| tray_error("insert tray update prompt", err))?;
                 }
-                prompt.shown = Some(label);
+                *shown = Some(label);
             }
             UpdatePromptStep::Detach => {
                 self.menu
                     .remove(&self.update_item)
                     .map_err(|err| tray_error("remove tray update prompt", err))?;
-                prompt.shown = None;
+                *shown = None;
             }
             UpdatePromptStep::Settled => {}
         }
@@ -1531,41 +1582,40 @@ impl TrayMenuState {
 
     /// Re-assert the whole mode group. Needed after a click: the platform menu
     /// toggles the clicked check item itself, even when it was already active.
-    fn apply_mode(&self, mode: ProxyMode) {
+    fn apply_mode(&self, runtime: &TrayRuntimeState, mode: ProxyMode) {
         let _ = self.mode_rule.set_checked(mode == ProxyMode::Rule);
         let _ = self.mode_global.set_checked(mode == ProxyMode::Global);
         let _ = self.mode_direct.set_checked(mode == ProxyMode::Direct);
-        self.mode_value.store(mode_code(mode), Ordering::SeqCst);
+        runtime.set_mode(mode);
     }
 
     /// Apply a derived view. The service item's enabled state is always
     /// rewritten so an in-flight switch can disable it and the next sync
     /// can turn it back on.
-    fn apply_view(&self, view: TrayView) {
+    fn apply_view(&self, runtime: &TrayRuntimeState, view: TrayView) {
         // Always re-apply enabled: a switch in flight forces the item off
         // even when the platform capability did not change, and the next
         // sync must turn it back on.
         let _ = self.service.set_enabled(service_item_enabled(
             view.service_enabled,
-            self.service_busy(),
+            runtime.service_busy(),
         ));
-        if self.service_on() != view.service_on {
+        if runtime.service_on() != view.service_on {
             let _ = self
                 .service
-                .set_text(self.labels().service(view.service_on));
-            self.service_on.store(view.service_on, Ordering::SeqCst);
+                .set_text(runtime.labels().service(view.service_on));
         }
-        let _ = self.mcp.set_enabled(mcp_item_enabled(self.mcp_busy()));
-        if self.mcp_on() != view.mcp_enabled {
-            let _ = self.mcp.set_text(self.labels().mcp(view.mcp_enabled));
-            self.mcp_on.store(view.mcp_enabled, Ordering::SeqCst);
+        let _ = self.mcp.set_enabled(mcp_item_enabled(runtime.mcp_busy()));
+        if runtime.mcp_on() != view.mcp_enabled {
+            let _ = self.mcp.set_text(runtime.labels().mcp(view.mcp_enabled));
         }
         let _ = self.copy_mcp_config.set_enabled(view.mcp_config_available);
-        if self.mode() != view.mode {
-            self.apply_mode(view.mode);
+        if runtime.mode() != view.mode {
+            self.apply_mode(runtime, view.mode);
         }
         let _ = self.copy_cli_proxy.set_enabled(view.cli_proxy_enabled);
         let _ = self.open_cli_proxy.set_enabled(view.cli_proxy_enabled);
+        runtime.apply_view(view);
     }
 }
 
@@ -1581,27 +1631,8 @@ fn mcp_item_enabled(busy: bool) -> bool {
     !busy
 }
 
-/// Skip a live (non-click) node rebuild while the tray popup is open. Click
-/// rebuilds still go through: the platform has already toggled the item.
-fn skip_live_node_rebuild(dirty: bool, popup_open: bool) -> bool {
-    !dirty && popup_open
-}
-
-/// Whether the tray thread is showing a popup. Windows only: classic Win32
-/// menus are the ones that break if their HMENU is rebuilt mid-loop. macOS
-/// and GTK menus update live and are left alone.
-fn tray_popup_menu_open() -> bool {
-    #[cfg(target_os = "windows")]
-    {
-        crate::tray_wheel::popup_menu_open()
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        false
-    }
-}
-
 /// Drop every child of the node submenu.
+#[cfg(not(target_os = "windows"))]
 fn clear_node_children(parent: &Submenu<Wry>) -> Result<(), AppError> {
     while parent
         .remove_at(0)
@@ -1614,6 +1645,7 @@ fn clear_node_children(parent: &Submenu<Wry>) -> Result<(), AppError> {
 /// Build and attach the node submenu body: check items at this level and one
 /// submenu per strategy group. A page's delay test button (macOS-only feature)
 /// sits above a separator, with the rows under it.
+#[cfg(not(target_os = "windows"))]
 fn append_node_entries(
     app: &AppHandle,
     parent: &Submenu<Wry>,
@@ -1674,6 +1706,7 @@ fn append_node_entries(
 /// its place in `applied`: same kind, same node, same group members. Labels and
 /// click states are what a retitle rewrites, so they are not part of a row's
 /// identity.
+#[cfg(any(not(target_os = "windows"), test))]
 fn same_node_rows(applied: &[NodeMenuEntry], entries: &[NodeMenuEntry]) -> bool {
     applied.len() == entries.len()
         && applied
@@ -1683,6 +1716,7 @@ fn same_node_rows(applied: &[NodeMenuEntry], entries: &[NodeMenuEntry]) -> bool 
 }
 
 /// One entry of [`same_node_rows`] against the one that stands in its place.
+#[cfg(any(not(target_os = "windows"), test))]
 fn same_row_shape(applied: &NodeMenuEntry, entry: &NodeMenuEntry) -> bool {
     match (applied, entry) {
         #[cfg(any(target_os = "macos", test))]
@@ -1697,7 +1731,7 @@ fn same_row_shape(applied: &NodeMenuEntry, entry: &NodeMenuEntry) -> bool {
             let same_identity =
                 applied.tag == entry.tag && applied.delay.is_some() == entry.delay.is_some();
             #[cfg(not(any(target_os = "macos", test)))]
-            let same_identity = true;
+            let same_identity = applied.tag == entry.tag;
             same_identity
                 && applied.members.len() == entry.members.len()
                 && applied
@@ -1714,18 +1748,7 @@ fn same_row_shape(applied: &NodeMenuEntry, entry: &NodeMenuEntry) -> bool {
 /// themselves: the same items, with the labels and states the model now
 /// carries. See [`TrayMenuState::apply_nodes`] for why an update the menu is
 /// open on must come through here rather than through a rebuild.
-///
-/// A rewritten row keeps whatever delay colour it carried: `setTitle` (what
-/// [`retitle_node_item`] calls) does not touch an attributed title. The caller
-/// re-derives the colours after the walk, which also drops the attribute of a
-/// row whose result is gone.
-///
-/// The walk addresses the rows the way [`append_node_entries`] lays them out —
-/// the page button and its separator, one check row per item, one submenu per
-/// group with the group's own button and members inside — so the two must stay
-/// in step. `false` comes back when the submenu does not hold exactly those
-/// rows — a rebuild that failed part-way, say — and the caller rebuilds after
-/// all, rather than retitling rows that stand for something else.
+#[cfg(not(target_os = "windows"))]
 fn retitle_node_rows(parent: &Submenu<Wry>, entries: &[NodeMenuEntry]) -> Result<bool, AppError> {
     let rows = parent
         .items()
@@ -1789,6 +1812,7 @@ fn retitle_node_rows(parent: &Submenu<Wry>, entries: &[NodeMenuEntry]) -> Result
 
 /// How many rows `entries` puts at the top level of the node submenu: one per
 /// entry, except a page's delay button, which brings its separator along.
+#[cfg(not(target_os = "windows"))]
 fn node_row_count(entries: &[NodeMenuEntry]) -> usize {
     entries
         .iter()
@@ -1802,13 +1826,14 @@ fn node_row_count(entries: &[NodeMenuEntry]) -> usize {
 
 /// How many rows one group page puts inside its own submenu: its members, and
 /// the group's own delay button with its separator where that page has one.
+#[cfg(not(target_os = "windows"))]
 fn group_row_count(group: &NodeMenuGroup) -> usize {
     group.members.len() + group_delay_rows(group)
 }
 
 /// How many rows a group page puts above its members: the group's own delay
 /// button and its separator, on the pages that have a button.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(all(not(target_os = "windows"), any(target_os = "macos", test)))]
 fn group_delay_rows(group: &NodeMenuGroup) -> usize {
     if group.delay.is_some() {
         DELAY_BUTTON_ROWS
@@ -1818,7 +1843,7 @@ fn group_delay_rows(group: &NodeMenuGroup) -> usize {
 }
 
 /// Nothing sits above the members where the platform has no delay button.
-#[cfg(not(any(target_os = "macos", test)))]
+#[cfg(all(not(target_os = "windows"), not(any(target_os = "macos", test))))]
 fn group_delay_rows(_group: &NodeMenuGroup) -> usize {
     0
 }
@@ -1826,6 +1851,7 @@ fn group_delay_rows(_group: &NodeMenuGroup) -> usize {
 /// Rewrite one node row: its text, whether it takes a click, and its check
 /// mark (the platform toggles that one itself on a click, so the model's value
 /// is re-asserted).
+#[cfg(not(target_os = "windows"))]
 fn retitle_node_item(row: &CheckMenuItem<Wry>, item: &NodeMenuItem) -> Result<(), AppError> {
     row.set_text(menu_text(&item.label))
         .map_err(|err| tray_error("retitle tray node item", err))?;
@@ -1838,7 +1864,7 @@ fn retitle_node_item(row: &CheckMenuItem<Wry>, item: &NodeMenuItem) -> Result<()
 /// Rewrite one page's delay button. The view on the row draws the label, so
 /// the text here is what the menu item carries for the platform (and what a
 /// screen reader reads); the view itself is re-attached after the walk.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(all(not(target_os = "windows"), any(target_os = "macos", test)))]
 fn retitle_delay_row(row: &MenuItem<Wry>, button: &DelayButton) -> Result<(), AppError> {
     row.set_text(menu_text(&button.label))
         .map_err(|err| tray_error("retitle tray delay button", err))?;
@@ -1847,7 +1873,7 @@ fn retitle_delay_row(row: &MenuItem<Wry>, button: &DelayButton) -> Result<(), Ap
 }
 
 /// Render a page's delay test button and the separator under it.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(all(not(target_os = "windows"), any(target_os = "macos", test)))]
 fn delay_rows(app: &AppHandle, button: &DelayButton) -> Result<DelayRows, AppError> {
     let item = MenuItem::with_id(
         app,
@@ -1865,6 +1891,7 @@ fn delay_rows(app: &AppHandle, button: &DelayButton) -> Result<DelayRows, AppErr
     })
 }
 
+#[cfg(not(target_os = "windows"))]
 fn node_check_item(app: &AppHandle, item: &NodeMenuItem) -> Result<CheckMenuItem<Wry>, AppError> {
     CheckMenuItem::with_id(
         app,
@@ -1878,6 +1905,7 @@ fn node_check_item(app: &AppHandle, item: &NodeMenuItem) -> Result<CheckMenuItem
 }
 
 /// Drop every child of the subscription submenu.
+#[cfg(not(target_os = "windows"))]
 fn clear_subscription_children(parent: &Submenu<Wry>) -> Result<(), AppError> {
     while parent
         .remove_at(0)
@@ -1889,6 +1917,7 @@ fn clear_subscription_children(parent: &Submenu<Wry>) -> Result<(), AppError> {
 
 /// Build and attach the subscription submenu body: one check item per
 /// subscription, nothing else.
+#[cfg(not(target_os = "windows"))]
 fn append_subscription_items(
     app: &AppHandle,
     parent: &Submenu<Wry>,
@@ -1959,260 +1988,648 @@ fn size_macos_tray_icon(tray: &tauri::tray::TrayIcon<Wry>) {
     });
 }
 
-pub fn setup_tray(app: &AppHandle, language: TrayLanguage) -> tauri::Result<()> {
-    // Windows draws the menu with `TrackPopupMenu`, which ignores the wheel: a
-    // menu taller than the screen would leave the node list to the keyboard and
-    // the scroll arrows. The hook has to live on the thread that shows the menu
-    // — this one.
-    #[cfg(target_os = "windows")]
-    crate::tray_wheel::install();
-    let labels = labels(language);
-    let view = current_view(app).unwrap_or_default();
-    let service = MenuItem::with_id(
-        app,
-        "service",
-        labels.service(view.service_on),
-        view.service_enabled,
-        None::<&str>,
-    )?;
-    let mcp = MenuItem::with_id(
-        app,
-        "mcp-service",
-        labels.mcp(view.mcp_enabled),
-        true,
-        None::<&str>,
-    )?;
-    let copy_mcp_config = MenuItem::with_id(
-        app,
-        "copy-mcp-config",
-        labels.copy_mcp_config,
-        view.mcp_config_available,
-        None::<&str>,
-    )?;
-    let mode_rule = CheckMenuItem::with_id(
-        app,
-        "mode:rule",
-        labels.mode_rule,
-        true,
-        view.mode == ProxyMode::Rule,
-        None::<&str>,
-    )?;
-    let mode_global = CheckMenuItem::with_id(
-        app,
-        "mode:global",
-        labels.mode_global,
-        true,
-        view.mode == ProxyMode::Global,
-        None::<&str>,
-    )?;
-    let mode_direct = CheckMenuItem::with_id(
-        app,
-        "mode:direct",
-        labels.mode_direct,
-        true,
-        view.mode == ProxyMode::Direct,
-        None::<&str>,
-    )?;
-    let mode = Submenu::with_items(
-        app,
-        labels.mode,
-        true,
-        &[&mode_rule, &mode_global, &mode_direct],
-    )?;
-    // Seeded here instead of through `apply_nodes`: that path takes a lock the
-    // main thread must never hold (`nodes_model`), and the watchdog only kicks
-    // in after its first sleep. A failed build leaves the entry empty so the
-    // next sync retries it.
-    let node_entries = current_node_entries(app).unwrap_or_default();
-    let nodes = Submenu::with_id(app, "nodes", labels.nodes, false)?;
-    let node_model = if node_entries.is_empty() {
-        Vec::new()
-    } else {
-        match append_node_entries(app, &nodes, &node_entries) {
-            Ok(()) => {
-                let _ = nodes.set_enabled(true);
-                node_entries
-            }
-            Err(err) => {
-                tracing::warn!(
-                    code = %err.code,
-                    error = %err.message,
-                    "tray node menu setup failed"
-                );
-                let _ = clear_node_children(&nodes);
-                Vec::new()
-            }
+/// Dispatch a menu action id from either the native tray menu or the custom
+/// Windows tray panel.
+fn dispatch_menu_action(app: &AppHandle, id: &str) {
+    if let Some(action) = node_action_from_menu_id(id) {
+        switch_node(app, action);
+        return;
+    }
+    if let Some(id) = subscription_id_from_menu_id(id) {
+        switch_subscription(app, id);
+        return;
+    }
+    match id {
+        "service" => toggle_service(app),
+        "mcp-service" => toggle_mcp(app),
+        "copy-mcp-config" => on_copy_mcp_config(app),
+        "mode:rule" => switch_mode(app, ProxyMode::Rule),
+        "mode:global" => switch_mode(app, ProxyMode::Global),
+        "mode:direct" => switch_mode(app, ProxyMode::Direct),
+        "copy-cli-proxy" => on_copy_cli_proxy(app),
+        "open-cli-proxy" => on_open_cli_proxy(app),
+        "update" => on_open_update(app),
+        "show" => show_main_window(app),
+        "quit" => {
+            crate::tray_panel::hide_panel(app);
+            // The stop can take seconds with TUN active (teardown waits +
+            // core stop + `networksetup` restore); run it off the main
+            // thread so the window never freezes, and exit from the
+            // worker once the state is consistent.
+            let app = app.clone();
+            tauri::async_runtime::spawn_blocking(move || match request_tray_quit(&app) {
+                QuitOutcome::Stopped => app.exit(0),
+                QuitOutcome::ProxyRestoreFailed | QuitOutcome::StopFailed => {}
+                QuitOutcome::LockPoisoned => app.exit(1),
+            });
         }
-    };
-    // The delay buttons' views hang off the status item's menu, which exists
-    // only once the icon is built at the end of this function: the model is
-    // kept aside for that first attach instead of read back under a lock the
-    // main thread must not take.
-    #[cfg(target_os = "macos")]
-    let seeded_node_model = node_model.clone();
-    // Same seeding rule as the node submenu above: `apply_subscriptions` takes a
-    // lock the main thread must never hold while the watchdog rebuilds.
-    let sub_entries = current_subscription_entries(app).unwrap_or_default();
-    let subs = Submenu::with_id(app, "subs", labels.subs, false)?;
-    let subs_model = if sub_entries.is_empty() {
-        Vec::new()
-    } else {
-        match append_subscription_items(app, &subs, &sub_entries) {
-            Ok(()) => {
-                let _ = subs.set_enabled(true);
-                sub_entries
-            }
-            Err(err) => {
-                tracing::warn!(
-                    code = %err.code,
-                    error = %err.message,
-                    "tray subscription menu setup failed"
-                );
-                let _ = clear_subscription_children(&subs);
-                Vec::new()
-            }
-        }
-    };
-    let copy_cli_proxy = MenuItem::with_id(
-        app,
-        "copy-cli-proxy",
-        labels.copy_cli_proxy,
-        view.cli_proxy_enabled,
-        None::<&str>,
-    )?;
-    let open_cli_proxy = MenuItem::with_id(
-        app,
-        "open-cli-proxy",
-        labels.open_cli_proxy,
-        view.cli_proxy_enabled,
-        None::<&str>,
-    )?;
-    let show = MenuItem::with_id(app, "show", labels.show, true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", labels.quit, true, None::<&str>)?;
-    // Out of the menu until the window reports a version: the label, and the
-    // green arrow icon that carries the sidebar's colour, are set on attach.
-    let update_item = IconMenuItem::with_id(
-        app,
-        "update",
-        "",
-        true,
-        Some(update_arrow_icon()),
-        None::<&str>,
-    )?;
-    let separator = PredefinedMenuItem::separator(app)?;
-    let mcp_separator = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(
-        app,
-        &[
-            &service,
-            &mode,
-            &nodes,
-            &subs,
-            &copy_cli_proxy,
-            &open_cli_proxy,
-            &mcp_separator,
-            &mcp,
-            &copy_mcp_config,
-            &separator,
-            &show,
-            &quit,
-        ],
-    )?;
-    app.manage(TrayMenuState {
-        service,
-        mcp,
-        copy_mcp_config,
-        mode,
-        mode_rule,
-        mode_global,
-        mode_direct,
-        nodes,
-        nodes_model: Mutex::new(node_model),
-        nodes_dirty: AtomicBool::new(false),
-        last_nodes_sync: Mutex::new(None),
-        subs,
-        subs_model: Mutex::new(subs_model),
-        subs_dirty: AtomicBool::new(false),
-        copy_cli_proxy,
-        open_cli_proxy,
-        show,
-        quit,
-        // A handle to the menu so the prompt can be attached and dropped
-        // without rebuilding the icon.
-        menu: menu.clone(),
-        update_item,
-        update: Mutex::new(UpdatePrompt::default()),
-        language: AtomicU8::new(language.code()),
-        service_on: AtomicBool::new(view.service_on),
-        mcp_on: AtomicBool::new(view.mcp_enabled),
-        service_busy: AtomicBool::new(false),
-        mcp_busy: AtomicBool::new(false),
-        mode_value: AtomicU8::new(mode_code(view.mode)),
-    });
+        _ => {}
+    }
+}
 
-    let builder = TrayIconBuilder::with_id(TRAY_ID)
-        .menu(&menu)
-        .tooltip("ice-box")
-        .icon(Image::from_bytes(TRAY_ICON)?)
-        // Windows pops the menu on left click by default, which competes with
-        // the activate gesture: there the left click opens the window and only
-        // the right click opens the menu.
-        .show_menu_on_left_click(!cfg!(target_os = "windows"))
-        .on_menu_event(|app, event| {
-            let id = event.id.as_ref();
-            if let Some(action) = node_action_from_menu_id(id) {
-                switch_node(app, action);
-                return;
-            }
-            if let Some(id) = subscription_id_from_menu_id(id) {
-                switch_subscription(app, id);
-                return;
-            }
-            match id {
-                "service" => toggle_service(app),
-                "mcp-service" => toggle_mcp(app),
-                "copy-mcp-config" => on_copy_mcp_config(app),
-                "mode:rule" => switch_mode(app, ProxyMode::Rule),
-                "mode:global" => switch_mode(app, ProxyMode::Global),
-                "mode:direct" => switch_mode(app, ProxyMode::Direct),
-                "copy-cli-proxy" => on_copy_cli_proxy(app),
-                "open-cli-proxy" => on_open_cli_proxy(app),
-                "update" => on_open_update(app),
-                "show" => show_main_window(app),
-                "quit" => {
-                    // The stop can take seconds with TUN active (teardown waits +
-                    // core stop + `networksetup` restore); run it off the main
-                    // thread so the window never freezes, and exit from the
-                    // worker once the state is consistent.
-                    let app = app.clone();
-                    tauri::async_runtime::spawn_blocking(move || match request_tray_quit(&app) {
-                        QuitOutcome::Stopped => app.exit(0),
-                        QuitOutcome::ProxyRestoreFailed | QuitOutcome::StopFailed => {}
-                        QuitOutcome::LockPoisoned => app.exit(1),
-                    });
+/// Whether clicking `id` in the custom tray panel should leave the panel open.
+/// Delay test rows stream live results into the open panel, matching macOS.
+pub(crate) fn panel_action_keeps_open(id: &str) -> bool {
+    DelayScope::from_menu_id(id).is_some()
+}
+
+/// Handle a click from the custom tray panel.
+pub(crate) fn handle_panel_action(app: &AppHandle, id: &str) {
+    if let Some(scope) = DelayScope::from_menu_id(id) {
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        crate::tray_delay::start(app, scope);
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        let _ = scope;
+        return;
+    }
+    dispatch_menu_action(app, id);
+}
+
+/// Tray icon click handler shared with `tray_compat` on Windows.
+pub(crate) fn handle_tray_icon_event(tray: &TrayIcon<Wry>, event: TrayIconEvent) {
+    match event {
+        TrayIconEvent::Click {
+            button: MouseButton::Left,
+            button_state: MouseButtonState::Up,
+            ..
+        } => {
+            crate::tray_panel::hide_panel(tray.app_handle());
+            show_main_window(tray.app_handle());
+        }
+        #[cfg(target_os = "windows")]
+        TrayIconEvent::Click {
+            button: MouseButton::Right,
+            button_state: MouseButtonState::Up,
+            rect,
+            ..
+        } => {
+            crate::tray_panel::toggle(tray.app_handle(), &rect);
+        }
+        _ => {}
+    }
+}
+
+pub fn setup_tray(app: &AppHandle, language: TrayLanguage) -> tauri::Result<()> {
+    let view = current_view(app).unwrap_or_default();
+    app.manage(TrayRuntimeState::new(language, view));
+
+    #[cfg(target_os = "windows")]
+    {
+        let builder = TrayIconBuilder::with_id(TRAY_ID)
+            .tooltip("ice-box")
+            .icon(Image::from_bytes(TRAY_ICON)?)
+            // Left click opens the main window; right click opens the custom
+            // macOS-styled tray panel instead of a Win32 TrackPopupMenu.
+            .show_menu_on_left_click(false)
+            .on_tray_icon_event(handle_tray_icon_event);
+        let _tray = builder.build(app)?;
+        crate::tray_compat::install(app);
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let labels = labels(language);
+        let service = MenuItem::with_id(
+            app,
+            "service",
+            labels.service(view.service_on),
+            view.service_enabled,
+            None::<&str>,
+        )?;
+        let mcp = MenuItem::with_id(
+            app,
+            "mcp-service",
+            labels.mcp(view.mcp_enabled),
+            true,
+            None::<&str>,
+        )?;
+        let copy_mcp_config = MenuItem::with_id(
+            app,
+            "copy-mcp-config",
+            labels.copy_mcp_config,
+            view.mcp_config_available,
+            None::<&str>,
+        )?;
+        let mode_rule = CheckMenuItem::with_id(
+            app,
+            "mode:rule",
+            labels.mode_rule,
+            true,
+            view.mode == ProxyMode::Rule,
+            None::<&str>,
+        )?;
+        let mode_global = CheckMenuItem::with_id(
+            app,
+            "mode:global",
+            labels.mode_global,
+            true,
+            view.mode == ProxyMode::Global,
+            None::<&str>,
+        )?;
+        let mode_direct = CheckMenuItem::with_id(
+            app,
+            "mode:direct",
+            labels.mode_direct,
+            true,
+            view.mode == ProxyMode::Direct,
+            None::<&str>,
+        )?;
+        let mode = Submenu::with_items(
+            app,
+            labels.mode,
+            true,
+            &[&mode_rule, &mode_global, &mode_direct],
+        )?;
+        // Seeded here instead of through `apply_nodes`: that path takes a lock
+        // the main thread must never hold (`nodes_model`), and the watchdog
+        // only kicks in after its first sleep. A failed build leaves the entry
+        // empty so the next sync retries it.
+        let node_entries = current_node_entries(app).unwrap_or_default();
+        let nodes = Submenu::with_id(app, "nodes", labels.nodes, false)?;
+        let node_model = if node_entries.is_empty() {
+            Vec::new()
+        } else {
+            match append_node_entries(app, &nodes, &node_entries) {
+                Ok(()) => {
+                    let _ = nodes.set_enabled(true);
+                    node_entries
                 }
-                _ => {}
+                Err(err) => {
+                    tracing::warn!(
+                        code = %err.code,
+                        error = %err.message,
+                        "tray node menu setup failed"
+                    );
+                    let _ = clear_node_children(&nodes);
+                    Vec::new()
+                }
             }
-        })
-        .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click {
-                button: MouseButton::Left,
-                button_state: MouseButtonState::Up,
-                ..
-            } = event
-            {
-                show_main_window(tray.app_handle());
+        };
+        // The delay buttons' views hang off the status item's menu, which
+        // exists only once the icon is built at the end of this function: the
+        // model is kept aside for that first attach instead of read back under
+        // a lock the main thread must not take.
+        #[cfg(target_os = "macos")]
+        let seeded_node_model = node_model.clone();
+        // Same seeding rule as the node submenu above: `apply_subscriptions`
+        // takes a lock the main thread must never hold while the watchdog
+        // rebuilds.
+        let sub_entries = current_subscription_entries(app).unwrap_or_default();
+        let subs = Submenu::with_id(app, "subs", labels.subs, false)?;
+        let subs_model = if sub_entries.is_empty() {
+            Vec::new()
+        } else {
+            match append_subscription_items(app, &subs, &sub_entries) {
+                Ok(()) => {
+                    let _ = subs.set_enabled(true);
+                    sub_entries
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        code = %err.code,
+                        error = %err.message,
+                        "tray subscription menu setup failed"
+                    );
+                    let _ = clear_subscription_children(&subs);
+                    Vec::new()
+                }
             }
+        };
+        let copy_cli_proxy = MenuItem::with_id(
+            app,
+            "copy-cli-proxy",
+            labels.copy_cli_proxy,
+            view.cli_proxy_enabled,
+            None::<&str>,
+        )?;
+        let open_cli_proxy = MenuItem::with_id(
+            app,
+            "open-cli-proxy",
+            labels.open_cli_proxy,
+            view.cli_proxy_enabled,
+            None::<&str>,
+        )?;
+        let show = MenuItem::with_id(app, "show", labels.show, true, None::<&str>)?;
+        let quit = MenuItem::with_id(app, "quit", labels.quit, true, None::<&str>)?;
+        // Out of the menu until the window reports a version: the label, and
+        // the green arrow icon that carries the sidebar's colour, are set on
+        // attach.
+        let update_item = IconMenuItem::with_id(
+            app,
+            "update",
+            "",
+            true,
+            Some(update_arrow_icon()),
+            None::<&str>,
+        )?;
+        let separator = PredefinedMenuItem::separator(app)?;
+        let mcp_separator = PredefinedMenuItem::separator(app)?;
+        let menu = Menu::with_items(
+            app,
+            &[
+                &service,
+                &mode,
+                &nodes,
+                &subs,
+                &copy_cli_proxy,
+                &open_cli_proxy,
+                &mcp_separator,
+                &mcp,
+                &copy_mcp_config,
+                &separator,
+                &show,
+                &quit,
+            ],
+        )?;
+        app.manage(TrayMenuState {
+            service,
+            mcp,
+            copy_mcp_config,
+            mode,
+            mode_rule,
+            mode_global,
+            mode_direct,
+            nodes,
+            nodes_model: Mutex::new(node_model),
+            nodes_dirty: AtomicBool::new(false),
+            last_nodes_sync: Mutex::new(None),
+            subs,
+            subs_model: Mutex::new(subs_model),
+            subs_dirty: AtomicBool::new(false),
+            copy_cli_proxy,
+            open_cli_proxy,
+            show,
+            quit,
+            menu: menu.clone(),
+            update_item,
+            update_shown: Mutex::new(None),
         });
 
-    let _tray = builder.build(app)?;
-    #[cfg(target_os = "macos")]
-    {
-        size_macos_tray_icon(&_tray);
-        crate::tray_delay::install_menu_watch(&_tray);
-        attach_delay_buttons(app, &seeded_node_model, &labels);
+        let builder = TrayIconBuilder::with_id(TRAY_ID)
+            .menu(&menu)
+            .tooltip("ice-box")
+            .icon(Image::from_bytes(TRAY_ICON)?)
+            .show_menu_on_left_click(true)
+            .on_menu_event(|app, event| dispatch_menu_action(app, event.id.as_ref()))
+            .on_tray_icon_event(handle_tray_icon_event);
+
+        let _tray = builder.build(app)?;
+        #[cfg(target_os = "macos")]
+        {
+            size_macos_tray_icon(&_tray);
+            crate::tray_delay::install_menu_watch(&_tray);
+            attach_delay_buttons(app, &seeded_node_model, &labels);
+        }
+        Ok(())
     }
-    Ok(())
+}
+
+/// Structured action row for the custom tray panel.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PanelActionRow {
+    pub id: String,
+    pub label: String,
+    pub enabled: bool,
+}
+
+/// Submenu trigger row for the custom tray panel.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PanelSubmenuHeader {
+    pub label: String,
+    pub enabled: bool,
+}
+
+/// Checkable submenu item for the custom tray panel.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PanelCheckRow {
+    pub id: String,
+    pub label: String,
+    pub enabled: bool,
+    pub checked: bool,
+}
+
+/// Page-level delay test button inside the custom tray panel.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PanelDelayButton {
+    pub id: String,
+    pub label: String,
+    pub enabled: bool,
+}
+
+/// Delay measurement suffix rendered beside a node or strategy group row.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PanelDelayBadge {
+    pub text: String,
+    /// Colour band (`"ok"`, `"warn"`, `"bad"`), or `None` while probing (`…`).
+    pub tone: Option<&'static str>,
+}
+
+/// Strategy group member row in the third-level node panel.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PanelNodeMember {
+    pub id: String,
+    pub label: String,
+    pub enabled: bool,
+    pub checked: bool,
+    pub delay: Option<PanelDelayBadge>,
+}
+
+/// Entry inside the Nodes submenu of the custom tray panel.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum PanelNodeEntry {
+    Item {
+        id: String,
+        label: String,
+        enabled: bool,
+        checked: bool,
+        delay: Option<PanelDelayBadge>,
+    },
+    Group {
+        tag: String,
+        label: String,
+        delay: Option<PanelDelayBadge>,
+        #[serde(rename = "delayButton")]
+        delay_button: PanelDelayButton,
+        members: Vec<PanelNodeMember>,
+    },
+}
+
+/// Complete tray menu snapshot served to the custom Windows tray panel.
+/// Mirrors the exact item order, labels, and delay-test behaviour of macOS.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PanelModel {
+    pub update: Option<PanelActionRow>,
+    pub service: PanelActionRow,
+    pub mode: PanelSubmenuHeader,
+    pub mode_items: Vec<PanelCheckRow>,
+    pub nodes: PanelSubmenuHeader,
+    pub nodes_delay: Option<PanelDelayButton>,
+    pub node_entries: Vec<PanelNodeEntry>,
+    pub subs: PanelSubmenuHeader,
+    pub sub_items: Vec<PanelCheckRow>,
+    pub copy_cli_proxy: PanelActionRow,
+    pub open_cli_proxy: PanelActionRow,
+    pub mcp: PanelActionRow,
+    pub copy_mcp_config: PanelActionRow,
+    pub show: PanelActionRow,
+    pub quit: PanelActionRow,
+}
+
+fn delay_tone_str(tone: DelayTone) -> &'static str {
+    match tone {
+        DelayTone::Ok => "ok",
+        DelayTone::Warn => "warn",
+        DelayTone::Bad => "bad",
+    }
+}
+
+fn panel_delay_badge(
+    view: &DelayView,
+    labels: &TrayLabels,
+    nodes: &[NodeInfo],
+    tag: &str,
+) -> Option<PanelDelayBadge> {
+    let exit = crate::tray_delay::resolve_exit_tag(nodes, tag)?;
+    match view.outcome(&exit)? {
+        DelayOutcome::Testing => Some(PanelDelayBadge {
+            text: "…".to_string(),
+            tone: None,
+        }),
+        DelayOutcome::Done(delay_ms) => Some(PanelDelayBadge {
+            text: format!("{delay_ms} ms"),
+            tone: Some(delay_tone_str(delay_tone(delay_ms))),
+        }),
+        DelayOutcome::Failed => Some(PanelDelayBadge {
+            text: labels.delay_failed.to_string(),
+            tone: Some("bad"),
+        }),
+    }
+}
+
+fn panel_delay_button(
+    view: &DelayView,
+    labels: &TrayLabels,
+    scope: DelayScope,
+) -> PanelDelayButton {
+    let button = delay_button(view, labels, scope);
+    PanelDelayButton {
+        id: button.scope.menu_id(),
+        label: button.label,
+        enabled: button.enabled,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_panel_model(
+    language: TrayLanguage,
+    view: TrayView,
+    service_busy: bool,
+    mcp_busy: bool,
+    update_wanted: Option<&str>,
+    nodes: &[NodeInfo],
+    selected_tag: &str,
+    subs: &[SubscriptionMenuItem],
+    delay: &DelayView,
+) -> PanelModel {
+    let labels = labels(language);
+    let raw_nodes = node_menu_entries(nodes, selected_tag);
+    let mut node_entries = Vec::with_capacity(raw_nodes.len());
+    for entry in raw_nodes {
+        match entry {
+            #[cfg(any(target_os = "macos", test))]
+            NodeMenuEntry::Delay(_) => {}
+            NodeMenuEntry::Item(item) => {
+                let badge = panel_delay_badge(delay, &labels, nodes, item.action.tag());
+                node_entries.push(PanelNodeEntry::Item {
+                    id: item.action.menu_id(),
+                    label: item.label,
+                    enabled: item.enabled,
+                    checked: item.checked,
+                    delay: badge,
+                });
+            }
+            NodeMenuEntry::Group(group) => {
+                let badge = group
+                    .now
+                    .as_deref()
+                    .and_then(|now| panel_delay_badge(delay, &labels, nodes, now));
+                let members = group
+                    .members
+                    .into_iter()
+                    .map(|member| {
+                        let member_delay =
+                            panel_delay_badge(delay, &labels, nodes, member.action.tag());
+                        PanelNodeMember {
+                            id: member.action.menu_id(),
+                            label: member.label,
+                            enabled: member.enabled,
+                            checked: member.checked,
+                            delay: member_delay,
+                        }
+                    })
+                    .collect();
+                node_entries.push(PanelNodeEntry::Group {
+                    delay_button: panel_delay_button(
+                        delay,
+                        &labels,
+                        DelayScope::Group(group.tag.clone()),
+                    ),
+                    tag: group.tag,
+                    label: group.label,
+                    delay: badge,
+                    members,
+                });
+            }
+        }
+    }
+    let nodes_delay =
+        (!node_entries.is_empty()).then(|| panel_delay_button(delay, &labels, DelayScope::Top));
+    let sub_items: Vec<PanelCheckRow> = subs
+        .iter()
+        .map(|item| PanelCheckRow {
+            id: item.menu_id(),
+            label: item.label.clone(),
+            enabled: item.enabled,
+            checked: item.checked,
+        })
+        .collect();
+    PanelModel {
+        update: update_wanted.map(|version| PanelActionRow {
+            id: "update".to_string(),
+            label: update_prompt_text(language, version),
+            enabled: true,
+        }),
+        service: PanelActionRow {
+            id: "service".to_string(),
+            label: labels.service(view.service_on).to_string(),
+            enabled: service_item_enabled(view.service_enabled, service_busy),
+        },
+        mode: PanelSubmenuHeader {
+            label: labels.mode.to_string(),
+            enabled: true,
+        },
+        mode_items: vec![
+            PanelCheckRow {
+                id: "mode:rule".to_string(),
+                label: labels.mode_rule.to_string(),
+                enabled: true,
+                checked: view.mode == ProxyMode::Rule,
+            },
+            PanelCheckRow {
+                id: "mode:global".to_string(),
+                label: labels.mode_global.to_string(),
+                enabled: true,
+                checked: view.mode == ProxyMode::Global,
+            },
+            PanelCheckRow {
+                id: "mode:direct".to_string(),
+                label: labels.mode_direct.to_string(),
+                enabled: true,
+                checked: view.mode == ProxyMode::Direct,
+            },
+        ],
+        nodes: PanelSubmenuHeader {
+            label: labels.nodes.to_string(),
+            enabled: !node_entries.is_empty(),
+        },
+        nodes_delay,
+        node_entries,
+        subs: PanelSubmenuHeader {
+            label: labels.subs.to_string(),
+            enabled: !sub_items.is_empty(),
+        },
+        sub_items,
+        copy_cli_proxy: PanelActionRow {
+            id: "copy-cli-proxy".to_string(),
+            label: labels.copy_cli_proxy.to_string(),
+            enabled: view.cli_proxy_enabled,
+        },
+        open_cli_proxy: PanelActionRow {
+            id: "open-cli-proxy".to_string(),
+            label: labels.open_cli_proxy.to_string(),
+            enabled: view.cli_proxy_enabled,
+        },
+        mcp: PanelActionRow {
+            id: "mcp-service".to_string(),
+            label: labels.mcp(view.mcp_enabled).to_string(),
+            enabled: mcp_item_enabled(mcp_busy),
+        },
+        copy_mcp_config: PanelActionRow {
+            id: "copy-mcp-config".to_string(),
+            label: labels.copy_mcp_config.to_string(),
+            enabled: view.mcp_config_available,
+        },
+        show: PanelActionRow {
+            id: "show".to_string(),
+            label: labels.show.to_string(),
+            enabled: true,
+        },
+        quit: PanelActionRow {
+            id: "quit".to_string(),
+            label: labels.quit.to_string(),
+            enabled: true,
+        },
+    }
+}
+
+/// Derive the custom tray panel snapshot from live runtime state.
+pub(crate) fn collect_panel_model(app: &AppHandle) -> PanelModel {
+    let live_view = current_view(app);
+    let view = live_view.unwrap_or_default();
+    let (language, service_busy, mcp_busy, update_wanted) =
+        if let Some(runtime) = app.try_state::<TrayRuntimeState>() {
+            // Keep `runtime.service_on` aligned with the live view rendered
+            // into the panel so clicking the service row matches its label
+            // even if OS proxy or core state changed between watchdog ticks.
+            #[cfg(target_os = "windows")]
+            if let Some(live) = live_view {
+                runtime.apply_view(live);
+            }
+            (
+                runtime.language(),
+                runtime.service_busy(),
+                runtime.mcp_busy(),
+                runtime.update_wanted(),
+            )
+        } else {
+            let language = app
+                .try_state::<AppState>()
+                .and_then(|state| current_settings(&state.paths).ok())
+                .map(|settings| TrayLanguage::from(settings.language))
+                .unwrap_or(TrayLanguage::En);
+            (language, false, false, None)
+        };
+    let (nodes, selected_tag) = app
+        .try_state::<AppState>()
+        .and_then(|state| {
+            let settings = current_settings(&state.paths).ok()?;
+            let nodes = collect_nodes(state.inner()).ok()?;
+            let selected = resolve_selected_tag(&nodes, settings.selected_tag.as_deref());
+            Some((nodes, selected))
+        })
+        .unwrap_or_default();
+    let subs = current_subscription_entries(app).unwrap_or_default();
+    let delay = crate::tray_delay::current_view();
+    build_panel_model(
+        language,
+        view,
+        service_busy,
+        mcp_busy,
+        update_wanted.as_deref(),
+        &nodes,
+        &selected_tag,
+        &subs,
+        &delay,
+    )
 }
 
 /// Derive the menu view from the runtime state. `None` while the app state or
@@ -2241,6 +2658,7 @@ fn current_view(app: &AppHandle) -> Option<TrayView> {
 /// Derive the node submenu body from the active profile and the live picks.
 /// `None` while the app state, the settings file, or the profile is unavailable
 /// (first launch, teardown): callers keep the previous menu.
+#[cfg(not(target_os = "windows"))]
 fn current_node_entries(app: &AppHandle) -> Option<Vec<NodeMenuEntry>> {
     let state = app.try_state::<AppState>()?;
     let settings = current_settings(&state.paths).ok()?;
@@ -2254,9 +2672,9 @@ fn current_node_entries(app: &AppHandle) -> Option<Vec<NodeMenuEntry>> {
 
 /// Labels for the menu being built: the tray's live language, or the settings'
 /// preference while the tray state does not exist yet (menu seeding).
-#[cfg(any(target_os = "macos", test))]
+#[cfg(all(not(target_os = "windows"), any(target_os = "macos", test)))]
 fn current_labels(app: &AppHandle) -> TrayLabels {
-    if let Some(state) = app.try_state::<TrayMenuState>() {
+    if let Some(state) = app.try_state::<TrayRuntimeState>() {
         return state.labels();
     }
     let language = app
@@ -2274,7 +2692,7 @@ fn current_labels(app: &AppHandle) -> TrayLabels {
 /// test runs, every button is disabled. Nothing to decorate (and no buttons)
 /// while there are no rows — the top page only carries a button when it has
 /// nodes.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(all(not(target_os = "windows"), any(target_os = "macos", test)))]
 fn decorate_delay(
     mut entries: Vec<NodeMenuEntry>,
     labels: &TrayLabels,
@@ -2333,7 +2751,6 @@ fn apply_delay(
 
 /// One page's button: the progress label while its own test runs, the plain
 /// label otherwise, and disabled while any test runs.
-#[cfg(any(target_os = "macos", test))]
 fn delay_button(view: &DelayView, labels: &TrayLabels, scope: DelayScope) -> DelayButton {
     let label = match view.progress(&scope) {
         Some((index, total)) => labels.delay_progress_text(index, total),
@@ -2757,62 +3174,73 @@ pub fn sync_menu(app: &AppHandle) {
 /// Re-derive only the lightweight top-level view. Used when the window changes
 /// MCP state and should not pay for a forced node-menu rebuild.
 pub(crate) fn sync_view(app: &AppHandle) {
-    let Some(menu) = app.try_state::<TrayMenuState>() else {
+    let Some(runtime) = app.try_state::<TrayRuntimeState>() else {
         return;
     };
     let Some(view) = current_view(app) else {
         return;
     };
-    menu.apply_view(view);
+    #[cfg(not(target_os = "windows"))]
+    if let Some(menu) = app.try_state::<TrayMenuState>() {
+        menu.apply_view(runtime.inner(), view);
+    }
+    #[cfg(target_os = "windows")]
+    runtime.apply_view(view);
+    crate::tray_panel::notify_changed(app);
 }
 
 fn sync_menu_inner(app: &AppHandle, force_nodes: bool) {
-    let Some(menu) = app.try_state::<TrayMenuState>() else {
+    let Some(runtime) = app.try_state::<TrayRuntimeState>() else {
         return;
     };
     let Some(view) = current_view(app) else {
         return;
     };
-    menu.apply_view(view);
-    // Cheap when settled: the prompt only touches the menu when the version
-    // the window offers or the tray language moved.
-    sync_update_prompt(app);
-    if let Some(entries) = current_subscription_entries(app) {
-        if let Err(err) = menu.apply_subscriptions(app, &entries) {
-            tracing::warn!(
-                code = %err.code,
-                error = %err.message,
-                "tray subscription menu sync failed"
-            );
-        }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = force_nodes;
+        runtime.apply_view(view);
+        crate::tray_panel::notify_changed(app);
     }
-    // Skip the Clash `/proxies` fetch as well as the rebuild: both are wasted
-    // while the popup is open, and the fetch is what makes urltest `now`
-    // churn trigger a teardown.
-    let skip_nodes = skip_live_node_rebuild(
-        menu.nodes_dirty.load(Ordering::SeqCst),
-        tray_popup_menu_open(),
-    );
-    let nodes_due = force_nodes
-        || menu.nodes_dirty.load(Ordering::SeqCst)
-        || menu
-            .last_nodes_sync
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .is_none_or(|at| at.elapsed() >= NODE_SYNC_INTERVAL);
-    if !skip_nodes && nodes_due {
-        if let Some(entries) = current_node_entries(app) {
-            if let Err(err) = menu.apply_nodes(app, &entries) {
+    #[cfg(not(target_os = "windows"))]
+    {
+        let Some(menu) = app.try_state::<TrayMenuState>() else {
+            return;
+        };
+        menu.apply_view(runtime.inner(), view);
+        // Cheap when settled: the prompt only touches the menu when the version
+        // the window offers or the tray language moved.
+        sync_update_prompt(app);
+        if let Some(entries) = current_subscription_entries(app) {
+            if let Err(err) = menu.apply_subscriptions(app, &entries) {
                 tracing::warn!(
                     code = %err.code,
                     error = %err.message,
-                    "tray node menu sync failed"
+                    "tray subscription menu sync failed"
                 );
-            } else {
-                *menu
-                    .last_nodes_sync
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
+            }
+        }
+        let nodes_due = force_nodes
+            || menu.nodes_dirty.load(Ordering::SeqCst)
+            || menu
+                .last_nodes_sync
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_none_or(|at| at.elapsed() >= NODE_SYNC_INTERVAL);
+        if nodes_due {
+            if let Some(entries) = current_node_entries(app) {
+                if let Err(err) = menu.apply_nodes(app, runtime.inner(), &entries) {
+                    tracing::warn!(
+                        code = %err.code,
+                        error = %err.message,
+                        "tray node menu sync failed"
+                    );
+                } else {
+                    *menu
+                        .last_nodes_sync
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
+                }
             }
         }
     }
@@ -2825,16 +3253,24 @@ fn sync_menu_inner(app: &AppHandle, force_nodes: bool) {
 /// Off-main-thread only, like [`sync_menu`]: the reconcile blocks on
 /// main-thread menu mutations.
 pub fn sync_update_prompt(app: &AppHandle) {
-    let Some(menu) = app.try_state::<TrayMenuState>() else {
-        return;
-    };
-    if let Err(err) = menu.sync_update() {
-        tracing::warn!(
-            code = %err.code,
-            error = %err.message,
-            "tray update prompt sync failed"
-        );
+    #[cfg(not(target_os = "windows"))]
+    {
+        let (Some(runtime), Some(menu)) = (
+            app.try_state::<TrayRuntimeState>(),
+            app.try_state::<TrayMenuState>(),
+        ) else {
+            return;
+        };
+        if let Err(err) = menu.sync_update(runtime.inner()) {
+            tracing::warn!(
+                code = %err.code,
+                error = %err.message,
+                "tray update prompt sync failed"
+            );
+        }
     }
+    #[cfg(target_os = "windows")]
+    crate::tray_panel::notify_changed(app);
 }
 
 /// Keep the service switch, the mode group, the subscription group, and the
@@ -2856,13 +3292,17 @@ pub fn spawn_state_watchdog(app: AppHandle) {
 
 /// Tray MCP switch: persist the enabled state and start or stop the listener.
 fn toggle_mcp(app: &AppHandle) {
-    let Some(menu) = app.try_state::<TrayMenuState>() else {
+    let Some(runtime) = app.try_state::<TrayRuntimeState>() else {
         return;
     };
-    if !menu.try_begin_mcp_switch() {
+    if !runtime.try_begin_mcp_switch() {
         return;
     }
-    let _ = menu.mcp.set_enabled(false);
+    #[cfg(not(target_os = "windows"))]
+    if let Some(menu) = app.try_state::<TrayMenuState>() {
+        let _ = menu.mcp.set_enabled(false);
+    }
+    crate::tray_panel::notify_changed(app);
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         struct McpSwitchGuard {
@@ -2870,8 +3310,8 @@ fn toggle_mcp(app: &AppHandle) {
         }
         impl Drop for McpSwitchGuard {
             fn drop(&mut self) {
-                if let Some(menu) = self.app.try_state::<TrayMenuState>() {
-                    menu.end_mcp_switch();
+                if let Some(runtime) = self.app.try_state::<TrayRuntimeState>() {
+                    runtime.end_mcp_switch();
                 }
                 sync_menu(&self.app);
             }
@@ -2953,16 +3393,20 @@ fn on_open_cli_proxy(app: &AppHandle) {
 /// The start can take seconds (elevated TUN, system-proxy apply), so it runs
 /// off the main thread; the menu is re-synced from reality afterwards.
 fn toggle_service(app: &AppHandle) {
-    let Some(menu) = app.try_state::<TrayMenuState>() else {
+    let Some(runtime) = app.try_state::<TrayRuntimeState>() else {
         return;
     };
     // Claim the switch before reading the label: two clicks must not both
     // see "off" and queue two starts (or two stops).
-    if !menu.try_begin_service_switch() {
+    if !runtime.try_begin_service_switch() {
         return;
     }
-    let engaged = menu.service_on();
-    let _ = menu.service.set_enabled(false);
+    let engaged = runtime.service_on();
+    #[cfg(not(target_os = "windows"))]
+    if let Some(menu) = app.try_state::<TrayMenuState>() {
+        let _ = menu.service.set_enabled(false);
+    }
+    crate::tray_panel::notify_changed(app);
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         // Clears `service_busy` then re-syncs, so `apply_view` can re-enable
@@ -2974,8 +3418,8 @@ fn toggle_service(app: &AppHandle) {
         }
         impl Drop for ServiceSwitchGuard {
             fn drop(&mut self) {
-                if let Some(menu) = self.app.try_state::<TrayMenuState>() {
-                    menu.end_service_switch();
+                if let Some(runtime) = self.app.try_state::<TrayRuntimeState>() {
+                    runtime.end_service_switch();
                 }
                 sync_menu(&self.app);
             }
@@ -3009,6 +3453,7 @@ fn toggle_service(app: &AppHandle) {
 /// persist the pick (so it survives a restart) and apply it live when the core
 /// runs, so this goes off the main thread like the other tray actions.
 fn switch_node(app: &AppHandle, action: NodeAction) {
+    #[cfg(not(target_os = "windows"))]
     if let Some(menu) = app.try_state::<TrayMenuState>() {
         // The platform toggles the clicked check item before the event reaches
         // us; have the next sync rebuild the group from reality.
@@ -3046,6 +3491,7 @@ fn switch_node(app: &AppHandle, action: NodeAction) {
 /// which also replaces the node submenu), so it goes off the main thread like
 /// the other tray actions.
 fn switch_subscription(app: &AppHandle, id: Uuid) {
+    #[cfg(not(target_os = "windows"))]
     if let Some(menu) = app.try_state::<TrayMenuState>() {
         // The platform toggles the clicked check item before the event reaches
         // us; have the next sync rebuild the group from reality.
@@ -3087,12 +3533,17 @@ fn switch_subscription(app: &AppHandle, id: Uuid) {
 
 /// Tray「proxy mode」: same call the Home mode selector makes.
 fn switch_mode(app: &AppHandle, mode: ProxyMode) {
-    if let Some(menu) = app.try_state::<TrayMenuState>() {
-        // The platform toggles the clicked radio-style item before the event
-        // reaches us; re-assert the group so a re-click of the active mode
-        // cannot leave it unchecked.
-        menu.apply_mode(mode);
+    #[cfg(not(target_os = "windows"))]
+    if let (Some(runtime), Some(menu)) = (
+        app.try_state::<TrayRuntimeState>(),
+        app.try_state::<TrayMenuState>(),
+    ) {
+        // The platform toggles the clicked radio-style item before the
+        // event reaches us; re-assert the group so a re-click of the active
+        // mode cannot leave it unchecked.
+        menu.apply_mode(runtime.inner(), mode);
     }
+    crate::tray_panel::notify_changed(app);
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let Some(state) = app.try_state::<AppState>() else {
@@ -3114,10 +3565,20 @@ fn switch_mode(app: &AppHandle, mode: ProxyMode) {
 }
 
 pub fn set_language(app: &AppHandle, language: TrayLanguage) -> Result<(), AppError> {
-    let state = app
-        .try_state::<TrayMenuState>()
+    let runtime = app
+        .try_state::<TrayRuntimeState>()
         .ok_or_else(|| AppError::new(ErrorCode::ConfigInvalid, "tray menu state is unavailable"))?;
-    state.apply_language(language)
+    #[cfg(not(target_os = "windows"))]
+    {
+        let menu = app.try_state::<TrayMenuState>().ok_or_else(|| {
+            AppError::new(ErrorCode::ConfigInvalid, "tray menu state is unavailable")
+        })?;
+        menu.apply_language(runtime.inner(), language)?;
+    }
+    #[cfg(target_os = "windows")]
+    runtime.set_language(language);
+    crate::tray_panel::notify_changed(app);
+    Ok(())
 }
 
 /// Show (`Some`) or drop (`None`) the menu's update prompt. The window reports
@@ -3127,13 +3588,22 @@ pub fn set_language(app: &AppHandle, language: TrayLanguage) -> Result<(), AppEr
 /// Off-main-thread only, like the other menu rebuilds: attaching the item
 /// blocks on main-thread menu mutations.
 pub fn set_update_available(app: &AppHandle, version: Option<String>) -> Result<(), AppError> {
-    let state = app
-        .try_state::<TrayMenuState>()
+    let runtime = app
+        .try_state::<TrayRuntimeState>()
         .ok_or_else(|| AppError::new(ErrorCode::ConfigInvalid, "tray menu state is unavailable"))?;
     let wanted = version
         .map(|version| crate::app_update::normalize_version(&version).to_string())
         .filter(|version| !version.is_empty());
-    state.apply_update(wanted)
+    runtime.set_update_wanted(wanted);
+    #[cfg(not(target_os = "windows"))]
+    {
+        let menu = app.try_state::<TrayMenuState>().ok_or_else(|| {
+            AppError::new(ErrorCode::ConfigInvalid, "tray menu state is unavailable")
+        })?;
+        menu.sync_update(runtime.inner())?;
+    }
+    crate::tray_panel::notify_changed(app);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -3728,13 +4198,146 @@ mod tests {
     }
 
     #[test]
-    fn live_node_rebuild_waits_while_the_popup_is_open() {
-        // A watchdog tick with no click must not tear the HMENU down.
-        assert!(skip_live_node_rebuild(false, true));
-        // A click still rebuilds: the platform already toggled the check mark.
-        assert!(!skip_live_node_rebuild(true, true));
-        assert!(!skip_live_node_rebuild(false, false));
-        assert!(!skip_live_node_rebuild(true, false));
+    fn panel_action_keeps_open_only_for_delay_buttons() {
+        assert!(panel_action_keeps_open(&DelayScope::Top.menu_id()));
+        assert!(panel_action_keeps_open(
+            &DelayScope::Group("节点选择".into()).menu_id()
+        ));
+        for id in [
+            "service",
+            "mode:rule",
+            "mcp-service",
+            "copy-mcp-config",
+            "copy-cli-proxy",
+            "open-cli-proxy",
+            "update",
+            "show",
+            "quit",
+            "[\"node\",\"香港 01\"]",
+            "[\"member\",\"节点选择\",\"日本 02\"]",
+            "[\"sub\",\"11111111-1111-4111-8111-111111111111\"]",
+        ] {
+            assert!(!panel_action_keeps_open(id), "{id}");
+        }
+    }
+
+    #[test]
+    fn panel_model_mirrors_macos_menu_structure_and_delay_badges() {
+        let nodes = vec![
+            node(
+                "节点选择",
+                "selector",
+                Some("日本 02"),
+                Some(&["香港 01", "日本 02"]),
+            ),
+            node(
+                "自动选择",
+                "urltest",
+                Some("香港 01"),
+                Some(&["香港 01", "日本 02"]),
+            ),
+            node("香港 01", "socks", None, None),
+            node("日本 02", "vmess", None, None),
+        ];
+        let subs = subscription_menu_entries(&[
+            subscription("11111111-1111-4111-8111-111111111111", "机场 A", true),
+            subscription("22222222-2222-4222-8222-222222222222", "机场 B", false),
+        ]);
+        let view = TrayView {
+            service_on: true,
+            service_enabled: true,
+            mcp_enabled: true,
+            mcp_config_available: true,
+            mode: ProxyMode::Global,
+            cli_proxy_enabled: true,
+        };
+        let delay = delay_view(
+            Some((DelayScope::Group("节点选择".into()), 1, 2)),
+            &[
+                ("香港 01", DelayOutcome::Done(45)),
+                ("日本 02", DelayOutcome::Failed),
+            ],
+        );
+
+        let model = build_panel_model(
+            TrayLanguage::Zh,
+            view,
+            false,
+            true,
+            Some("0.4.2"),
+            &nodes,
+            "香港 01",
+            &subs,
+            &delay,
+        );
+
+        assert_eq!(
+            model.update,
+            Some(PanelActionRow {
+                id: "update".into(),
+                label: "有新版本 0.4.2".into(),
+                enabled: true,
+            })
+        );
+        assert_eq!(model.service.label, "停止代理服务");
+        assert!(model.service.enabled);
+        assert!(!model.mcp.enabled); // mcp_busy = true
+        assert_eq!(model.mcp.label, "关闭 MCP 服务");
+        assert!(model.mode_items[1].checked);
+        assert!(!model.mode_items[0].checked);
+        assert!(model.nodes.enabled);
+        let top_delay = model.nodes_delay.as_ref().expect("top delay button");
+        assert_eq!(top_delay.id, DelayScope::Top.menu_id());
+        assert_eq!(top_delay.label, "延迟测试");
+        assert!(!top_delay.enabled);
+
+        assert_eq!(model.node_entries.len(), 2);
+        match &model.node_entries[0] {
+            PanelNodeEntry::Group {
+                tag,
+                label,
+                delay,
+                delay_button,
+                members,
+            } => {
+                assert_eq!(tag, "节点选择");
+                assert_eq!(label, "节点选择 → 日本 02");
+                assert_eq!(
+                    delay.as_ref(),
+                    Some(&PanelDelayBadge {
+                        text: "失败".into(),
+                        tone: Some("bad"),
+                    })
+                );
+                assert_eq!(delay_button.label, "延迟测试中 1/2");
+                assert!(!delay_button.enabled);
+                assert_eq!(members.len(), 2);
+                assert!(members[0].enabled);
+                assert!(!members[0].checked);
+                assert_eq!(
+                    members[0].delay.as_ref(),
+                    Some(&PanelDelayBadge {
+                        text: "45 ms".into(),
+                        tone: Some("ok"),
+                    })
+                );
+                assert!(members[1].checked);
+            }
+            other => panic!("expected group entry, got {other:?}"),
+        }
+        match &model.node_entries[1] {
+            PanelNodeEntry::Group { members, .. } => {
+                // urltest members are shown read-only, matching macOS.
+                assert!(!members[0].enabled);
+                assert!(members[0].checked);
+            }
+            other => panic!("expected group entry, got {other:?}"),
+        }
+        assert_eq!(model.sub_items.len(), 2);
+        assert!(model.sub_items[0].checked);
+        assert!(!model.sub_items[0].enabled);
+        assert!(!model.sub_items[1].checked);
+        assert!(model.sub_items[1].enabled);
     }
 
     /// A delay view with a run and the outcomes of a finished or running test.

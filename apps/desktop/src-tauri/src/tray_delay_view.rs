@@ -2,6 +2,11 @@
 
 //! macOS tray menu: the delay test button as a custom view of its menu item.
 //!
+//! **Cross-platform parity**: Keep delay button visual styling in sync with
+//! the Windows custom tray panel (`apps/desktop/src/tray-panel/TrayPanel.tsx`,
+//! `tray-panel.css`). Any styling or behavioural change on one platform must
+//! be mirrored on the other in the same change.
+//!
 //! A menu item that gets picked closes the menu — that is how AppKit tracks a
 //! menu, and no item can prevent it. For the delay test that is not an option:
 //! the menu is where the progress and the results land, and closing it is the
