@@ -27,21 +27,20 @@ mod session_end_unix;
 mod shutdown;
 mod subscription_watch;
 mod tray;
-/// Tray delay test. A macOS-only feature: the macOS build compiles it, and so
-/// do the test builds of every host, so its platform-neutral model logic keeps
-/// host-side unit coverage. The Windows and Linux release builds do not include
-/// it and their tray keeps its old shape; the runner and the menu-close watch
-/// inside it are macOS-gated.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "windows")]
+mod tray_compat;
+/// Tray delay test: runs inside the macOS native menu (`tray_delay_view`) and
+/// the Windows custom tray panel (`tray_panel`). Its platform-neutral model
+/// compiles on every host so panel serialization and host unit tests stay
+/// covered.
 mod tray_delay;
 /// The delay test button's own view (macOS-only): the row handles its mouse
 /// events itself, so a click on it leaves the menu open for the running test.
 #[cfg(target_os = "macos")]
 mod tray_delay_view;
+mod tray_panel;
 #[cfg(target_os = "macos")]
 mod tray_speed;
-#[cfg(target_os = "windows")]
-mod tray_wheel;
 mod windows_elevation;
 mod workers;
 
@@ -505,21 +504,28 @@ pub fn run() {
             rule_set_watch::spawn_rule_set_watchdog(app.handle().clone());
             Ok(())
         })
-        .on_window_event(|window, event| match event {
-            WindowEvent::CloseRequested { api, .. } => {
-                api.prevent_close();
-                let _ = window.hide();
-                let _ = window.emit(crate::core_snapshot::WINDOW_HIDDEN, ());
+        .on_window_event(|window, event| {
+            // The custom tray panel handles its own hide-on-blur / close
+            // lifecycle and must not emit main-window visibility events.
+            if window.label() == tray_panel::PANEL_LABEL {
+                return;
             }
-            WindowEvent::Focused(focused) => {
-                if *focused {
-                    if let Some(state) = window.app_handle().try_state::<AppState>() {
-                        application::request_runtime_probe_refresh(state.inner());
-                    }
-                    let _ = window.emit(crate::core_snapshot::WINDOW_SHOWN, ());
+            match event {
+                WindowEvent::CloseRequested { api, .. } => {
+                    api.prevent_close();
+                    let _ = window.hide();
+                    let _ = window.emit(crate::core_snapshot::WINDOW_HIDDEN, ());
                 }
+                WindowEvent::Focused(focused) => {
+                    if *focused {
+                        if let Some(state) = window.app_handle().try_state::<AppState>() {
+                            application::request_runtime_probe_refresh(state.inner());
+                        }
+                        let _ = window.emit(crate::core_snapshot::WINDOW_SHOWN, ());
+                    }
+                }
+                _ => {}
             }
-            _ => {}
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_status,
@@ -581,6 +587,11 @@ pub fn run() {
             app_update::skip_app_update,
             app_update::install_app_update,
             app_update::open_app_download,
+            tray_panel::tray_panel_state,
+            tray_panel::tray_panel_placement,
+            tray_panel::tray_panel_layout,
+            tray_panel::tray_panel_hide,
+            tray_panel::tray_panel_action,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -591,6 +602,7 @@ pub fn run() {
             apply_plain_dock_icon();
         }
         if let RunEvent::ExitRequested { api, .. } = event {
+            tray_panel::hide_panel(app_handle);
             if crate::app_update::update_installing() {
                 if let Some(mcp) = app_handle.try_state::<mcp::McpService>() {
                     mcp.shutdown();
