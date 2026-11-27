@@ -94,16 +94,16 @@ if [[ -n "$CARGO_TARGET" ]]; then
 fi
 
 echo "== building ice-cli ($ICE_PLATFORM_LABEL) =="
-cargo build --release -p ice-cli "${CARGO_TARGET_ARGS[@]}" --manifest-path "$ROOT/Cargo.toml"
+cargo build --release -p ice-cli ${CARGO_TARGET_ARGS[@]+"${CARGO_TARGET_ARGS[@]}"} --manifest-path "$ROOT/Cargo.toml"
 
 case "$ICE_PLATFORM_ALIAS" in
 mac-arm64 | mac-x64 | linux-x64 | linux-arm64)
   echo "== building ice-helper ($ICE_PLATFORM_LABEL) =="
-  cargo build --release -p ice-helper "${CARGO_TARGET_ARGS[@]}" --manifest-path "$ROOT/Cargo.toml"
+  cargo build --release -p ice-helper ${CARGO_TARGET_ARGS[@]+"${CARGO_TARGET_ARGS[@]}"} --manifest-path "$ROOT/Cargo.toml"
   ;;
 win)
   echo "== building ice-tun-launcher ($ICE_PLATFORM_LABEL) =="
-  cargo build --release -p ice-tun-launcher "${CARGO_TARGET_ARGS[@]}" --manifest-path "$ROOT/Cargo.toml"
+  cargo build --release -p ice-tun-launcher ${CARGO_TARGET_ARGS[@]+"${CARGO_TARGET_ARGS[@]}"} --manifest-path "$ROOT/Cargo.toml"
   ;;
 esac
 

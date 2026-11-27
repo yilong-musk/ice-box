@@ -3,7 +3,9 @@
 //! End-to-end integration tests for the cross-platform headless CLI & daemon.
 
 use ice_cli::daemon::{run_daemon_with_signal, DaemonOptions};
-use ice_cli::exit::{EXIT_NOT_RUNNING, EXIT_OK, EXIT_PERMISSION, EXIT_USAGE};
+#[cfg(unix)]
+use ice_cli::exit::EXIT_PERMISSION;
+use ice_cli::exit::{EXIT_NOT_RUNNING, EXIT_OK, EXIT_USAGE};
 use ice_cli::signal::ShutdownSignal;
 use ice_runtime::mcp::{call_tool, ping, McpPolicy};
 use serde_json::{json, Value};

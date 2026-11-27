@@ -60,7 +60,6 @@ where
 /// that `current_exe` sits under `$APPDIR` (or under `/tmp/.mount_` when
 /// `$APPDIR` is absent) prevents a `.deb` install launched from such a terminal
 /// from recording a foreign AppImage path.
-#[cfg(any(target_os = "linux", test))]
 pub fn appimage_path_for_exe(
     appimage: Option<&std::ffi::OsStr>,
     appdir: Option<&std::ffi::OsStr>,
@@ -74,7 +73,6 @@ pub fn appimage_path_for_exe(
     exe_in_mount.then(|| std::path::PathBuf::from(appimage))
 }
 
-#[cfg(any(target_os = "linux", test))]
 fn path_is_under(exe: &Path, dir: &Path) -> bool {
     if let (Ok(canon_exe), Ok(canon_dir)) = (exe.canonicalize(), dir.canonicalize()) {
         return canon_dir.parent().is_some() && canon_exe.starts_with(&canon_dir);
@@ -82,7 +80,6 @@ fn path_is_under(exe: &Path, dir: &Path) -> bool {
     dir.parent().is_some() && exe.starts_with(dir)
 }
 
-#[cfg(any(target_os = "linux", test))]
 fn is_appimage_mount_path(exe: &Path) -> bool {
     let candidate = exe.canonicalize().unwrap_or_else(|_| exe.to_path_buf());
     candidate.to_string_lossy().starts_with("/tmp/.mount_")

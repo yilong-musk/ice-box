@@ -65,52 +65,61 @@ pub fn apply_proxy_mode(
     let mut settings = previous.clone();
     settings.proxy_mode = mode;
     persist_settings(&state.paths.settings(), &settings, host_platform())?;
-    let binary = binary_for(app)?;
     let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
     let proxy = state.proxy.lock().map_err(|_| lock_poisoned("proxy"))?;
     let tun_active = state.capture.active_backend() == TrafficCapture::Tun;
-    let mut live_mode_ok = *state
-        .clash_live_mode_cache
-        .lock()
-        .map_err(|_| lock_poisoned("clash_live_mode_cache"))?;
-    let result = orchestrate_set_proxy_mode_with_apply(
-        &state.paths,
-        &settings,
-        &previous,
-        &mut **core,
-        proxy.as_ref(),
-        binary,
-        resource_dir(app).as_deref(),
-        state.capture.apply_intent(),
-        &mut live_mode_ok,
-        |paths, settings, previous, core, proxy, binary, resource_dir, intent| {
-            if tun_active {
-                // The rebuild + reload fallback cannot signal the elevated
-                // core; route it through the capture controller so TUN health
-                // is re-verified and failures fall back to disable/re-apply.
-                state
-                    .capture
-                    .apply_while_tun_active(settings, previous, core, proxy, binary)
-            } else {
-                orchestrate_apply_with_cache(
-                    paths,
-                    settings,
-                    previous,
-                    core,
-                    proxy,
+    let result = if !tun_active && core.state().status != CoreStatus::Running {
+        Ok(())
+    } else {
+        match binary_for(app) {
+            Err(err) => Err(err),
+            Ok(binary) => {
+                let mut live_mode_ok = *state
+                    .clash_live_mode_cache
+                    .lock()
+                    .map_err(|_| lock_poisoned("clash_live_mode_cache"))?;
+                let res = orchestrate_set_proxy_mode_with_apply(
+                    &state.paths,
+                    &settings,
+                    &previous,
+                    &mut **core,
+                    proxy.as_ref(),
                     binary,
-                    resource_dir,
-                    intent,
-                    Some(state.profile_parse_cache.as_ref()),
-                )
+                    resource_dir(app).as_deref(),
+                    state.capture.apply_intent(),
+                    &mut live_mode_ok,
+                    |paths, settings, previous, core, proxy, binary, resource_dir, intent| {
+                        if tun_active {
+                            // The rebuild + reload fallback cannot signal the elevated
+                            // core; route it through the capture controller so TUN health
+                            // is re-verified and failures fall back to disable/re-apply.
+                            state
+                                .capture
+                                .apply_while_tun_active(settings, previous, core, proxy, binary)
+                        } else {
+                            orchestrate_apply_with_cache(
+                                paths,
+                                settings,
+                                previous,
+                                core,
+                                proxy,
+                                binary,
+                                resource_dir,
+                                intent,
+                                Some(state.profile_parse_cache.as_ref()),
+                            )
+                        }
+                    },
+                );
+                // Remember the probe outcome (one PATCH attempt per process; a core that
+                // honors it keeps the fast path, one that ignores it skips future probes).
+                if let Ok(mut cache) = state.clash_live_mode_cache.lock() {
+                    *cache = live_mode_ok;
+                }
+                res
             }
-        },
-    );
-    // Remember the probe outcome (one PATCH attempt per process; a core that
-    // honors it keeps the fast path, one that ignores it skips future probes).
-    if let Ok(mut cache) = state.clash_live_mode_cache.lock() {
-        *cache = live_mode_ok;
-    }
+        }
+    };
     drop(proxy);
     drop(core);
     drop(_orch);
@@ -135,11 +144,11 @@ pub fn apply_after_change(
     settings: &AppSettings,
     previous_settings: &AppSettings,
 ) -> Result<(), AppError> {
-    let binary = binary_for(app)?;
     let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
     let proxy = state.proxy.lock().map_err(|_| lock_poisoned("proxy"))?;
 
     if state.capture.active_backend() == TrafficCapture::Tun {
+        let binary = binary_for(app)?;
         state.capture.apply_while_tun_active(
             settings,
             previous_settings,
@@ -148,6 +157,14 @@ pub fn apply_after_change(
             binary,
         )?;
     } else {
+        // Resolve the core binary only when a live reload could happen; a
+        // stopped core still regenerates config.json without needing sing-box
+        // on disk.
+        let binary = if core.state().status == CoreStatus::Running {
+            binary_for(app)?
+        } else {
+            std::path::PathBuf::new()
+        };
         orchestrate_apply_with_cache(
             &state.paths,
             settings,
