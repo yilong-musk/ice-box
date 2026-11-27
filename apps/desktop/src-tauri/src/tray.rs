@@ -101,10 +101,39 @@ const TRAY_POINT_HEIGHT: f64 = 13.5;
 pub const UPDATE_PROMPT_EVENT: &str = "app-update://open";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum TrayLanguage {
+    #[serde(rename = "zh")]
     Zh,
+    #[serde(rename = "zh-TW")]
+    ZhTw,
+    #[serde(rename = "en")]
     En,
+    #[serde(rename = "ru")]
+    Ru,
+    #[serde(rename = "ja")]
+    Ja,
+    #[serde(rename = "fa")]
+    Fa,
+    #[serde(rename = "ar")]
+    Ar,
+    #[serde(rename = "ko")]
+    Ko,
+    #[serde(rename = "tr")]
+    Tr,
+    #[serde(rename = "vi")]
+    Vi,
+    #[serde(rename = "id")]
+    Id,
+    #[serde(rename = "es")]
+    Es,
+    #[serde(rename = "de")]
+    De,
+    #[serde(rename = "fr")]
+    Fr,
+    #[serde(rename = "pt-BR")]
+    PtBr,
+    #[serde(rename = "uk")]
+    Uk,
 }
 
 impl TrayLanguage {
@@ -112,14 +141,41 @@ impl TrayLanguage {
         match self {
             Self::Zh => 0,
             Self::En => 1,
+            Self::ZhTw => 2,
+            Self::Ru => 3,
+            Self::Ja => 4,
+            Self::Fa => 5,
+            Self::Ar => 6,
+            Self::Ko => 7,
+            Self::Tr => 8,
+            Self::Vi => 9,
+            Self::Id => 10,
+            Self::Es => 11,
+            Self::De => 12,
+            Self::Fr => 13,
+            Self::PtBr => 14,
+            Self::Uk => 15,
         }
     }
 
     fn from_code(code: u8) -> Self {
-        if code == 1 {
-            Self::En
-        } else {
-            Self::Zh
+        match code {
+            0 => Self::Zh,
+            2 => Self::ZhTw,
+            3 => Self::Ru,
+            4 => Self::Ja,
+            5 => Self::Fa,
+            6 => Self::Ar,
+            7 => Self::Ko,
+            8 => Self::Tr,
+            9 => Self::Vi,
+            10 => Self::Id,
+            11 => Self::Es,
+            12 => Self::De,
+            13 => Self::Fr,
+            14 => Self::PtBr,
+            15 => Self::Uk,
+            _ => Self::En,
         }
     }
 }
@@ -128,39 +184,208 @@ impl From<LanguagePreference> for TrayLanguage {
     fn from(preference: LanguagePreference) -> Self {
         match preference {
             LanguagePreference::Zh => Self::Zh,
+            LanguagePreference::ZhTw => Self::ZhTw,
             LanguagePreference::En => Self::En,
-            // Same rule as the web UI (`navigator.language.startsWith("zh")`):
-            // resolve against the OS now, so a Chinese system does not flash
+            LanguagePreference::Ru => Self::Ru,
+            LanguagePreference::Ja => Self::Ja,
+            LanguagePreference::Fa => Self::Fa,
+            LanguagePreference::Ar => Self::Ar,
+            LanguagePreference::Ko => Self::Ko,
+            LanguagePreference::Tr => Self::Tr,
+            LanguagePreference::Vi => Self::Vi,
+            LanguagePreference::Id => Self::Id,
+            LanguagePreference::Es => Self::Es,
+            LanguagePreference::De => Self::De,
+            LanguagePreference::Fr => Self::Fr,
+            LanguagePreference::PtBr => Self::PtBr,
+            LanguagePreference::Uk => Self::Uk,
+            // Same rule as the web UI (`resolveLocaleTag(navigator.language)`):
+            // resolve against the OS now, so non-English systems do not flash
             // English labels until the window calls `set_tray_language`.
-            LanguagePreference::System => {
-                if system_locale_is_chinese() {
-                    Self::Zh
-                } else {
-                    Self::En
-                }
-            }
+            LanguagePreference::System => system_tray_language(),
         }
     }
 }
 
-/// Whether a locale / language tag is Chinese. Mirrors the web UI: the primary
-/// subtag is `zh` (or the Windows `Chinese_*` form).
-fn locale_tag_is_chinese(tag: &str) -> bool {
+/// Map a locale / language tag to the closest supported tray language. Mirrors
+/// `resolveLocaleTag` in the web UI.
+fn resolve_locale_tag(tag: &str) -> TrayLanguage {
     let tag = tag.trim();
     if tag.is_empty() {
-        return false;
+        return TrayLanguage::En;
     }
-    let primary = tag.split(['-', '_', '.', '@']).next().unwrap_or(tag);
-    primary.eq_ignore_ascii_case("zh") || primary.eq_ignore_ascii_case("chinese")
+    // Drop POSIX encoding/modifier suffixes (e.g. `.UTF-8`, `@euro`) before
+    // inspecting language/script/region subtags.
+    let base = tag.split(['.', '@']).next().unwrap_or(tag);
+    let mut parts = base
+        .split(['-', '_', ' ', '(', ')'])
+        .filter(|part| !part.is_empty());
+    let Some(primary) = parts.next() else {
+        return TrayLanguage::En;
+    };
+    if primary.eq_ignore_ascii_case("zh") || primary.eq_ignore_ascii_case("chinese") {
+        let is_traditional = parts.any(|sub| {
+            sub.eq_ignore_ascii_case("hant")
+                || sub.eq_ignore_ascii_case("tw")
+                || sub.eq_ignore_ascii_case("hk")
+                || sub.eq_ignore_ascii_case("mo")
+                || sub.eq_ignore_ascii_case("taiwan")
+                || sub.eq_ignore_ascii_case("hongkong")
+                || sub.eq_ignore_ascii_case("traditional")
+        });
+        return if is_traditional {
+            TrayLanguage::ZhTw
+        } else {
+            TrayLanguage::Zh
+        };
+    }
+    if primary.eq_ignore_ascii_case("ru") || primary.eq_ignore_ascii_case("russian") {
+        return TrayLanguage::Ru;
+    }
+    if primary.eq_ignore_ascii_case("ja")
+        || primary.eq_ignore_ascii_case("jpn")
+        || primary.eq_ignore_ascii_case("japanese")
+    {
+        return TrayLanguage::Ja;
+    }
+    if primary.eq_ignore_ascii_case("fa")
+        || primary.eq_ignore_ascii_case("pes")
+        || primary.eq_ignore_ascii_case("prs")
+        || primary.eq_ignore_ascii_case("persian")
+        || primary.eq_ignore_ascii_case("farsi")
+    {
+        return TrayLanguage::Fa;
+    }
+    if primary.eq_ignore_ascii_case("ar")
+        || primary.eq_ignore_ascii_case("ara")
+        || primary.eq_ignore_ascii_case("arabic")
+    {
+        return TrayLanguage::Ar;
+    }
+    if primary.eq_ignore_ascii_case("ko")
+        || primary.eq_ignore_ascii_case("kor")
+        || primary.eq_ignore_ascii_case("korean")
+    {
+        return TrayLanguage::Ko;
+    }
+    if primary.eq_ignore_ascii_case("tr")
+        || primary.eq_ignore_ascii_case("tur")
+        || primary.eq_ignore_ascii_case("turkish")
+    {
+        return TrayLanguage::Tr;
+    }
+    if primary.eq_ignore_ascii_case("vi")
+        || primary.eq_ignore_ascii_case("vie")
+        || primary.eq_ignore_ascii_case("vietnamese")
+    {
+        return TrayLanguage::Vi;
+    }
+    if primary.eq_ignore_ascii_case("id")
+        || primary.eq_ignore_ascii_case("in")
+        || primary.eq_ignore_ascii_case("ind")
+        || primary.eq_ignore_ascii_case("indonesian")
+    {
+        return TrayLanguage::Id;
+    }
+    if primary.eq_ignore_ascii_case("es")
+        || primary.eq_ignore_ascii_case("spa")
+        || primary.eq_ignore_ascii_case("spanish")
+    {
+        return TrayLanguage::Es;
+    }
+    if primary.eq_ignore_ascii_case("de")
+        || primary.eq_ignore_ascii_case("deu")
+        || primary.eq_ignore_ascii_case("ger")
+        || primary.eq_ignore_ascii_case("german")
+    {
+        return TrayLanguage::De;
+    }
+    if primary.eq_ignore_ascii_case("fr")
+        || primary.eq_ignore_ascii_case("fra")
+        || primary.eq_ignore_ascii_case("fre")
+        || primary.eq_ignore_ascii_case("french")
+    {
+        return TrayLanguage::Fr;
+    }
+    if primary.eq_ignore_ascii_case("pt")
+        || primary.eq_ignore_ascii_case("por")
+        || primary.eq_ignore_ascii_case("portuguese")
+    {
+        return TrayLanguage::PtBr;
+    }
+    if primary.eq_ignore_ascii_case("uk")
+        || primary.eq_ignore_ascii_case("ukr")
+        || primary.eq_ignore_ascii_case("ukrainian")
+    {
+        return TrayLanguage::Uk;
+    }
+    TrayLanguage::En
 }
 
-fn system_locale_is_chinese() -> bool {
-    let from_tag = locale_tag_is_chinese(&system_locale_tag());
+/// Map a Win32 `LANGID` (from `GetUserDefaultUILanguage`) to a supported tray
+/// language. Returns `None` when the display language is outside the supported
+/// set so callers can fall back to the format locale tag.
+#[cfg(any(windows, test))]
+fn tray_language_from_win32_langid(langid: u16) -> Option<TrayLanguage> {
+    const PRIMARYLANGID_MASK: u16 = 0x3ff;
+    const LANG_ARABIC: u16 = 0x01;
+    const LANG_CHINESE: u16 = 0x04;
+    const LANG_GERMAN: u16 = 0x07;
+    const LANG_ENGLISH: u16 = 0x09;
+    const LANG_SPANISH: u16 = 0x0a;
+    const LANG_FRENCH: u16 = 0x0c;
+    const LANG_JAPANESE: u16 = 0x11;
+    const LANG_KOREAN: u16 = 0x12;
+    const LANG_PORTUGUESE: u16 = 0x16;
+    const LANG_RUSSIAN: u16 = 0x19;
+    const LANG_TURKISH: u16 = 0x1f;
+    const LANG_INDONESIAN: u16 = 0x21;
+    const LANG_UKRAINIAN: u16 = 0x22;
+    const LANG_PERSIAN: u16 = 0x29;
+    const LANG_VIETNAMESE: u16 = 0x2a;
+    const SUBLANG_CHINESE_TRADITIONAL: u16 = 0x01;
+    const SUBLANG_CHINESE_HONGKONG: u16 = 0x03;
+    const SUBLANG_CHINESE_MACAU: u16 = 0x05;
+
+    let primary = langid & PRIMARYLANGID_MASK;
+    let sub = langid >> 10;
+    match primary {
+        LANG_CHINESE => match sub {
+            SUBLANG_CHINESE_TRADITIONAL | SUBLANG_CHINESE_HONGKONG | SUBLANG_CHINESE_MACAU => {
+                Some(TrayLanguage::ZhTw)
+            }
+            _ => Some(TrayLanguage::Zh),
+        },
+        LANG_ENGLISH => Some(TrayLanguage::En),
+        LANG_RUSSIAN => Some(TrayLanguage::Ru),
+        LANG_JAPANESE => Some(TrayLanguage::Ja),
+        LANG_PERSIAN => Some(TrayLanguage::Fa),
+        LANG_ARABIC => Some(TrayLanguage::Ar),
+        LANG_KOREAN => Some(TrayLanguage::Ko),
+        LANG_TURKISH => Some(TrayLanguage::Tr),
+        LANG_VIETNAMESE => Some(TrayLanguage::Vi),
+        LANG_INDONESIAN => Some(TrayLanguage::Id),
+        LANG_SPANISH => Some(TrayLanguage::Es),
+        LANG_GERMAN => Some(TrayLanguage::De),
+        LANG_FRENCH => Some(TrayLanguage::Fr),
+        LANG_PORTUGUESE => Some(TrayLanguage::PtBr),
+        LANG_UKRAINIAN => Some(TrayLanguage::Uk),
+        _ => None,
+    }
+}
+
+fn system_tray_language() -> TrayLanguage {
+    let from_tag = resolve_locale_tag(&system_locale_tag());
     #[cfg(windows)]
     {
-        // Display language can be Chinese while the locale name is `en-US`
-        // (formats only). Either source matching `zh` is enough.
-        from_tag || windows_ui_language_is_chinese()
+        // Display language can be non-English while the locale name is `en-US`
+        // (formats only). Prefer a supported UI language; if Windows UI is
+        // English, still honour a non-English format locale as before.
+        match windows_ui_language() {
+            Some(TrayLanguage::En) => from_tag,
+            Some(lang) => lang,
+            None => from_tag,
+        }
     }
     #[cfg(not(windows))]
     {
@@ -171,16 +396,14 @@ fn system_locale_is_chinese() -> bool {
 /// Windows display language. Complements [`system_locale_tag`]: WebView2's
 /// `navigator.language` usually follows this, not the format locale.
 #[cfg(windows)]
-fn windows_ui_language_is_chinese() -> bool {
-    const LANG_CHINESE: u16 = 0x04;
-    const PRIMARYLANGID_MASK: u16 = 0x3ff;
+fn windows_ui_language() -> Option<TrayLanguage> {
     // SAFETY: `GetUserDefaultUILanguage` is a pure kernel32 read of the
     // current user's UI language; it has no pointers to keep alive.
     let langid = unsafe { windows_sys::Win32::Globalization::GetUserDefaultUILanguage() };
-    langid & PRIMARYLANGID_MASK == LANG_CHINESE
+    tray_language_from_win32_langid(langid)
 }
 
-/// BCP-47 locale name (`zh-CN`), the same shape [`locale_tag_is_chinese`]
+/// BCP-47 locale name (`zh-CN`), the same shape [`resolve_locale_tag`]
 /// already parses for macOS / Unix tags.
 #[cfg(windows)]
 fn system_locale_tag() -> String {
@@ -315,6 +538,26 @@ fn labels(language: TrayLanguage) -> TrayLabels {
             delay_progress: "延迟测试中 {}/{}",
             delay_failed: "失败",
         },
+        TrayLanguage::ZhTw => TrayLabels {
+            service_start: "啟動代理服務",
+            service_stop: "停止代理服務",
+            mcp_start: "啟動 MCP 服務",
+            mcp_stop: "關閉 MCP 服務",
+            copy_mcp_config: "複製 MCP 設定",
+            mode: "代理模式",
+            mode_rule: "規則",
+            mode_global: "全域",
+            mode_direct: "直連",
+            nodes: "節點",
+            subs: "訂閱",
+            copy_cli_proxy: "複製代理指令",
+            open_cli_proxy: "開啟代理終端機",
+            show: "顯示",
+            quit: "結束",
+            delay_test: "延遲測試",
+            delay_progress: "延遲測試中 {}/{}",
+            delay_failed: "失敗",
+        },
         TrayLanguage::En => TrayLabels {
             service_start: "Start Proxy Service",
             service_stop: "Stop Proxy Service",
@@ -335,6 +578,266 @@ fn labels(language: TrayLanguage) -> TrayLabels {
             delay_progress: "Testing {}/{}",
             delay_failed: "Failed",
         },
+        TrayLanguage::Ru => TrayLabels {
+            service_start: "Запустить прокси",
+            service_stop: "Остановить прокси",
+            mcp_start: "Запустить MCP",
+            mcp_stop: "Остановить MCP",
+            copy_mcp_config: "Копировать конфиг MCP",
+            mode: "Режим прокси",
+            mode_rule: "Правила",
+            mode_global: "Глобальный",
+            mode_direct: "Напрямую",
+            nodes: "Узлы",
+            subs: "Подписки",
+            copy_cli_proxy: "Копировать команду прокси",
+            open_cli_proxy: "Открыть терминал с прокси",
+            show: "Показать",
+            quit: "Выход",
+            delay_test: "Тест задержки",
+            delay_progress: "Тест {}/{}",
+            delay_failed: "Ошибка",
+        },
+        TrayLanguage::Ja => TrayLabels {
+            service_start: "プロキシを開始",
+            service_stop: "プロキシを停止",
+            mcp_start: "MCP サービスを開始",
+            mcp_stop: "MCP サービスを停止",
+            copy_mcp_config: "MCP 設定をコピー",
+            mode: "プロキシモード",
+            mode_rule: "ルール",
+            mode_global: "グローバル",
+            mode_direct: "ダイレクト",
+            nodes: "ノード",
+            subs: "サブスクリプション",
+            copy_cli_proxy: "プロキシコマンドをコピー",
+            open_cli_proxy: "プロキシ端末を開く",
+            show: "表示",
+            quit: "終了",
+            delay_test: "遅延テスト",
+            delay_progress: "テスト中 {}/{}",
+            delay_failed: "失敗",
+        },
+        TrayLanguage::Fa => TrayLabels {
+            service_start: "شروع سرویس پروکسی",
+            service_stop: "توقف سرویس پروکسی",
+            mcp_start: "شروع سرویس MCP",
+            mcp_stop: "توقف سرویس MCP",
+            copy_mcp_config: "کپی پیکربندی MCP",
+            mode: "حالت پروکسی",
+            mode_rule: "قانون",
+            mode_global: "سراسری",
+            mode_direct: "مستقیم",
+            nodes: "نودها",
+            subs: "اشتراک‌ها",
+            copy_cli_proxy: "کپی دستور پروکسی",
+            open_cli_proxy: "باز کردن ترمینال پروکسی",
+            show: "نمایش",
+            quit: "خروج",
+            delay_test: "تست تاخیر",
+            delay_progress: "در حال تست {}/{}",
+            delay_failed: "ناموفق",
+        },
+        TrayLanguage::Ar => TrayLabels {
+            service_start: "تشغيل خدمة البروكسي",
+            service_stop: "إيقاف خدمة البروكسي",
+            mcp_start: "تشغيل خدمة MCP",
+            mcp_stop: "إيقاف خدمة MCP",
+            copy_mcp_config: "نسخ إعدادات MCP",
+            mode: "وضع البروكسي",
+            mode_rule: "القواعد",
+            mode_global: "شامل",
+            mode_direct: "مباشر",
+            nodes: "العقد",
+            subs: "الاشتراكات",
+            copy_cli_proxy: "نسخ أمر البروكسي",
+            open_cli_proxy: "فتح طرفية البروكسي",
+            show: "إظهار",
+            quit: "إنهاء",
+            delay_test: "اختبار التأخير",
+            delay_progress: "جارٍ الاختبار {}/{}",
+            delay_failed: "فشل",
+        },
+        TrayLanguage::Ko => TrayLabels {
+            service_start: "프록시 서비스 시작",
+            service_stop: "프록시 서비스 중지",
+            mcp_start: "MCP 서비스 시작",
+            mcp_stop: "MCP 서비스 중지",
+            copy_mcp_config: "MCP 설정 복사",
+            mode: "프록시 모드",
+            mode_rule: "규칙",
+            mode_global: "글로벌",
+            mode_direct: "직접 연결",
+            nodes: "노드",
+            subs: "구독",
+            copy_cli_proxy: "프록시 명령 복사",
+            open_cli_proxy: "프록시 터미널 열기",
+            show: "표시",
+            quit: "종료",
+            delay_test: "지연 테스트",
+            delay_progress: "테스트 중 {}/{}",
+            delay_failed: "실패",
+        },
+        TrayLanguage::Tr => TrayLabels {
+            service_start: "Proxy Hizmetini Başlat",
+            service_stop: "Proxy Hizmetini Durdur",
+            mcp_start: "MCP Hizmetini Başlat",
+            mcp_stop: "MCP Hizmetini Durdur",
+            copy_mcp_config: "MCP Yapılandırmasını Kopyala",
+            mode: "Proxy Modu",
+            mode_rule: "Kural",
+            mode_global: "Genel",
+            mode_direct: "Doğrudan",
+            nodes: "Düğümler",
+            subs: "Abonelikler",
+            copy_cli_proxy: "Proxy Komutunu Kopyala",
+            open_cli_proxy: "Proxy Terminalini Aç",
+            show: "Göster",
+            quit: "Çıkış",
+            delay_test: "Gecikme Testi",
+            delay_progress: "Test ediliyor {}/{}",
+            delay_failed: "Başarısız",
+        },
+        TrayLanguage::Vi => TrayLabels {
+            service_start: "Bật dịch vụ Proxy",
+            service_stop: "Tắt dịch vụ Proxy",
+            mcp_start: "Bật dịch vụ MCP",
+            mcp_stop: "Tắt dịch vụ MCP",
+            copy_mcp_config: "Sao chép cấu hình MCP",
+            mode: "Chế độ Proxy",
+            mode_rule: "Quy tắc",
+            mode_global: "Toàn cục",
+            mode_direct: "Trực tiếp",
+            nodes: "Máy chủ",
+            subs: "Gói đăng ký",
+            copy_cli_proxy: "Sao chép lệnh Proxy",
+            open_cli_proxy: "Mở Terminal có Proxy",
+            show: "Hiển thị",
+            quit: "Thoát",
+            delay_test: "Kiểm tra độ trễ",
+            delay_progress: "Đang kiểm tra {}/{}",
+            delay_failed: "Thất bại",
+        },
+        TrayLanguage::Id => TrayLabels {
+            service_start: "Mulai Layanan Proxy",
+            service_stop: "Hentikan Layanan Proxy",
+            mcp_start: "Mulai Layanan MCP",
+            mcp_stop: "Hentikan Layanan MCP",
+            copy_mcp_config: "Salin Konfigurasi MCP",
+            mode: "Mode Proxy",
+            mode_rule: "Aturan",
+            mode_global: "Global",
+            mode_direct: "Langsung",
+            nodes: "Node",
+            subs: "Langganan",
+            copy_cli_proxy: "Salin Perintah Proxy",
+            open_cli_proxy: "Buka Terminal Proxy",
+            show: "Tampilkan",
+            quit: "Keluar",
+            delay_test: "Uji Latensi",
+            delay_progress: "Menguji {}/{}",
+            delay_failed: "Gagal",
+        },
+        TrayLanguage::Es => TrayLabels {
+            service_start: "Iniciar servicio proxy",
+            service_stop: "Detener servicio proxy",
+            mcp_start: "Iniciar servicio MCP",
+            mcp_stop: "Detener servicio MCP",
+            copy_mcp_config: "Copiar configuración MCP",
+            mode: "Modo proxy",
+            mode_rule: "Reglas",
+            mode_global: "Global",
+            mode_direct: "Directo",
+            nodes: "Nodos",
+            subs: "Suscripciones",
+            copy_cli_proxy: "Copiar comando proxy",
+            open_cli_proxy: "Abrir terminal con proxy",
+            show: "Mostrar",
+            quit: "Salir",
+            delay_test: "Probar latencia",
+            delay_progress: "Probando {}/{}",
+            delay_failed: "Error",
+        },
+        TrayLanguage::De => TrayLabels {
+            service_start: "Proxy-Dienst starten",
+            service_stop: "Proxy-Dienst stoppen",
+            mcp_start: "MCP-Dienst starten",
+            mcp_stop: "MCP-Dienst stoppen",
+            copy_mcp_config: "MCP-Konfiguration kopieren",
+            mode: "Proxy-Modus",
+            mode_rule: "Regeln",
+            mode_global: "Global",
+            mode_direct: "Direkt",
+            nodes: "Knoten",
+            subs: "Abonnements",
+            copy_cli_proxy: "Proxy-Befehl kopieren",
+            open_cli_proxy: "Proxy-Terminal öffnen",
+            show: "Anzeigen",
+            quit: "Beenden",
+            delay_test: "Latenz testen",
+            delay_progress: "Teste {}/{}",
+            delay_failed: "Fehlgeschlagen",
+        },
+        TrayLanguage::Fr => TrayLabels {
+            service_start: "Démarrer le proxy",
+            service_stop: "Arrêter le proxy",
+            mcp_start: "Démarrer MCP",
+            mcp_stop: "Arrêter MCP",
+            copy_mcp_config: "Copier la config MCP",
+            mode: "Mode proxy",
+            mode_rule: "Règles",
+            mode_global: "Global",
+            mode_direct: "Direct",
+            nodes: "Nœuds",
+            subs: "Abonnements",
+            copy_cli_proxy: "Copier la commande proxy",
+            open_cli_proxy: "Ouvrir le terminal proxy",
+            show: "Afficher",
+            quit: "Quitter",
+            delay_test: "Tester la latence",
+            delay_progress: "Test {}/{}",
+            delay_failed: "Échec",
+        },
+        TrayLanguage::PtBr => TrayLabels {
+            service_start: "Iniciar serviço proxy",
+            service_stop: "Parar serviço proxy",
+            mcp_start: "Iniciar serviço MCP",
+            mcp_stop: "Parar serviço MCP",
+            copy_mcp_config: "Copiar configuração MCP",
+            mode: "Modo proxy",
+            mode_rule: "Regras",
+            mode_global: "Global",
+            mode_direct: "Direto",
+            nodes: "Nós",
+            subs: "Assinaturas",
+            copy_cli_proxy: "Copiar comando proxy",
+            open_cli_proxy: "Abrir terminal com proxy",
+            show: "Mostrar",
+            quit: "Sair",
+            delay_test: "Testar latência",
+            delay_progress: "Testando {}/{}",
+            delay_failed: "Falhou",
+        },
+        TrayLanguage::Uk => TrayLabels {
+            service_start: "Запустити проксі",
+            service_stop: "Зупинити проксі",
+            mcp_start: "Запустити MCP",
+            mcp_stop: "Зупинити MCP",
+            copy_mcp_config: "Копіювати конфіг MCP",
+            mode: "Режим проксі",
+            mode_rule: "Правила",
+            mode_global: "Глобальний",
+            mode_direct: "Напряму",
+            nodes: "Вузли",
+            subs: "Підписки",
+            copy_cli_proxy: "Копіювати команду проксі",
+            open_cli_proxy: "Відкрити термінал із проксі",
+            show: "Показати",
+            quit: "Вийти",
+            delay_test: "Тест затримки",
+            delay_progress: "Тест {}/{}",
+            delay_failed: "Помилка",
+        },
     }
 }
 
@@ -342,8 +845,21 @@ fn labels(language: TrayLanguage) -> TrayLabels {
 /// click already lands on Settings → App Updates.
 fn update_prompt_text(language: TrayLanguage, version: &str) -> String {
     match language {
-        TrayLanguage::Zh => format!("有新版本 {version}"),
+        TrayLanguage::Zh | TrayLanguage::ZhTw => format!("有新版本 {version}"),
         TrayLanguage::En => format!("Version {version} is available"),
+        TrayLanguage::Ru => format!("Доступна версия {version}"),
+        TrayLanguage::Ja => format!("新しいバージョン {version}"),
+        TrayLanguage::Fa => format!("نسخه {version} در دسترس است"),
+        TrayLanguage::Ar => format!("الإصدار {version} متاح"),
+        TrayLanguage::Ko => format!("새 버전 {version} 사용 가능"),
+        TrayLanguage::Tr => format!("Sürüm {version} mevcut"),
+        TrayLanguage::Vi => format!("Đã có phiên bản {version}"),
+        TrayLanguage::Id => format!("Versi {version} tersedia"),
+        TrayLanguage::Es => format!("Versión {version} disponible"),
+        TrayLanguage::De => format!("Version {version} verfügbar"),
+        TrayLanguage::Fr => format!("Version {version} disponible"),
+        TrayLanguage::PtBr => format!("Versão {version} disponível"),
+        TrayLanguage::Uk => format!("Доступна версія {version}"),
     }
 }
 
@@ -3172,6 +3688,43 @@ mod tests {
             ("Test Delay", "Testing {}/{}", "Failed")
         );
         assert_eq!(en.delay_progress_text(3, 8), "Testing 3/8");
+
+        for language in [
+            TrayLanguage::ZhTw,
+            TrayLanguage::Ru,
+            TrayLanguage::Ja,
+            TrayLanguage::Fa,
+            TrayLanguage::Ar,
+            TrayLanguage::Ko,
+            TrayLanguage::Tr,
+            TrayLanguage::Vi,
+            TrayLanguage::Id,
+            TrayLanguage::Es,
+            TrayLanguage::De,
+            TrayLanguage::Fr,
+            TrayLanguage::PtBr,
+            TrayLanguage::Uk,
+        ] {
+            let l = labels(language);
+            assert!(!l.service(false).is_empty());
+            assert!(!l.service(true).is_empty());
+            assert!(!l.mcp(false).is_empty());
+            assert!(!l.mcp(true).is_empty());
+            assert!(!l.copy_mcp_config.is_empty());
+            assert!(!l.mode.is_empty());
+            assert!(!l.mode_rule.is_empty());
+            assert!(!l.mode_global.is_empty());
+            assert!(!l.mode_direct.is_empty());
+            assert!(!l.nodes.is_empty());
+            assert!(!l.subs.is_empty());
+            assert!(!l.copy_cli_proxy.is_empty());
+            assert!(!l.open_cli_proxy.is_empty());
+            assert!(!l.show.is_empty());
+            assert!(!l.quit.is_empty());
+            assert!(!l.delay_test.is_empty());
+            assert!(!l.delay_failed.is_empty());
+            assert!(l.delay_progress_text(3, 8).contains("3/8"));
+        }
     }
 
     #[test]
@@ -3187,9 +3740,30 @@ mod tests {
             "有新版本 0.1.11"
         );
         assert_eq!(
+            update_prompt_text(TrayLanguage::ZhTw, "0.1.11"),
+            "有新版本 0.1.11"
+        );
+        assert_eq!(
             update_prompt_text(TrayLanguage::En, "0.1.11"),
             "Version 0.1.11 is available"
         );
+        for language in [
+            TrayLanguage::Ru,
+            TrayLanguage::Ja,
+            TrayLanguage::Fa,
+            TrayLanguage::Ar,
+            TrayLanguage::Ko,
+            TrayLanguage::Tr,
+            TrayLanguage::Vi,
+            TrayLanguage::Id,
+            TrayLanguage::Es,
+            TrayLanguage::De,
+            TrayLanguage::Fr,
+            TrayLanguage::PtBr,
+            TrayLanguage::Uk,
+        ] {
+            assert!(update_prompt_text(language, "0.1.11").contains("0.1.11"));
+        }
     }
 
     #[test]
@@ -3254,7 +3828,24 @@ mod tests {
         for mode in [ProxyMode::Rule, ProxyMode::Global, ProxyMode::Direct] {
             assert_eq!(mode_from_code(mode_code(mode)), mode);
         }
-        for language in [TrayLanguage::Zh, TrayLanguage::En] {
+        for language in [
+            TrayLanguage::Zh,
+            TrayLanguage::ZhTw,
+            TrayLanguage::En,
+            TrayLanguage::Ru,
+            TrayLanguage::Ja,
+            TrayLanguage::Fa,
+            TrayLanguage::Ar,
+            TrayLanguage::Ko,
+            TrayLanguage::Tr,
+            TrayLanguage::Vi,
+            TrayLanguage::Id,
+            TrayLanguage::Es,
+            TrayLanguage::De,
+            TrayLanguage::Fr,
+            TrayLanguage::PtBr,
+            TrayLanguage::Uk,
+        ] {
             assert_eq!(TrayLanguage::from_code(language.code()), language);
         }
     }
@@ -3438,31 +4029,164 @@ mod tests {
 
     #[test]
     fn explicit_preferences_select_initial_tray_language() {
-        assert_eq!(TrayLanguage::from(LanguagePreference::Zh), TrayLanguage::Zh);
-        assert_eq!(TrayLanguage::from(LanguagePreference::En), TrayLanguage::En);
+        for (pref, expected) in [
+            (LanguagePreference::Zh, TrayLanguage::Zh),
+            (LanguagePreference::ZhTw, TrayLanguage::ZhTw),
+            (LanguagePreference::En, TrayLanguage::En),
+            (LanguagePreference::Ru, TrayLanguage::Ru),
+            (LanguagePreference::Ja, TrayLanguage::Ja),
+            (LanguagePreference::Fa, TrayLanguage::Fa),
+            (LanguagePreference::Ar, TrayLanguage::Ar),
+            (LanguagePreference::Ko, TrayLanguage::Ko),
+            (LanguagePreference::Tr, TrayLanguage::Tr),
+            (LanguagePreference::Vi, TrayLanguage::Vi),
+            (LanguagePreference::Id, TrayLanguage::Id),
+            (LanguagePreference::Es, TrayLanguage::Es),
+            (LanguagePreference::De, TrayLanguage::De),
+            (LanguagePreference::Fr, TrayLanguage::Fr),
+            (LanguagePreference::PtBr, TrayLanguage::PtBr),
+            (LanguagePreference::Uk, TrayLanguage::Uk),
+        ] {
+            assert_eq!(TrayLanguage::from(pref), expected);
+        }
         assert_eq!(
             TrayLanguage::from(LanguagePreference::System),
-            if system_locale_is_chinese() {
-                TrayLanguage::Zh
-            } else {
-                TrayLanguage::En
-            }
+            system_tray_language()
         );
     }
 
     #[test]
-    fn locale_tags_treat_chinese_like_the_web_ui() {
-        assert!(locale_tag_is_chinese("zh"));
-        assert!(locale_tag_is_chinese("zh-CN"));
-        assert!(locale_tag_is_chinese("zh_TW"));
-        assert!(locale_tag_is_chinese("zh-Hans-CN"));
-        assert!(locale_tag_is_chinese("zh_CN.UTF-8"));
-        assert!(locale_tag_is_chinese("Chinese_China.936"));
-        assert!(!locale_tag_is_chinese("en"));
-        assert!(!locale_tag_is_chinese("en-US"));
-        assert!(!locale_tag_is_chinese("ja-JP"));
-        assert!(!locale_tag_is_chinese("C"));
-        assert!(!locale_tag_is_chinese(""));
+    fn locale_tags_resolve_like_the_web_ui() {
+        assert_eq!(resolve_locale_tag("zh"), TrayLanguage::Zh);
+        assert_eq!(resolve_locale_tag("zh-CN"), TrayLanguage::Zh);
+        assert_eq!(resolve_locale_tag("zh-SG"), TrayLanguage::Zh);
+        assert_eq!(resolve_locale_tag("zh-Hans-CN"), TrayLanguage::Zh);
+        assert_eq!(resolve_locale_tag("zh_CN.UTF-8"), TrayLanguage::Zh);
+        assert_eq!(resolve_locale_tag("Chinese_China.936"), TrayLanguage::Zh);
+        assert_eq!(resolve_locale_tag("zh-TW"), TrayLanguage::ZhTw);
+        assert_eq!(resolve_locale_tag("zh_TW"), TrayLanguage::ZhTw);
+        assert_eq!(resolve_locale_tag("zh-HK"), TrayLanguage::ZhTw);
+        assert_eq!(resolve_locale_tag("zh-MO"), TrayLanguage::ZhTw);
+        assert_eq!(resolve_locale_tag("zh-Hant"), TrayLanguage::ZhTw);
+        assert_eq!(resolve_locale_tag("zh-Hant-TW"), TrayLanguage::ZhTw);
+        assert_eq!(resolve_locale_tag("Chinese_Taiwan.950"), TrayLanguage::ZhTw);
+        assert_eq!(resolve_locale_tag("ru"), TrayLanguage::Ru);
+        assert_eq!(resolve_locale_tag("ru-RU"), TrayLanguage::Ru);
+        assert_eq!(resolve_locale_tag("ru_RU.UTF-8"), TrayLanguage::Ru);
+        assert_eq!(resolve_locale_tag("ja"), TrayLanguage::Ja);
+        assert_eq!(resolve_locale_tag("ja-JP"), TrayLanguage::Ja);
+        assert_eq!(resolve_locale_tag("ja_JP.UTF-8"), TrayLanguage::Ja);
+        assert_eq!(resolve_locale_tag("fa"), TrayLanguage::Fa);
+        assert_eq!(resolve_locale_tag("fa-IR"), TrayLanguage::Fa);
+        assert_eq!(resolve_locale_tag("fa-AF"), TrayLanguage::Fa);
+        assert_eq!(resolve_locale_tag("ar"), TrayLanguage::Ar);
+        assert_eq!(resolve_locale_tag("ar-SA"), TrayLanguage::Ar);
+        assert_eq!(resolve_locale_tag("ko"), TrayLanguage::Ko);
+        assert_eq!(resolve_locale_tag("ko-KR"), TrayLanguage::Ko);
+        assert_eq!(resolve_locale_tag("tr"), TrayLanguage::Tr);
+        assert_eq!(resolve_locale_tag("tr-TR"), TrayLanguage::Tr);
+        assert_eq!(resolve_locale_tag("vi"), TrayLanguage::Vi);
+        assert_eq!(resolve_locale_tag("vi-VN"), TrayLanguage::Vi);
+        assert_eq!(resolve_locale_tag("id"), TrayLanguage::Id);
+        assert_eq!(resolve_locale_tag("id-ID"), TrayLanguage::Id);
+        assert_eq!(resolve_locale_tag("in-ID"), TrayLanguage::Id);
+        assert_eq!(resolve_locale_tag("es"), TrayLanguage::Es);
+        assert_eq!(resolve_locale_tag("es-MX"), TrayLanguage::Es);
+        assert_eq!(resolve_locale_tag("de"), TrayLanguage::De);
+        assert_eq!(resolve_locale_tag("de-DE"), TrayLanguage::De);
+        assert_eq!(resolve_locale_tag("fr"), TrayLanguage::Fr);
+        assert_eq!(resolve_locale_tag("fr-FR"), TrayLanguage::Fr);
+        assert_eq!(resolve_locale_tag("pt"), TrayLanguage::PtBr);
+        assert_eq!(resolve_locale_tag("pt-BR"), TrayLanguage::PtBr);
+        assert_eq!(resolve_locale_tag("pt-PT"), TrayLanguage::PtBr);
+        assert_eq!(resolve_locale_tag("uk"), TrayLanguage::Uk);
+        assert_eq!(resolve_locale_tag("uk-UA"), TrayLanguage::Uk);
+        assert_eq!(resolve_locale_tag("en"), TrayLanguage::En);
+        assert_eq!(resolve_locale_tag("en-US"), TrayLanguage::En);
+        assert_eq!(resolve_locale_tag("nl-NL"), TrayLanguage::En);
+        assert_eq!(resolve_locale_tag("C"), TrayLanguage::En);
+        assert_eq!(resolve_locale_tag(""), TrayLanguage::En);
+    }
+
+    #[test]
+    fn win32_langids_map_supported_languages() {
+        assert_eq!(
+            tray_language_from_win32_langid(0x0804),
+            Some(TrayLanguage::Zh)
+        );
+        assert_eq!(
+            tray_language_from_win32_langid(0x1004),
+            Some(TrayLanguage::Zh)
+        );
+        assert_eq!(
+            tray_language_from_win32_langid(0x0404),
+            Some(TrayLanguage::ZhTw)
+        );
+        assert_eq!(
+            tray_language_from_win32_langid(0x0c04),
+            Some(TrayLanguage::ZhTw)
+        );
+        assert_eq!(
+            tray_language_from_win32_langid(0x1404),
+            Some(TrayLanguage::ZhTw)
+        );
+        assert_eq!(
+            tray_language_from_win32_langid(0x0409),
+            Some(TrayLanguage::En)
+        );
+        assert_eq!(
+            tray_language_from_win32_langid(0x0419),
+            Some(TrayLanguage::Ru)
+        );
+        assert_eq!(
+            tray_language_from_win32_langid(0x0411),
+            Some(TrayLanguage::Ja)
+        );
+        assert_eq!(
+            tray_language_from_win32_langid(0x0429),
+            Some(TrayLanguage::Fa)
+        );
+        assert_eq!(
+            tray_language_from_win32_langid(0x0401),
+            Some(TrayLanguage::Ar)
+        );
+        assert_eq!(
+            tray_language_from_win32_langid(0x0412),
+            Some(TrayLanguage::Ko)
+        );
+        assert_eq!(
+            tray_language_from_win32_langid(0x041f),
+            Some(TrayLanguage::Tr)
+        );
+        assert_eq!(
+            tray_language_from_win32_langid(0x042a),
+            Some(TrayLanguage::Vi)
+        );
+        assert_eq!(
+            tray_language_from_win32_langid(0x0421),
+            Some(TrayLanguage::Id)
+        );
+        assert_eq!(
+            tray_language_from_win32_langid(0x0c0a),
+            Some(TrayLanguage::Es)
+        );
+        assert_eq!(
+            tray_language_from_win32_langid(0x0407),
+            Some(TrayLanguage::De)
+        );
+        assert_eq!(
+            tray_language_from_win32_langid(0x040c),
+            Some(TrayLanguage::Fr)
+        );
+        assert_eq!(
+            tray_language_from_win32_langid(0x0416),
+            Some(TrayLanguage::PtBr)
+        );
+        assert_eq!(
+            tray_language_from_win32_langid(0x0422),
+            Some(TrayLanguage::Uk)
+        );
+        assert_eq!(tray_language_from_win32_langid(0x0413), None);
     }
 
     #[test]
@@ -3795,7 +4519,24 @@ mod tests {
         );
         assert_eq!(delay_suffix_color("香港 01", &zh), None);
         // A failure is coloured per the menu's own language…
-        for language in [TrayLanguage::Zh, TrayLanguage::En] {
+        for language in [
+            TrayLanguage::Zh,
+            TrayLanguage::ZhTw,
+            TrayLanguage::En,
+            TrayLanguage::Ru,
+            TrayLanguage::Ja,
+            TrayLanguage::Fa,
+            TrayLanguage::Ar,
+            TrayLanguage::Ko,
+            TrayLanguage::Tr,
+            TrayLanguage::Vi,
+            TrayLanguage::Id,
+            TrayLanguage::Es,
+            TrayLanguage::De,
+            TrayLanguage::Fr,
+            TrayLanguage::PtBr,
+            TrayLanguage::Uk,
+        ] {
             let labels = labels(language);
             let title = format!("香港 01{SUFFIX_SEPARATOR}{}", labels.delay_failed);
             assert_eq!(

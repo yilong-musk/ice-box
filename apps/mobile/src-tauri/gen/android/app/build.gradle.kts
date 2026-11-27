@@ -96,16 +96,33 @@ android {
     }
     // Native resources are only the launcher/notification strings; the UI
     // is localized in the WebView. Drop the dozens of locales that
-    // AndroidX/Material pull into resources.arsc. A bare "zh" matches no
-    // library resources (they are all region-qualified), so list them.
-    // Those libraries ship no other Chinese regions, so zh-SG/zh-MO devices
-    // resolve exactly as before (Android 7+ falls back by script: Hans to
-    // zh-CN, Hant to zh-HK/zh-TW). Other languages lose the libraries'
-    // system strings (e.g. "Navigate up", TalkBack labels) and fall back to
-    // English, matching the app UI, which is English and Chinese only.
+    // AndroidX/Material pull into resources.arsc, keeping only the languages
+    // the app UI ships. A bare "zh" matches no library resources (they are
+    // all region-qualified), so list them explicitly; Android 7+ falls back
+    // by script (Hans -> zh-CN, Hant -> zh-HK/zh-TW).
     // scripts/verify-android-apk.sh --release checks this list.
     androidResources {
-        localeFilters += listOf("en", "zh-rCN", "zh-rTW", "zh-rHK")
+        localeFilters += listOf(
+            "en",
+            "zh-rCN",
+            "zh-rTW",
+            "zh-rHK",
+            "ru",
+            "ja",
+            "fa",
+            "ar",
+            "ko",
+            "tr",
+            "vi",
+            "id",
+            "in",
+            "es",
+            "de",
+            "fr",
+            "pt",
+            "pt-rBR",
+            "uk",
+        )
     }
     sourceSets {
         getByName("main") {

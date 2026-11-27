@@ -10,7 +10,7 @@ dist-capture/
 *.tsbuildinfo
 
 # README screenshot sources. Generated locally by scripts/capture-demo-*.sh;
-# only the composed docs/images/hero*.png product shots are committed.
+# only the composed docs/images/hero*.webp product shots are committed.
 docs/images/home.png
 docs/images/home.zh-CN.png
 docs/images/home.version

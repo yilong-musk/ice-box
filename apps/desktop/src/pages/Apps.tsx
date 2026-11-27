@@ -147,7 +147,7 @@ export function Apps({ active = true }: Props) {
 
       <div className="relative shrink-0">
         <Search
-          className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
+          className="pointer-events-none absolute top-1/2 start-3 size-4 -translate-y-1/2 text-muted-foreground"
           aria-hidden="true"
         />
         <Input
@@ -156,7 +156,7 @@ export function Apps({ active = true }: Props) {
           onChange={(event) => setKeyword(event.target.value)}
           placeholder={t("apps.searchPlaceholder")}
           aria-label={t("apps.searchAria")}
-          className="pl-9"
+          className="ps-9"
         />
       </div>
 
@@ -188,7 +188,7 @@ export function Apps({ active = true }: Props) {
                   <button
                     type="button"
                     aria-label={t("apps.selectAria", { app: app.label })}
-                    className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors active:bg-muted"
+                    className="flex w-full items-center gap-3 px-3 py-2.5 text-start transition-colors active:bg-muted"
                     onClick={() => {
                       setModeError(null);
                       setSelected(app);
@@ -235,7 +235,7 @@ export function Apps({ active = true }: Props) {
                       </Badge>
                     )}
                     <ChevronRight
-                      className="size-4 shrink-0 text-muted-foreground"
+                      className="size-4 shrink-0 text-muted-foreground rtl:rotate-180"
                       aria-hidden="true"
                     />
                   </button>
@@ -293,7 +293,7 @@ export function Apps({ active = true }: Props) {
                   key={mode}
                   type="button"
                   className={cn(
-                    "flex w-full items-start gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors disabled:opacity-60",
+                    "flex w-full items-start gap-3 rounded-lg border px-3 py-2.5 text-start transition-colors disabled:opacity-60",
                     current
                       ? "border-primary bg-primary/5"
                       : "border-border active:bg-muted",

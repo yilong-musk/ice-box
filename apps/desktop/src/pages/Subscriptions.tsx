@@ -378,7 +378,7 @@ export function Subscriptions({ active = true }: Props) {
                         <div
                           aria-hidden="true"
                           className={cn(
-                            "pointer-events-none absolute inset-y-0 left-0 -z-10 rounded-lg bg-linear-to-r transition-[width] duration-500",
+                            "pointer-events-none absolute inset-y-0 start-0 -z-10 rounded-lg bg-linear-to-r rtl:bg-linear-to-l transition-[width] duration-500",
                             wash,
                           )}
                           style={{

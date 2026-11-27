@@ -609,7 +609,7 @@ export function Rules({ onNavigate, active = true }: Props) {
                         size="sm"
                         variant={row.disabled ? "muted" : "default"}
                         className={cn(
-                          "pl-0 pr-3",
+                          "ps-0 pe-3",
                           row.disabled && "opacity-55",
                         )}
                       >

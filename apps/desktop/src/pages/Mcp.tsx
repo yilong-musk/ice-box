@@ -149,7 +149,11 @@ export function Mcp({ active = true }: { active?: boolean }) {
 
               <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 rounded-lg border bg-muted/30 p-3 text-sm">
                 <dt className="text-muted-foreground">{t("mcp.endpoint")}</dt>
-                <dd className="min-w-0 break-all font-mono text-xs" data-selectable="">
+                <dd
+                  dir="ltr"
+                  className="min-w-0 break-all font-mono text-xs rtl:text-end"
+                  data-selectable=""
+                >
                   {status?.endpoint ?? t("common.dash")}
                 </dd>
                 <dt className="text-muted-foreground">{t("mcp.clients")}</dt>
@@ -183,6 +187,7 @@ export function Mcp({ active = true }: { active?: boolean }) {
             </CardHeader>
             <CardContent className="flex flex-col gap-3">
               <pre
+                dir="ltr"
                 className="max-h-64 overflow-auto rounded-lg border bg-muted/30 p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-all"
                 data-testid="mcp-client-config"
               >

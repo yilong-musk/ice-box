@@ -7,8 +7,7 @@
 # or the relevant UI files changed, or a capture is missing (see
 # capture-demo-home.sh / capture-demo-mobile.sh). The hero is recomposed on
 # every run. Run this when the Live Demo UI changes and before a release; the
-# gates do not run it. Commit only docs/images/hero.png and
-# docs/images/hero.zh-CN.png.
+# gates do not run it. Commit only docs/images/hero*.webp.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

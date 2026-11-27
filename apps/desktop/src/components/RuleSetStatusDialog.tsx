@@ -116,7 +116,7 @@ function RuleSetStatusDialog({
             </p>
           ) : (
             <ScrollArea type="scroll" className="min-h-0 overflow-hidden">
-              <ItemGroup className="gap-0 pr-3">
+              <ItemGroup className="gap-0 pe-3">
                 {statuses.map((set, index) => (
                   <div key={set.tag}>
                     {index > 0 ? <ItemSeparator className="my-0" /> : null}
@@ -126,7 +126,7 @@ function RuleSetStatusDialog({
                           <span className="truncate font-mono text-xs" title={set.url ?? set.tag}>
                             {set.tag}
                           </span>
-                          <Badge variant={STATE_VARIANT[set.state]} className="ml-auto shrink-0">
+                          <Badge variant={STATE_VARIANT[set.state]} className="ms-auto shrink-0">
                             {t(STATE_LABEL[set.state])}
                           </Badge>
                         </ItemTitle>

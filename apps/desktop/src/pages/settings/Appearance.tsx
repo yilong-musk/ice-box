@@ -5,6 +5,9 @@ import {
   NativeSelectOption,
 } from "@/components/ui/native-select";
 import {
+  LANGUAGE_LABELS,
+  SUPPORTED_LANGUAGES,
+  isLanguagePreference,
   t,
   type LanguagePreference,
   type MessageKey,
@@ -18,12 +21,6 @@ const APPEARANCE_OPTIONS = [
   ["light", "settings.appearance.light"],
   ["dark", "settings.appearance.dark"],
 ] as const satisfies ReadonlyArray<readonly [ThemePreference, MessageKey]>;
-
-const LANGUAGE_OPTIONS = [
-  ["system", "settings.language.system"],
-  ["zh", "settings.language.zh"],
-  ["en", "settings.language.en"],
-] as const satisfies ReadonlyArray<readonly [LanguagePreference, MessageKey]>;
 
 /** macOS only: what the menu-bar item draws. The Rust tray watchdog reads the
  * persisted value every second, so a pick lands on the bar without further IPC. */
@@ -65,14 +62,17 @@ export function AppearanceCard({
           disabled={busy || !loaded}
           onChange={(e) => {
             const value = e.target.value;
-            if (value === "system" || value === "zh" || value === "en") {
+            if (isLanguagePreference(value)) {
               onLanguageChange(value);
             }
           }}
         >
-          {LANGUAGE_OPTIONS.map(([value, labelKey]) => (
-            <NativeSelectOption key={value} value={value}>
-              {t(labelKey)}
+          <NativeSelectOption value="system">
+            {t("settings.language.system")}
+          </NativeSelectOption>
+          {SUPPORTED_LANGUAGES.map((code) => (
+            <NativeSelectOption key={code} value={code}>
+              {LANGUAGE_LABELS[code]}
             </NativeSelectOption>
           ))}
         </NativeSelect>

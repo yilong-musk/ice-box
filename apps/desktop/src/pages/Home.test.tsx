@@ -1270,7 +1270,8 @@ describe("Home", () => {
     });
     const power = view.getByRole("button", { name: t("home.power.stopTun") });
     expect(power).toHaveAttribute("aria-pressed", "true");
-    expect(power).toHaveTextContent(t("home.power.stopTun"));
+    expect(power).toHaveTextContent(t("home.power.stop"));
+    expect(view.getByTestId("home-backend-badge")).toHaveTextContent(t("home.backend.tun"));
     expect(memoryCard(container)).toBeInTheDocument();
   });
 
@@ -1300,6 +1301,7 @@ describe("Home", () => {
       expect(view.getByRole("switch", { name: t("home.tunMode") })).toBeInTheDocument();
     });
     expect(view.getByRole("button", { name: t("home.power.startTun") })).toBeInTheDocument();
+    expect(view.getByTestId("home-backend-badge")).toHaveTextContent(t("home.backend.tun"));
   });
 
   it("disables the power control and shows the reason when TUN is unavailable", async () => {
@@ -1366,6 +1368,7 @@ describe("Home", () => {
     // The power control ignores the hidden TUN desire: system proxy stays usable.
     expect(view.getByRole("button", { name: t("home.power.startSystem") })).not.toBeDisabled();
     expect(view.getByRole("button", { name: t("home.power.startSystem") })).toBeInTheDocument();
+    expect(view.getByTestId("home-backend-badge")).toHaveTextContent(t("home.backend.system"));
   });
 
   it("connects and disconnects the VPN from the power button on the phone shell", async () => {

@@ -7,7 +7,7 @@
 # Usage: scripts/check-doc-versions.sh [repo-root]
 #
 # Checked places, every occurrence in each file:
-#   - README.md and README.zh-CN.md: the `sing--box-<version>-` badge
+#   - README.md, README.zh-CN.md, and any other README.*.md: the `sing--box-<version>-` badge
 #   - docs/tun.md: the bold `sing-box **<version>**` form
 # A file with no occurrence fails too, so a reworded line cannot drop out of
 # the check unnoticed.
@@ -46,6 +46,12 @@ check() {
 
 check README.md 'sing--box-([0-9][0-9A-Za-z.]*)-' "sing-box badge"
 check README.zh-CN.md 'sing--box-([0-9][0-9A-Za-z.]*)-' "sing-box badge"
+for path in "$ROOT"/README.*.md; do
+  [[ -e "$path" ]] || continue
+  name="$(basename "$path")"
+  [[ "$name" == "README.zh-CN.md" ]] && continue
+  check "$name" 'sing--box-([0-9][0-9A-Za-z.]*)-' "sing-box badge"
+done
 check docs/tun.md 'sing-box \*\*([0-9][0-9A-Za-z.]*)\*\*' "sing-box version"
 
 if [[ "$failed" != 0 ]]; then

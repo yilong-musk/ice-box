@@ -6,8 +6,8 @@
 # Without --release, the APK must verify (the CI debug APK is signed with
 # the Android debug key). With --release, the signer must not be that debug
 # key, the native libraries must be arm64-v8a only and deflated (not stored
-# for mmap), and resources.arsc must carry only the English and Chinese
-# locales kept by androidResources.localeFilters in app/build.gradle.kts.
+# for mmap), and resources.arsc must carry only the app-supported locales
+# kept by androidResources.localeFilters in app/build.gradle.kts.
 #
 # --version checks the APK manifest versionName and versionCode against the
 # release version (the versionCode comes from scripts/android-version-code.sh).
@@ -82,12 +82,14 @@ check_release_locales() {
   for loc in $line; do
     loc="${loc//\'/}"
     case "$loc" in
-    --_-- | en | en-* | zh-CN | zh-TW | zh-HK) ;;
+    --_-- | en | en-* | zh-CN | zh-TW | zh-HK | ru | ru-* | ja | ja-* | fa | fa-* | \
+      ar | ar-* | ko | ko-* | tr | tr-* | vi | vi-* | id | id-* | in | in-* | \
+      es | es-* | de | de-* | fr | fr-* | pt | pt-* | uk | uk-*) ;;
     *) extra+=("$loc") ;;
     esac
   done
   if ((${#extra[@]} > 0)); then
-    echo "release APK has resource locales outside en/zh-CN/zh-TW/zh-HK: ${extra[*]}" >&2
+    echo "release APK has resource locales outside supported languages: ${extra[*]}" >&2
     return 1
   fi
 }

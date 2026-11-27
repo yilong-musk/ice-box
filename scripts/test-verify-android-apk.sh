@@ -139,13 +139,13 @@ expect_locales_fail() {
 
 pkg="package: name='com.yilongmusk.icebox' versionCode='2009' versionName='0.2.9'"
 # Output of a real filtered release APK (aapt2 35.0.0).
-expect_locales_ok "filtered" "$pkg"$'\n'"locales: '--_--' 'zh-CN' 'zh-HK' 'zh-TW'"
-expect_locales_ok "with-en" "$pkg"$'\n'"locales: '--_--' 'en' 'en-GB' 'zh-CN' 'zh-TW'"
+expect_locales_ok "filtered" "$pkg"$'\n'"locales: '--_--' 'ar' 'de' 'es' 'fa' 'fr' 'in' 'ja' 'ko' 'pt-BR' 'ru' 'tr' 'uk' 'vi' 'zh-CN' 'zh-HK' 'zh-TW'"
+expect_locales_ok "with-en" "$pkg"$'\n'"locales: '--_--' 'en' 'en-GB' 'ar-SA' 'fa-IR' 'id-ID' 'ja-JP' 'ko-KR' 'pt-BR' 'ru-RU' 'uk-UA' 'zh-CN' 'zh-TW'"
 # localeFilters dropped: AndroidX/Material bring back dozens of locales.
 expect_locales_fail \
   "unfiltered" \
-  "$pkg"$'\n'"locales: '--_--' 'af' 'am' 'ar' 'zh-CN' 'zh-HK' 'zh-TW'" \
-  "outside en/zh-CN/zh-TW/zh-HK: af am ar"
+  "$pkg"$'\n'"locales: '--_--' 'af' 'am' 'fi' 'zh-CN' 'zh-HK' 'zh-TW'" \
+  "outside supported languages: af am fi"
 expect_locales_fail "no-line" "$pkg" "no locales line"
 
 expect_version_ok() {
