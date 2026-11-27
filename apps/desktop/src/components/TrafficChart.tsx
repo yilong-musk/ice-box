@@ -459,13 +459,15 @@ export function TrafficChart({ running, paused = false, className }: Props) {
 
   return (
     <div className={cn("flex min-h-0 flex-1 flex-col gap-2", className)}>
-      <div className="flex shrink-0 justify-end gap-3 font-mono text-xs">
-        <span data-testid="traffic-rate-down">
-          <span className="text-traffic-down">↓</span> {latest ? formatRate(latest.down) : "—"}
-        </span>
-        <span data-testid="traffic-rate-up">
-          <span className="text-traffic-up">↑</span> {latest ? formatRate(latest.up) : "—"}
-        </span>
+      <div className="flex shrink-0 justify-end font-mono text-xs">
+        <div dir="ltr" className="flex items-center gap-3">
+          <span data-testid="traffic-rate-down">
+            <span className="text-traffic-down">↓</span> {latest ? formatRate(latest.down) : "—"}
+          </span>
+          <span data-testid="traffic-rate-up">
+            <span className="text-traffic-up">↑</span> {latest ? formatRate(latest.up) : "—"}
+          </span>
+        </div>
       </div>
       {error && (
         <p className="error shrink-0 text-sm">

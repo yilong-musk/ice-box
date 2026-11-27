@@ -183,7 +183,7 @@ the README product shot on every run.
 
 The capture scripts write the desktop and phone screenshots plus their version
 files to `docs/images/`. Those intermediates are ignored by git; commit only the
-composed `docs/images/hero.png` and `docs/images/hero.zh-CN.png`.
+composed `docs/images/hero*.webp` screenshots.
 
 Open a PR from a `release/vX.Y.Z` branch and merge into `main` (`release.sh`
 opens it for you). `main` has

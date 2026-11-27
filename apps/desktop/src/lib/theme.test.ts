@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { act, renderHook } from "@testing-library/react";
+import { Activity, createElement } from "react";
+import { act, render, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  THEME_CHANGE_EVENT,
   THEME_STORAGE_KEY,
   applyStoredTheme,
   applyTheme,
@@ -142,6 +144,54 @@ describe("theme", () => {
     });
     expect(first.current.preference).toBe("light");
     expect(second.current.preference).toBe("light");
+    expect(document.documentElement.classList.contains("dark")).toBe(false);
+  });
+
+  it("keeps a theme change made while a consumer is hidden in <Activity>", () => {
+    stubMatchMedia(true);
+
+    function ThemeConsumer() {
+      const { preference, resolved } = useThemePreference();
+      return createElement(
+        "span",
+        { "data-testid": "theme-consumer" },
+        `${preference}:${resolved}`,
+      );
+    }
+
+    const { rerender, getByTestId } = render(
+      createElement(Activity, {
+        mode: "visible",
+        children: createElement(ThemeConsumer),
+      }),
+    );
+    expect(getByTestId("theme-consumer")).toHaveTextContent("system:dark");
+    expect(document.documentElement.classList.contains("dark")).toBe(true);
+
+    // Hide the consumer (tearing down its effects), then switch to light mode
+    // externally — the same path as leaving Settings and toggling the site theme.
+    rerender(
+      createElement(Activity, {
+        mode: "hidden",
+        children: createElement(ThemeConsumer),
+      }),
+    );
+    act(() => {
+      window.localStorage.setItem(THEME_STORAGE_KEY, "light");
+      window.dispatchEvent(
+        new CustomEvent(THEME_CHANGE_EVENT, { detail: "light" }),
+      );
+    });
+    expect(document.documentElement.classList.contains("dark")).toBe(false);
+
+    // Showing the consumer again must not re-apply the stale dark preference.
+    rerender(
+      createElement(Activity, {
+        mode: "visible",
+        children: createElement(ThemeConsumer),
+      }),
+    );
+    expect(getByTestId("theme-consumer")).toHaveTextContent("light:light");
     expect(document.documentElement.classList.contains("dark")).toBe(false);
   });
 });

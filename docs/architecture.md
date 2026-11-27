@@ -302,10 +302,23 @@ page picks what the item shows — icon + readout, icon only, or readout only �
 through `tray_display_mode`, which the same watchdog reads once a second;
 readout-only
 always has that text to draw, which is what keeps the item clickable. On
-Windows those menus are classic Win32 popup menus, which ignore the mouse wheel:
-`tray_wheel.rs` hooks the tray thread and turns wheel messages into the arrow
-keys a long menu (the node list of a large subscription) already scrolls with.
-Quitting releases capture before stopping the core. TUN state transitions and
+Windows right-clicking the tray icon opens a borderless transparent WebView2
+popup (`tray_panel.rs` + `tray-panel.html`) styled to match the macOS tray
+menu — including cascading submenus (Proxy Mode, Nodes, Strategy Group members,
+Subscriptions), native wheel scrolling, and live inline delay testing
+(`tray_delay.rs`) — while left-clicking still raises the main window. The
+popup keeps a fixed transparent canvas sized for all three cascading columns
+and clips the HWND with Win32 `CreateRoundRectRgn` + `CombineRgn` +
+`SetWindowRgn` strictly to the visible cards so unused area stays click-through
+and submenu expansion never flickers; `tray_compat.rs` subclasses the tray
+message window so third-party tray hosts that fail `Shell_NotifyIconGetRect`
+fall back to the cursor position. The macOS native tray menu (`tray.rs`,
+`tray_delay_view.rs`) and the Windows custom tray panel (`tray_panel.rs`,
+`apps/desktop/src/tray-panel/TrayPanel.tsx`, `tray-panel.css`) are maintained
+in strict visual and structural parity — any change to menu style, layout,
+items, separators, icons, or delay presentation on one platform must be
+applied to the other in the same change. Quitting releases capture before stopping the
+core. TUN state transitions and
 recovery rules are maintained only in [tun.md](tun.md).
 
 ## Trust boundaries

@@ -11,8 +11,9 @@
  *   bash scripts/capture-docs.sh
  *   (cd apps/website && npm run capture-hero)
  *
- * Writes:
- *   docs/images/hero.png            hero.zh-CN.png
+ * Writes one composed WebP hero per supported README language:
+ *   docs/images/hero.webp (en), docs/images/hero.zh-CN.webp (zh),
+ *   and docs/images/hero.<locale>.webp for the other 14 languages.
  */
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -24,6 +25,8 @@ const PREVIEW_PORT = 4179;
 const VIEWPORT = { width: 1440, height: 1400 };
 /** Page background kept around the showcase in the shot. */
 const SHOT_PAD = 28;
+/** WebP encoder quality passed to Chromium OffscreenCanvas (0-1). */
+const WEBP_QUALITY = 0.9;
 
 /**
  * Shot-only page styles, injected after the page has loaded. The sticky nav
@@ -53,18 +56,116 @@ const SHOT_WALLPAPER = [
 
 const TARGETS = [
   {
+    language: "id",
+    locale: "id-ID",
+    desktopLabel: "Hentikan Proksi Sistem",
+    phoneLabel: "Putuskan VPN",
+    output: "docs/images/hero.id.webp",
+  },
+  {
+    language: "de",
+    locale: "de-DE",
+    desktopLabel: "Systemproxy stoppen",
+    phoneLabel: "VPN trennen",
+    output: "docs/images/hero.de.webp",
+  },
+  {
     language: "en",
     locale: "en-US",
     desktopLabel: "Stop System Proxy",
     phoneLabel: "Disconnect VPN",
-    output: "docs/images/hero.png",
+    output: "docs/images/hero.webp",
+  },
+  {
+    language: "es",
+    locale: "es-ES",
+    desktopLabel: "Detener proxy del sistema",
+    phoneLabel: "Desconectar VPN",
+    output: "docs/images/hero.es.webp",
+  },
+  {
+    language: "fr",
+    locale: "fr-FR",
+    desktopLabel: "Arrêter le proxy système",
+    phoneLabel: "Déconnecter le VPN",
+    output: "docs/images/hero.fr.webp",
+  },
+  {
+    language: "pt-BR",
+    locale: "pt-BR",
+    desktopLabel: "Parar proxy do sistema",
+    phoneLabel: "Desconectar VPN",
+    output: "docs/images/hero.pt-BR.webp",
+  },
+  {
+    language: "vi",
+    locale: "vi-VN",
+    desktopLabel: "Tắt Proxy hệ thống",
+    phoneLabel: "Ngắt kết nối VPN",
+    output: "docs/images/hero.vi.webp",
+  },
+  {
+    language: "tr",
+    locale: "tr-TR",
+    desktopLabel: "Sistem Proxy'sini Durdur",
+    phoneLabel: "VPN Bağlantısını Kes",
+    output: "docs/images/hero.tr.webp",
+  },
+  {
+    language: "ru",
+    locale: "ru-RU",
+    desktopLabel: "Отключить системный прокси",
+    phoneLabel: "Отключить VPN",
+    output: "docs/images/hero.ru.webp",
+  },
+  {
+    language: "uk",
+    locale: "uk-UA",
+    desktopLabel: "Вимкнути системний проксі",
+    phoneLabel: "Відключити VPN",
+    output: "docs/images/hero.uk.webp",
+  },
+  {
+    language: "ar",
+    locale: "ar-SA",
+    desktopLabel: "إيقاف بروكسي النظام",
+    phoneLabel: "قطع اتصال VPN",
+    output: "docs/images/hero.ar.webp",
+  },
+  {
+    language: "fa",
+    locale: "fa-IR",
+    desktopLabel: "توقف پروکسی سیستم",
+    phoneLabel: "قطع VPN",
+    output: "docs/images/hero.fa.webp",
+  },
+  {
+    language: "ja",
+    locale: "ja-JP",
+    desktopLabel: "システムプロキシを停止",
+    phoneLabel: "VPN を切断",
+    output: "docs/images/hero.ja.webp",
+  },
+  {
+    language: "ko",
+    locale: "ko-KR",
+    desktopLabel: "시스템 프록시 중지",
+    phoneLabel: "VPN 연결 해제",
+    output: "docs/images/hero.ko.webp",
   },
   {
     language: "zh",
     locale: "zh-CN",
     desktopLabel: "关闭系统代理",
     phoneLabel: "断开 VPN",
-    output: "docs/images/hero.zh-CN.png",
+    output: "docs/images/hero.zh-CN.webp",
+  },
+  {
+    language: "zh-TW",
+    locale: "zh-TW",
+    desktopLabel: "關閉系統代理",
+    phoneLabel: "中斷 VPN",
+    output: "docs/images/hero.zh-TW.webp",
   },
 ];
 
@@ -165,17 +266,21 @@ async function demoFrame(page, selector) {
  * the power button shows the target label.
  */
 async function waitForLanguage(frame, target, label) {
+  const expectedDir = target.language === "ar" || target.language === "fa" ? "rtl" : "ltr";
   await frame.waitForFunction(
-    ({ language, label }) => {
-      const shown = Array.from(document.querySelectorAll("button")).some(
-        (button) => button.getAttribute("aria-label") === label || button.textContent?.trim() === label,
-      );
+    ({ language, label, expectedDir }) => {
+      const shown =
+        document.documentElement.lang === language &&
+        document.documentElement.dir === expectedDir &&
+        Array.from(document.querySelectorAll("button")).some(
+          (button) => button.getAttribute("aria-label") === label || button.textContent?.trim() === label,
+        );
       if (shown) return true;
       window.localStorage.setItem("ice-box.language", language);
       window.dispatchEvent(new CustomEvent("ice-box-language", { detail: language }));
       return false;
     },
-    { language: target.language, label },
+    { language: target.language, label, expectedDir },
     { timeout: 30_000, polling: 100 },
   );
 }
@@ -277,6 +382,37 @@ async function shotClip(page) {
   return clip;
 }
 
+/**
+ * Re-encode Playwright's 2x Retina PNG screenshot as WebP inside Chromium so
+ * the script preserves exact deviceScaleFactor framing without adding any
+ * external image-encoding dependency.
+ */
+async function encodeWebp(page, pngBuffer) {
+  const base64 = await page.evaluate(
+    async ({ base64Png, quality }) => {
+      const response = await fetch(`data:image/png;base64,${base64Png}`);
+      const bitmap = await createImageBitmap(await response.blob());
+      try {
+        const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+        const ctx = canvas.getContext("2d");
+        if (!ctx) throw new Error("Failed to acquire 2D canvas context");
+        ctx.drawImage(bitmap, 0, 0);
+        const webpBlob = await canvas.convertToBlob({ type: "image/webp", quality });
+        const bytes = new Uint8Array(await webpBlob.arrayBuffer());
+        let binary = "";
+        for (let i = 0; i < bytes.length; i += 0x8000) {
+          binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+        }
+        return btoa(binary);
+      } finally {
+        bitmap.close();
+      }
+    },
+    { base64Png: pngBuffer.toString("base64"), quality: WEBP_QUALITY },
+  );
+  return Buffer.from(base64, "base64");
+}
+
 if (!fs.existsSync(path.join(websiteDir, "node_modules/playwright"))) {
   console.error(
     "compose-hero: install website deps first:\n" +
@@ -328,9 +464,10 @@ try {
         await page.addStyleTag({ content: SHOT_STYLE });
         const clip = await shotClip(page);
         const png = await page.screenshot({ type: "png", clip });
+        const webp = await encodeWebp(page, png);
         const outFile = path.join(repoRoot, target.output);
         fs.mkdirSync(path.dirname(outFile), { recursive: true });
-        fs.writeFileSync(outFile, png);
+        fs.writeFileSync(outFile, webp);
         console.log(`Wrote ${target.output}`);
       } finally {
         await context.close();

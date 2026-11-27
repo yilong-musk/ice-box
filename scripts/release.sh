@@ -67,8 +67,22 @@ RELEASE_FILES=(
   apps/desktop/package-lock.json
   apps/mobile/package.json
   apps/mobile/src-tauri/tauri.conf.json
-  docs/images/hero.png
-  docs/images/hero.zh-CN.png
+  docs/images/hero.id.webp
+  docs/images/hero.de.webp
+  docs/images/hero.webp
+  docs/images/hero.es.webp
+  docs/images/hero.fr.webp
+  docs/images/hero.pt-BR.webp
+  docs/images/hero.vi.webp
+  docs/images/hero.tr.webp
+  docs/images/hero.ru.webp
+  docs/images/hero.uk.webp
+  docs/images/hero.ar.webp
+  docs/images/hero.fa.webp
+  docs/images/hero.ja.webp
+  docs/images/hero.ko.webp
+  docs/images/hero.zh-CN.webp
+  docs/images/hero.zh-TW.webp
 )
 
 echo "== checking the working tree =="

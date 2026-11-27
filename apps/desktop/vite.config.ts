@@ -27,6 +27,16 @@ export default defineConfig(async () => ({
   //
   // 1. prevent Vite from obscuring rust errors
   clearScreen: false,
+  build: {
+    rollupOptions: {
+      // Dedicated HTML entry for the custom Windows tray menu panel so it does
+      // not pull in the main window bundle.
+      input: {
+        main: path.resolve(root, "index.html"),
+        "tray-panel": path.resolve(root, "tray-panel.html"),
+      },
+    },
+  },
   // 2. tauri expects a fixed port, fail if that port is not available
   server: {
     port: 1420,

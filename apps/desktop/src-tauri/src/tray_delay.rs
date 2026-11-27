@@ -2,49 +2,40 @@
 
 //! Tray delay test: probe the exit nodes behind a node page.
 //!
-//! macOS-only feature. The module is compiled for the macOS target and — under
-//! `cfg(test)` — on every host, so the platform-neutral model logic keeps
-//! host-side unit coverage; the Windows and Linux release builds do not include
-//! it and their tray keeps its old shape (see the `mod` declaration in
-//! `lib.rs`).
+//! Runs in the macOS native tray menu (with custom `NSView` buttons in
+//! `tray_delay_view`) and in the Windows custom tray panel (`tray_panel`). The
+//! platform-neutral model compiles on every host so host-side unit tests and
+//! panel serialization always stay covered.
 //!
 //! One button per page probes the page's *real exit nodes*, in page order: a
 //! real node is probed itself, a strategy group follows its live `now` member
 //! down to the leaf (a group without one is skipped), and an exit node behind
 //! several rows is probed once. A few probes run at once, the same way the
-//! Nodes page's batch test does; the menu is re-derived at most once a second
-//! while they do, and once more when the run ends.
+//! Nodes page's batch test does; the menu refreshes while they run, and once
+//! more when the run ends.
 //!
-//! A run is cancelled by closing the tray menu: the button lives in the menu,
-//! so the menu is open when a run starts, and the next close — the user
-//! dismissing the menu — is the cancel: it stops the run from claiming further
-//! probes while the ones already in flight land. A close that the start click
-//! itself brings is not a dismissal; the click that takes the row tells the
-//! two apart ([`CLICKS_IN_FLIGHT`]).
+//! A run is cancelled by closing the tray menu or dismissing the Windows tray
+//! panel: closing stops the run from claiming further probes while the ones
+//! already in flight land, and drops the measured results so reopening starts
+//! from the default labels ([`DelayState::drop_results`]).
 //!
-//! A dismissal also lets the results go: the menu shows the last test until it
-//! is closed, and reopening it starts from the default labels instead of
-//! yesterday's numbers ([`DelayState::drop_results`]).
-//!
-//! The button is a custom view on its menu item (`tray_delay_view`), which is
-//! what keeps that starting click from closing the menu: picking a plain item
-//! would end the tracking, and with it the run the click had just started.
-//! AppKit gives no menu item a way to prevent that, so the row handles its own
-//! mouse events instead.
+//! On macOS, the button is a custom view on its menu item (`tray_delay_view`),
+//! which keeps that starting click from closing the menu; a close that the
+//! start click itself brings is told from a dismissal by [`CLICKS_IN_FLIGHT`].
 
 use crate::application::NodeInfo;
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Mutex;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use crate::application::{collect_nodes, probe_node_delay};
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use crate::AppState;
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::time::{Duration, Instant};
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use tauri::{AppHandle, Manager};
 
 /// Which node page asked for a test.
@@ -59,19 +50,38 @@ pub(crate) enum DelayScope {
 
 impl DelayScope {
     /// Menu id of the page's button, in the same JSON-array form as the node
-    /// actions, so a tag holding any separator stays one id. The button starts
-    /// its run from its own view rather than from a menu event, so nothing
-    /// decodes the id at run time; it names the row for muda and for logs.
+    /// actions, so a tag holding any separator stays one id. On macOS it names
+    /// the row for muda and logs; on Windows the tray panel sends it back when
+    /// the button is clicked.
     pub(crate) fn menu_id(&self) -> String {
         match self {
             Self::Top => serde_json::json!(["delay", "top"]).to_string(),
             Self::Group(tag) => serde_json::json!(["delay", "group", tag]).to_string(),
         }
     }
+
+    /// Decode an id built by [`Self::menu_id`].
+    pub(crate) fn from_menu_id(id: &str) -> Option<Self> {
+        if !id.starts_with('[') {
+            return None;
+        }
+        let parts: Vec<String> = serde_json::from_str(id).ok()?;
+        match parts.as_slice() {
+            [kind, scope] if kind == "delay" && scope == "top" => Some(Self::Top),
+            [kind, scope, tag] if kind == "delay" && scope == "group" => {
+                Some(Self::Group(tag.clone()))
+            }
+            _ => None,
+        }
+    }
 }
 
 /// Outcome of one probe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(
+    not(any(target_os = "macos", target_os = "windows", test)),
+    allow(dead_code)
+)]
 pub(crate) enum DelayOutcome {
     /// Queued or in flight; the menu prints `…`.
     Testing,
@@ -151,6 +161,7 @@ struct DelayState {
     /// Set while a run the menu closed on winds down: its results were let go
     /// with the menu, so the probe still in flight records nothing when it
     /// lands.
+    #[cfg(any(target_os = "macos", target_os = "windows", test))]
     abandoned: bool,
 }
 
@@ -172,6 +183,7 @@ impl DelayState {
     /// Start a run over `tags`, marking every one of them `Testing` so the open
     /// menu shows what is still to come. Results of tags the run does not touch
     /// stay, like the results table on the Nodes page.
+    #[cfg(any(target_os = "macos", target_os = "windows", test))]
     fn begin(&mut self, scope: DelayScope, tags: Vec<String>) {
         self.abandoned = false;
         for tag in &tags {
@@ -186,6 +198,7 @@ impl DelayState {
 
     /// Record one finished probe and move the progress on. A run the menu
     /// closed on records nothing: its results were let go with the menu.
+    #[cfg(any(target_os = "macos", target_os = "windows", test))]
     fn advance(&mut self, tag: &str, outcome: DelayOutcome) {
         if self.abandoned {
             return;
@@ -197,6 +210,7 @@ impl DelayState {
     }
 
     /// End the run and keep what it measured.
+    #[cfg(any(target_os = "macos", target_os = "windows", test))]
     fn finish(&mut self) {
         self.run = None;
     }
@@ -209,6 +223,7 @@ impl DelayState {
     ///
     /// `true` when there was something to let go of, so the caller only
     /// refreshes the menu when the rows it shows moved.
+    #[cfg(any(target_os = "macos", target_os = "windows", test))]
     fn drop_results(&mut self) -> bool {
         self.abandoned = true;
         let had_results = !self.outcomes.is_empty();
@@ -221,6 +236,7 @@ impl DelayState {
 static STATE: Mutex<DelayState> = Mutex::new(DelayState {
     outcomes: BTreeMap::new(),
     run: None,
+    #[cfg(any(target_os = "macos", target_os = "windows", test))]
     abandoned: false,
 });
 
@@ -262,6 +278,7 @@ fn resolve_exit_tag_inner(
 }
 
 /// The exit nodes a page's button probes, in page order, deduplicated.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 pub(crate) fn delay_test_tags(nodes: &[NodeInfo], scope: &DelayScope) -> Vec<String> {
     let has_groups = nodes.iter().any(|node| node.group_all.is_some());
     let rows: Vec<&str> = match scope {
@@ -299,16 +316,19 @@ pub(crate) fn delay_test_tags(nodes: &[NodeInfo], scope: &DelayScope) -> Vec<Str
 /// uses (`DELAY_TEST_CONCURRENCY` in `apps/desktop/src/pages/Nodes.tsx`): a few
 /// nodes at a time keeps a long page moving without flooding the core or the
 /// upstream links.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 const MAX_PROBES_IN_FLIGHT: usize = 4;
 
-/// Menu refresh throttle while a test runs: each rebuild re-derives the whole
-/// menu, and results land in bursts, so once a second is plenty.
+/// Menu refresh throttle while a test runs: macOS re-derives the native menu
+/// at most once a second; the Windows custom panel only pushes a lightweight
+/// notification event, so it can update more briskly.
 #[cfg(target_os = "macos")]
 const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+#[cfg(target_os = "windows")]
+const REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 
 /// Set while a test runs: a second click is ignored, and a menu close cancels.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 static RUN_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Whether the tray menu is open right now: set when its tracking begins,
@@ -320,7 +340,7 @@ static MENU_OPENED: AtomicBool = AtomicBool::new(false);
 
 /// Set by a close of the tray menu after a test start; consulted before a
 /// probe is claimed, so a cancelled run drains instead of starting new probes.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 static CANCEL_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 /// Set while a delay row handles the click that starts a run: a close of the
@@ -379,7 +399,7 @@ fn click_in_flight() -> bool {
 
 /// Tray「延迟测试」: probe the page's exit nodes in order and refresh the menu
 /// as results land. Off the main thread like the other tray actions.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(crate) fn start(app: &AppHandle, scope: DelayScope) {
     // Claim the run before spawning: two clicks must not queue two tests.
     if RUN_ACTIVE.swap(true, Ordering::SeqCst) {
@@ -391,6 +411,20 @@ pub(crate) fn start(app: &AppHandle, scope: DelayScope) {
     tauri::async_runtime::spawn_blocking(move || run(app, scope));
 }
 
+/// Cancel an in-flight test and drop stored delay results when the Windows tray
+/// panel hides, matching macOS's close-to-cancel semantics.
+#[cfg(target_os = "windows")]
+pub(crate) fn cancel_and_drop(app: &AppHandle) {
+    if RUN_ACTIVE.load(Ordering::SeqCst) {
+        tracing::info!("tray delay: panel hidden; cancelling the run");
+        CANCEL_REQUESTED.store(true, Ordering::SeqCst);
+    }
+    if lock_state().drop_results() {
+        tracing::info!("tray delay: panel hidden; results dropped");
+        crate::tray_panel::notify_changed(app);
+    }
+}
+
 /// Probe `tags` with at most `max_in_flight` at once, claiming them in page
 /// order and handing each finished probe to `record` as it lands: the results
 /// may arrive in any order, the claims never do. `probe` runs on worker
@@ -399,7 +433,7 @@ pub(crate) fn start(app: &AppHandle, scope: DelayScope) {
 /// starting further probes — each one claims its next tag first and reads the
 /// cancel after that claim ([`claim_probe`]) — while the probes already in
 /// flight still land.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 fn run_probes(
     tags: &[String],
     max_in_flight: usize,
@@ -437,7 +471,7 @@ fn run_probes(
 /// it: a cancel that lands between the two drops the claimed tag — it is never
 /// probed and never handed to another worker — instead of leaving the worker
 /// to start one more probe after the request.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 fn claim_probe<'a>(
     tags: &'a [String],
     next: &AtomicUsize,
@@ -451,7 +485,7 @@ fn claim_probe<'a>(
     Some((index, tag))
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn run(app: AppHandle, scope: DelayScope) {
     let Some(state) = app.try_state::<AppState>() else {
         RUN_ACTIVE.store(false, Ordering::SeqCst);
@@ -470,10 +504,29 @@ fn run(app: AppHandle, scope: DelayScope) {
     };
     if tags.is_empty() {
         RUN_ACTIVE.store(false, Ordering::SeqCst);
+        CANCEL_REQUESTED.store(false, Ordering::SeqCst);
+        return;
+    }
+    // Check cancellation under the state lock before calling `begin`: if the
+    // menu or panel closed while `collect_nodes` was running, calling `begin`
+    // would populate `Testing` entries that a cancelled `run_probes` never
+    // clears.
+    let cancelled_early = {
+        let mut guard = lock_state();
+        if CANCEL_REQUESTED.load(Ordering::SeqCst) {
+            true
+        } else {
+            guard.begin(scope.clone(), tags.clone());
+            false
+        }
+    };
+    if cancelled_early {
+        RUN_ACTIVE.store(false, Ordering::SeqCst);
+        CANCEL_REQUESTED.store(false, Ordering::SeqCst);
+        tracing::info!(scope = ?scope, "tray delay: cancelled before probes started");
         return;
     }
     tracing::info!(scope = ?scope, probes = tags.len(), "tray delay: run started");
-    lock_state().begin(scope, tags.clone());
     // Show `…` and the progress right away: the menu is open (the click came
     // from it) and must not still show the idle labels.
     crate::tray::sync_menu(&app);
@@ -645,6 +698,25 @@ mod tests {
             node("香港 01", None, None),
             node("日本 02", None, None),
         ]
+    }
+
+    #[test]
+    fn delay_scope_menu_ids_round_trip() {
+        assert_eq!(
+            DelayScope::from_menu_id(&DelayScope::Top.menu_id()),
+            Some(DelayScope::Top)
+        );
+        let group = DelayScope::Group("节点选择 | A&B [1]".into());
+        assert_eq!(DelayScope::from_menu_id(&group.menu_id()), Some(group));
+        for invalid in [
+            "service",
+            "[\"node\",\"香港 01\"]",
+            "[\"delay\"]",
+            "[\"delay\",\"other\"]",
+            "[\"delay\",\"group\"]",
+        ] {
+            assert_eq!(DelayScope::from_menu_id(invalid), None, "{invalid}");
+        }
     }
 
     #[test]

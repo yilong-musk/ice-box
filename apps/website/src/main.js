@@ -7,8 +7,11 @@ import runningStill from "../../desktop/src/assets/switch-logo/32/running-still.
 import runningStrip from "../../desktop/src/assets/switch-logo/32/running.png";
 import { version as appVersion } from "../../desktop/package.json";
 import {
+  LANGUAGE_LABELS,
   LANGUAGE_STORAGE_KEY,
+  SUPPORTED_LANGUAGES,
   isLanguagePreference,
+  languageDirection,
   resolveLanguage,
 } from "../../desktop/src/lib/language";
 import {
@@ -25,6 +28,7 @@ import {
   installerFilename,
   linuxInstallerDownloadUrl,
   linuxInstallerFilename,
+  linuxInstallerVariantsForArch,
   linuxPrimaryInstallerVariant,
   refineLinuxArch,
 } from "./downloads";
@@ -72,11 +76,10 @@ const ICONS = {
   play: '<path d="M8 5.6v12.8a.8.8 0 0 0 1.2.7l10.2-6.4a.8.8 0 0 0 0-1.4L9.2 4.9A.8.8 0 0 0 8 5.6z"/>',
   arrowRight: '<path d="M5 12h14"/><path d="m13 6 6 6-6 6"/>',
   chevronRight: '<path d="m9.5 6 6 6-6 6"/>',
+  chevronDown: '<path d="m6 9 6 6 6-6"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a13.5 13.5 0 0 1 0 18 13.5 13.5 0 0 1 0-18"/>',
   check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
-  laptop: '<rect x="4.5" y="5" width="15" height="10.5" rx="1.75"/><path d="M2.5 19h19"/>',
-  monitor: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M12 16v4M8 20h8"/>',
-  terminal: '<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>',
-  smartphone: '<rect x="6.5" y="2.75" width="11" height="18.5" rx="2.75"/><path d="M11 18h2"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6l1.4 1.4M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4"/>',
   moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>',
   github:
@@ -85,6 +88,25 @@ const ICONS = {
 
 function icon(name, className = "icon") {
   return `<svg class="${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
+}
+
+/**
+ * Solid platform marks on a 24-unit grid for the download rail and detail
+ * panes, using evenodd cutouts so transparent details hold up on any surface.
+ */
+const PLATFORM_MARKS = {
+  macos:
+    '<path fill="currentColor" d="M16.92 12.63c-.02-2.08 1.7-3.08 1.78-3.13-.97-1.42-2.48-1.61-3.02-1.63-1.28-.13-2.51.76-3.16.76-.66 0-1.67-.74-2.75-.72-1.41.02-2.72.83-3.44 2.1-1.48 2.56-.38 6.35 1.05 8.43.7 1.02 1.54 2.16 2.64 2.12 1.06-.04 1.46-.68 2.75-.68 1.28 0 1.65.68 2.76.66 1.14-.02 1.86-1.03 2.55-2.05.81-1.18 1.14-2.32 1.16-2.38-.03-.01-2.29-.88-2.32-3.48zM14.84 6.5c.58-.71.98-1.69.87-2.67-.84.03-1.87.56-2.47 1.27-.54.62-1.01 1.62-.89 2.58.94.07 1.9-.48 2.49-1.18z"/>',
+  windows:
+    '<rect x="3.2" y="3.2" width="8" height="8" rx="1" fill="currentColor"/><rect x="12.8" y="3.2" width="8" height="8" rx="1" fill="currentColor"/><rect x="3.2" y="12.8" width="8" height="8" rx="1" fill="currentColor"/><rect x="12.8" y="12.8" width="8" height="8" rx="1" fill="currentColor"/>',
+  linux:
+    '<path fill="currentColor" fill-rule="evenodd" d="M5.5 4.5h13A2.5 2.5 0 0 1 21 7v10a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17V7a2.5 2.5 0 0 1 2.5-2.5Zm1.8 4.3 3.7 3.2-3.7 3.2-1.05-1.2L8.55 12 6.25 10l1.05-1.2ZM12 13.8h5v1.6h-5v-1.6Z"/>',
+  android:
+    '<path fill="currentColor" fill-rule="evenodd" d="M2.6 18.2a9.4 9.4 0 0 1 18.8 0H2.6Zm5.7-5.2a1.15 1.15 0 1 0 0 2.3 1.15 1.15 0 0 0 0-2.3Zm7.4 0a1.15 1.15 0 1 0 0 2.3 1.15 1.15 0 0 0 0-2.3Z"/><path d="M7.6 10.55 5.2 6.2M16.4 10.55 18.8 6.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+};
+
+function platformMark(platform, className = "platform-mark") {
+  return `<svg class="${className}" viewBox="0 0 24 24" aria-hidden="true">${PLATFORM_MARKS[platform]}</svg>`;
 }
 
 /** `data-i18n` fills textContent, `data-i18n-html` fills trusted markup from
@@ -116,36 +138,30 @@ const FEATURE_GROUPS = [
   ],
 ];
 
-const PLATFORM_ICON = {
-  macos: "laptop",
-  windows: "monitor",
-  linux: "terminal",
-  android: "smartphone",
+const PLATFORM_SHORT_META = {
+  macos: "arm64 · .dmg",
+  windows: "x64 · .exe",
+  linux: "AppImage · .deb",
+  android: "arm64 · .apk",
 };
 
-const LINUX_VARIANT_LINKS = [
-  ["appimage-amd64", "AppImage · x64"],
-  ["deb-amd64", ".deb · x64"],
-  ["appimage-aarch64", "AppImage · arm64"],
-  ["deb-arm64", ".deb · arm64"],
+const LINUX_ARCH_OPTIONS = [
+  ["amd64", "x64"],
+  ["arm64", "arm64"],
 ];
 
-const windowLights = `<span class="window-lights" aria-hidden="true"><i></i><i></i><i></i></span>`;
+const windowLights = `<span class="window-lights" dir="ltr" aria-hidden="true"><i></i><i></i><i></i></span>`;
 
 const currentPlatform = detectPlatform(navigator.userAgent, navigator.maxTouchPoints);
-let linuxPrimaryVariant = linuxPrimaryInstallerVariant(
-  detectLinuxArch(navigator.userAgent),
-);
-
-function platformPrimaryFilename(platform) {
-  return platform === "linux"
-    ? linuxInstallerFilename(appVersion, linuxPrimaryVariant)
-    : installerFilename(appVersion, platform);
-}
+let selectedPlatform = currentPlatform ?? "macos";
+let detectedLinuxArch =
+  currentPlatform === "linux" ? detectLinuxArch(navigator.userAgent) : "amd64";
+let selectedLinuxArch = detectedLinuxArch;
+let linuxArchManuallySelected = false;
 
 function platformPrimaryUrl(platform) {
   return platform === "linux"
-    ? linuxInstallerDownloadUrl(appVersion, linuxPrimaryVariant)
+    ? linuxInstallerDownloadUrl(appVersion, linuxPrimaryInstallerVariant(detectedLinuxArch))
     : installerDownloadUrl(appVersion, platform);
 }
 
@@ -168,7 +184,38 @@ root.innerHTML = `
       <div class="nav-actions">
         <a class="icon-button" href="${REPO_URL}" target="_blank" rel="noreferrer" aria-label="GitHub">${icon("github")}</a>
         <button class="icon-button nav-theme" type="button"><span class="theme-icon theme-icon-dark">${icon("moon")}</span><span class="theme-icon theme-icon-light">${icon("sun")}</span></button>
-        <button class="nav-language" type="button"></button>
+        <div class="nav-language-wrap">
+          <button
+            class="nav-language"
+            type="button"
+            aria-haspopup="listbox"
+            aria-expanded="false"
+            aria-controls="nav-language-menu"
+          >
+            ${icon("globe", "icon nav-language-icon")}
+            <span class="nav-language-label"></span>
+            ${icon("chevronDown", "icon nav-language-chevron")}
+          </button>
+          <div
+            id="nav-language-menu"
+            class="nav-language-menu"
+            role="listbox"
+            hidden
+          >
+            ${SUPPORTED_LANGUAGES.map(
+              (code) => `<button
+              type="button"
+              class="nav-language-option"
+              role="option"
+              data-language="${code}"
+              aria-selected="false"
+            >
+              <span class="nav-language-option-label" lang="${code}" dir="${languageDirection(code)}">${LANGUAGE_LABELS[code]}</span>
+              <span class="nav-language-check" aria-hidden="true">${icon("check", "icon icon-xs")}</span>
+            </button>`,
+            ).join("")}
+          </div>
+        </div>
       </div>
     </div>
   </header>
@@ -192,7 +239,7 @@ root.innerHTML = `
             <div class="phone-frame">
               <span class="phone-sim" aria-hidden="true"></span>
               <div class="phone-screen">
-                <div class="phone-status-bar" aria-hidden="true">
+                <div class="phone-status-bar" dir="ltr" aria-hidden="true">
                   <span class="phone-clock"></span>
                   <div class="phone-status-icons">${phoneStatusIcons}</div>
                 </div>
@@ -250,12 +297,12 @@ root.innerHTML = `
         <div class="window-bar">${windowLights}<span id="agent-window-title" class="window-title">${icon("mcp", "icon icon-xs")}<span ${t("agent.terminalTitle")}></span></span></div>
         <div class="chat">
           <p class="bubble bubble-user" ${t("agent.prompt")}></p>
-          <div class="tool-calls">
+          <div class="tool-calls" dir="ltr">
             <p class="tool-call"><span class="tool-name">ice-box.set_proxy_mode</span><span class="tool-args">{"mode":"global"}</span><span class="tool-ok">${icon("check", "icon icon-xs")}</span></p>
             <p class="tool-call"><span class="tool-name">ice-box.list_connections</span><span class="tool-args">{}</span><span class="tool-ok">${icon("check", "icon icon-xs")}</span></p>
           </div>
           <p class="bubble bubble-agent" ${t("agent.reply")}></p>
-          <p class="config"><span class="cfg-comment">// mcpServers.ice-box</span><br><span class="cfg-key">"command"</span>: <span class="cfg-str">".../ice-box"</span>,<br><span class="cfg-key">"args"</span>: [<span class="cfg-str">"--mcp-stdio"</span>, <span class="cfg-str">"--data-dir"</span>, <span class="cfg-str">"..."</span>]</p>
+          <p class="config" dir="ltr"><span class="cfg-comment">// mcpServers.ice-box</span><br><span class="cfg-key">"command"</span>: <span class="cfg-str">".../ice-box"</span>,<br><span class="cfg-key">"args"</span>: [<span class="cfg-str">"--mcp-stdio"</span>, <span class="cfg-str">"--data-dir"</span>, <span class="cfg-str">"..."</span>]</p>
         </div>
       </div>
     </section>
@@ -266,29 +313,77 @@ root.innerHTML = `
         <h2 id="download-title" ${t("download.title")}></h2>
         <p class="section-body" ${t("download.body")}></p>
       </div>
-      <ul class="download-grid">
-        ${INSTALLER_PLATFORMS.map(
-          (platform) => `<li class="download-card reveal" data-platform="${platform}">
-          <div class="download-top">
-            <span class="download-icon">${icon(PLATFORM_ICON[platform])}</span>
-            <span class="download-yours" hidden></span>
-          </div>
-          <h3 class="download-name"></h3>
-          <p class="download-file"></p>
-          <p class="download-requires"></p>
-          <p class="download-note"></p>
-          <a class="button download-button" href="${platformPrimaryUrl(platform)}">${icon("download")}<span class="download-action"></span></a>
-          ${
-            platform === "linux"
-              ? `<div class="download-variants">${LINUX_VARIANT_LINKS.map(
-                  ([variant, label]) =>
-                    `<a class="download-variant" href="${linuxInstallerDownloadUrl(appVersion, variant)}">${label}</a>`,
-                ).join("")}</div>`
-              : ""
-          }
-        </li>`,
-        ).join("")}
-      </ul>
+      <div class="download-panel reveal">
+        <div class="download-rail" role="tablist">
+          ${INSTALLER_PLATFORMS.map(
+            (platform) => `<button
+            type="button"
+            class="download-tab"
+            role="tab"
+            id="download-tab-${platform}"
+            aria-controls="download-pane-${platform}"
+            aria-selected="${platform === selectedPlatform ? "true" : "false"}"
+            tabindex="${platform === selectedPlatform ? "0" : "-1"}"
+            data-download-tab="${platform}"
+          >
+            <span class="download-tab-icon">${platformMark(platform)}</span>
+            <span class="download-tab-text">
+              <span class="download-tab-name"></span>
+              <span class="download-tab-sub">${PLATFORM_SHORT_META[platform]}</span>
+            </span>
+            <span class="download-current-dot" aria-hidden="true" hidden></span>
+          </button>`,
+          ).join("")}
+        </div>
+        <div class="download-stage">
+          ${INSTALLER_PLATFORMS.map(
+            (platform) => `<div
+            class="download-pane"
+            role="tabpanel"
+            id="download-pane-${platform}"
+            aria-labelledby="download-tab-${platform}"
+            data-download-panel="${platform}"
+            ${platform === selectedPlatform ? "" : "hidden"}
+          >
+            <div class="download-pane-head">
+              <span class="download-emblem">${platformMark(platform)}</span>
+              <div class="download-pane-identity">
+                <div class="download-pane-title-row">
+                  <h3 class="download-name"></h3>
+                  <span class="download-version">${displayVersion}</span>
+                  <span class="download-yours" hidden></span>
+                </div>
+                <p class="download-meta-line"><span class="download-kind"></span><span class="dot-sep" aria-hidden="true"></span><span class="download-requires"></span></p>
+              </div>
+              ${
+                platform === "linux"
+                  ? `<div class="download-arch-group" role="group" data-linux-arch-group>${LINUX_ARCH_OPTIONS.map(
+                      ([arch, label]) =>
+                        `<button type="button" class="download-arch-option" data-linux-arch="${arch}" aria-pressed="${arch === selectedLinuxArch ? "true" : "false"}">${label}</button>`,
+                    ).join("")}</div>`
+                  : ""
+              }
+            </div>
+            ${
+              platform === "linux"
+                ? `<div class="download-action-row download-action-row-linux">
+              <a class="button button-primary button-large download-button" data-linux-format="appimage" href="${linuxInstallerDownloadUrl(appVersion, linuxInstallerVariantsForArch(selectedLinuxArch).appimage)}">${icon("download")}<span class="download-action"></span></a>
+              <a class="button button-large download-button-secondary" data-linux-format="deb" href="${linuxInstallerDownloadUrl(appVersion, linuxInstallerVariantsForArch(selectedLinuxArch).deb)}">${icon("download")}<span class="download-action-secondary"></span></a>
+            </div>
+            <p class="download-files"><span data-linux-file="appimage"></span><span class="dot-sep" aria-hidden="true"></span><span data-linux-file="deb"></span></p>`
+                : `<div class="download-action-row">
+              <a class="button button-primary button-large download-button" href="${platformPrimaryUrl(platform)}">${icon("download")}<span class="download-action"></span></a>
+              <span class="download-file"></span>
+            </div>`
+            }
+            <div class="download-note-box">
+              ${icon("info", "icon download-note-icon")}
+              <p class="download-note"></p>
+            </div>
+          </div>`,
+          ).join("")}
+        </div>
+      </div>
       <p class="download-more reveal"><a class="text-link" href="${REPO_URL}/releases" target="_blank" rel="noreferrer"><span ${t("download.allReleases")}></span>${icon("arrowRight", "icon icon-xs")}</a></p>
     </section>
   </main>
@@ -313,9 +408,15 @@ const parts = {
   phoneDemoFrame: root.querySelector(".phone-viewport iframe"),
   phoneFrame: root.querySelector(".phone-frame"),
   phoneClock: root.querySelector(".phone-clock"),
+  languageWrap: root.querySelector(".nav-language-wrap"),
   languageToggle: root.querySelector(".nav-language"),
+  languageLabel: root.querySelector(".nav-language-label"),
+  languageMenu: root.querySelector(".nav-language-menu"),
+  languageOptions: Array.from(root.querySelectorAll(".nav-language-option")),
   themeToggle: root.querySelector(".nav-theme"),
   nav: root.querySelector(".site-nav"),
+  downloadRail: root.querySelector(".download-rail"),
+  linuxArchGroup: root.querySelector("[data-linux-arch-group]"),
 };
 
 const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
@@ -470,33 +571,153 @@ function setUpReveal() {
 
 setUpReveal();
 
-/** Platform names, requirements, first-launch notes, and which card matches
- * this browser. */
+const downloadRailHorizontal = window.matchMedia?.("(max-width: 960px)");
+
+function syncDownloadRailOrientation() {
+  parts.downloadRail.setAttribute(
+    "aria-orientation",
+    downloadRailHorizontal?.matches ? "horizontal" : "vertical",
+  );
+}
+
+syncDownloadRailOrientation();
+downloadRailHorizontal?.addEventListener?.("change", syncDownloadRailOrientation);
+
+function selectDownloadPlatform(platform, { focusTab = false } = {}) {
+  selectedPlatform = platform;
+  for (const candidate of INSTALLER_PLATFORMS) {
+    const active = candidate === platform;
+    const tab = root.querySelector(`[data-download-tab="${candidate}"]`);
+    const pane = root.querySelector(`[data-download-panel="${candidate}"]`);
+    tab.setAttribute("aria-selected", active ? "true" : "false");
+    tab.tabIndex = active ? 0 : -1;
+    pane.hidden = !active;
+    if (active && focusTab) {
+      tab.focus();
+    }
+  }
+}
+
+parts.downloadRail.addEventListener("click", (event) => {
+  const tab = event.target.closest("[data-download-tab]");
+  if (!tab) return;
+  selectDownloadPlatform(tab.dataset.downloadTab);
+});
+
+parts.downloadRail.addEventListener("keydown", (event) => {
+  if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+  const tab = event.target.closest("[data-download-tab]");
+  if (!tab) return;
+  const index = INSTALLER_PLATFORMS.indexOf(tab.dataset.downloadTab);
+  if (index === -1) return;
+  let nextIndex = -1;
+  if (event.key === "ArrowDown" || event.key === "ArrowRight") {
+    nextIndex = (index + 1) % INSTALLER_PLATFORMS.length;
+  } else if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
+    nextIndex = (index - 1 + INSTALLER_PLATFORMS.length) % INSTALLER_PLATFORMS.length;
+  } else if (event.key === "Home") {
+    nextIndex = 0;
+  } else if (event.key === "End") {
+    nextIndex = INSTALLER_PLATFORMS.length - 1;
+  }
+  if (nextIndex === -1) return;
+  event.preventDefault();
+  selectDownloadPlatform(INSTALLER_PLATFORMS[nextIndex], { focusTab: true });
+});
+
+parts.linuxArchGroup.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-linux-arch]");
+  if (!button) return;
+  const nextArch = button.dataset.linuxArch;
+  if (nextArch !== "amd64" && nextArch !== "arm64") return;
+  selectedLinuxArch = nextArch;
+  linuxArchManuallySelected = true;
+  applyDownloadCopy(language);
+});
+
+/** Platform rail tabs, detail panes, requirements, and first-launch notes. */
 function applyDownloadCopy(next) {
+  parts.downloadRail.setAttribute(
+    "aria-label",
+    marketingText("download.tabListAria", next),
+  );
+  parts.linuxArchGroup.setAttribute(
+    "aria-label",
+    marketingText("download.linux.archAria", next),
+  );
+  const yours = marketingText("download.yours", next);
+  const actionTemplate = marketingText("download.actionPlatform", next);
+
   for (const platform of INSTALLER_PLATFORMS) {
-    const card = root.querySelector(`[data-platform="${platform}"]`);
+    const tab = root.querySelector(`[data-download-tab="${platform}"]`);
+    const pane = root.querySelector(`[data-download-panel="${platform}"]`);
     const isCurrent = platform === currentPlatform;
-    card.classList.toggle("is-current", isCurrent);
     const name = marketingText(`download.${platform}.name`, next);
-    const yours = marketingText("download.yours", next);
-    const action = marketingText("download.action", next);
-    card.querySelector(".download-name").textContent = name;
-    const yoursEl = card.querySelector(".download-yours");
+
+    tab.classList.toggle("is-current", isCurrent);
+    tab.querySelector(".download-tab-name").textContent = name;
+    tab.querySelector(".download-current-dot").hidden = !isCurrent;
+    tab.setAttribute("aria-label", isCurrent ? `${name}, ${yours}` : name);
+
+    pane.classList.toggle("is-current", isCurrent);
+    pane.querySelector(".download-name").textContent = name;
+    const yoursEl = pane.querySelector(".download-yours");
     yoursEl.textContent = yours;
     yoursEl.hidden = !isCurrent;
-    card.querySelector(".download-file").textContent =
-      `${marketingText(`download.${platform}.kind`, next)} · ${platformPrimaryFilename(platform)}`;
-    card.querySelector(".download-requires").textContent =
-      marketingText(`download.${platform}.requires`, next);
-    card.querySelector(".download-note").textContent = marketingText(
+    pane.querySelector(".download-requires").textContent = marketingText(
+      `download.${platform}.requires`,
+      next,
+    );
+    pane.querySelector(".download-note").textContent = marketingText(
       `download.${platform}.note`,
       next,
     );
-    const button = card.querySelector(".download-button");
-    button.querySelector(".download-action").textContent = `${action} ${name}`;
+
+    if (platform === "linux") {
+      const archLabel = selectedLinuxArch === "arm64" ? "arm64" : "x64";
+      const variants = linuxInstallerVariantsForArch(selectedLinuxArch);
+      const appimageFile = linuxInstallerFilename(appVersion, variants.appimage);
+      const debFile = linuxInstallerFilename(appVersion, variants.deb);
+      const appimageLabel = marketingText("download.linux.appimageAction", next);
+      const debLabel = marketingText("download.linux.debAction", next);
+
+      pane.querySelector(".download-kind").textContent = archLabel;
+      for (const option of parts.linuxArchGroup.querySelectorAll("[data-linux-arch]")) {
+        option.setAttribute(
+          "aria-pressed",
+          option.dataset.linuxArch === selectedLinuxArch ? "true" : "false",
+        );
+      }
+
+      const appimageBtn = pane.querySelector('[data-linux-format="appimage"]');
+      appimageBtn.href = linuxInstallerDownloadUrl(appVersion, variants.appimage);
+      appimageBtn.querySelector(".download-action").textContent = appimageLabel;
+      appimageBtn.setAttribute("aria-label", `${appimageLabel} (${archLabel})`);
+
+      const debBtn = pane.querySelector('[data-linux-format="deb"]');
+      debBtn.href = linuxInstallerDownloadUrl(appVersion, variants.deb);
+      debBtn.querySelector(".download-action-secondary").textContent = debLabel;
+      debBtn.setAttribute("aria-label", `${debLabel} (${archLabel})`);
+
+      pane.querySelector('[data-linux-file="appimage"]').textContent = appimageFile;
+      pane.querySelector('[data-linux-file="deb"]').textContent = debFile;
+      continue;
+    }
+
+    const actionLabel = actionTemplate.replaceAll("{platform}", name);
+    pane.querySelector(".download-kind").textContent = marketingText(
+      `download.${platform}.kind`,
+      next,
+    );
+    pane.querySelector(".download-file").textContent =
+      installerFilename(appVersion, platform);
+
+    const button = pane.querySelector(".download-button");
+    button.href = platformPrimaryUrl(platform);
+    button.querySelector(".download-action").textContent = actionLabel;
     button.setAttribute(
       "aria-label",
-      isCurrent ? `${action} ${name}, ${yours}` : `${action} ${name}`,
+      isCurrent ? `${actionLabel}, ${yours}` : actionLabel,
     );
   }
 }
@@ -532,21 +753,121 @@ function applyCopy(next) {
   parts.demoFrame.title = marketingText("demo.iframeTitle", language);
   parts.phoneDemoFrame.title = marketingText("phoneDemo.iframeTitle", language);
   syncThemeToggle();
-  parts.languageToggle.textContent = marketingText("nav.languageToggle", language);
-  parts.languageToggle.setAttribute(
-    "aria-label",
-    marketingText("nav.languageToggleAria", language),
-  );
+  const languageAria = marketingText("nav.languageAria", language);
+  parts.languageLabel.textContent = LANGUAGE_LABELS[language];
+  parts.languageLabel.setAttribute("lang", language);
+  parts.languageLabel.setAttribute("dir", languageDirection(language));
+  parts.languageToggle.setAttribute("aria-label", languageAria);
+  parts.languageMenu.setAttribute("aria-label", languageAria);
+  for (const option of parts.languageOptions) {
+    option.setAttribute(
+      "aria-selected",
+      option.dataset.language === language ? "true" : "false",
+    );
+  }
 }
 
-parts.languageToggle.addEventListener("click", () => {
-  const next = language === "zh" ? "en" : "zh";
+function isLanguageMenuOpen() {
+  return !parts.languageMenu.hidden;
+}
+
+function openLanguageMenu({ focusSelected = false } = {}) {
+  if (parts.languageMenu.hidden) {
+    parts.languageMenu.hidden = false;
+    parts.languageToggle.setAttribute("aria-expanded", "true");
+  }
+  if (focusSelected) {
+    const active =
+      parts.languageOptions.find((el) => el.dataset.language === language) ??
+      parts.languageOptions[0];
+    active?.focus();
+  }
+}
+
+function closeLanguageMenu({ restoreFocus = false } = {}) {
+  if (parts.languageMenu.hidden) return;
+  parts.languageMenu.hidden = true;
+  parts.languageToggle.setAttribute("aria-expanded", "false");
+  if (restoreFocus) parts.languageToggle.focus();
+}
+
+function selectLanguage(next) {
+  if (!isLanguagePreference(next)) return;
   try {
     window.localStorage.setItem(LANGUAGE_STORAGE_KEY, next);
   } catch {
     // Private mode / blocked storage: the pick still applies for this visit.
   }
-  applyCopy(next);
+  applyCopy(resolveLanguage(next));
+  closeLanguageMenu({ restoreFocus: true });
+}
+
+parts.languageToggle.addEventListener("click", () => {
+  if (isLanguageMenuOpen()) closeLanguageMenu();
+  else openLanguageMenu();
+});
+
+parts.languageToggle.addEventListener("keydown", (event) => {
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    openLanguageMenu({ focusSelected: true });
+  } else if (event.key === "Escape") {
+    closeLanguageMenu();
+  }
+});
+
+parts.languageMenu.addEventListener("click", (event) => {
+  const option = event.target.closest(".nav-language-option");
+  if (!option) return;
+  selectLanguage(option.dataset.language);
+});
+
+parts.languageMenu.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeLanguageMenu({ restoreFocus: true });
+    return;
+  }
+  if (event.key === "Tab") {
+    // Restore focus to the trigger before hiding the menu so the browser's
+    // default Tab/Shift+Tab continues cleanly from the trigger instead of
+    // dropping focus to <body> when the focused option becomes hidden.
+    closeLanguageMenu({ restoreFocus: true });
+    return;
+  }
+  const options = parts.languageOptions;
+  const currentIndex = options.indexOf(document.activeElement);
+  if (currentIndex === -1) return;
+  const cols =
+    window.getComputedStyle(parts.languageMenu).gridTemplateColumns.split(" ")
+      .length || 1;
+  const rtl = document.documentElement.dir === "rtl";
+  let nextIndex = null;
+  if (event.key === "ArrowDown") {
+    nextIndex = (currentIndex + cols) % options.length;
+  } else if (event.key === "ArrowUp") {
+    nextIndex = (currentIndex - cols + options.length) % options.length;
+  } else if (event.key === "ArrowRight") {
+    nextIndex =
+      (currentIndex + (rtl ? -1 : 1) + options.length) % options.length;
+  } else if (event.key === "ArrowLeft") {
+    nextIndex =
+      (currentIndex + (rtl ? 1 : -1) + options.length) % options.length;
+  } else if (event.key === "Home") {
+    nextIndex = 0;
+  } else if (event.key === "End") {
+    nextIndex = options.length - 1;
+  }
+  if (nextIndex !== null) {
+    event.preventDefault();
+    options[nextIndex]?.focus();
+  }
+});
+
+document.addEventListener("pointerdown", (event) => {
+  if (isLanguageMenuOpen() && !parts.languageWrap.contains(event.target)) {
+    closeLanguageMenu();
+  }
 });
 
 // The Live Demo writes `ice-box.language` and `ice-box.theme` when the visitor
@@ -566,14 +887,12 @@ applyCopy(language);
 
 if (currentPlatform === "linux") {
   refineLinuxArch(navigator).then((refinedArch) => {
-    const nextVariant = linuxPrimaryInstallerVariant(refinedArch);
-    if (nextVariant === linuxPrimaryVariant) return;
-    linuxPrimaryVariant = nextVariant;
+    if (refinedArch === detectedLinuxArch) return;
+    detectedLinuxArch = refinedArch;
     parts.heroDownload.href = platformPrimaryUrl(currentPlatform);
-    const linuxCardButton = root.querySelector('[data-platform="linux"] .download-button');
-    if (linuxCardButton) {
-      linuxCardButton.href = platformPrimaryUrl("linux");
+    if (!linuxArchManuallySelected) {
+      selectedLinuxArch = refinedArch;
+      applyDownloadCopy(language);
     }
-    applyDownloadCopy(language);
   });
 }

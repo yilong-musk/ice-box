@@ -93,7 +93,7 @@ export function SettingsRow({
         {error ? <FieldError className="text-xs">{error}</FieldError> : null}
       </div>
       {children != null ? (
-        <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">
+        <div className="ms-auto flex shrink-0 flex-wrap items-center justify-end gap-2">
           {children}
         </div>
       ) : null}

@@ -1,0 +1,170 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+
+/* Cross-platform parity: keep visual tokens (surface, corners, row rhythm,
+   selection highlight, separators, update arrow, delay badge colours) in sync
+   with the macOS native tray menu (`apps/desktop/src-tauri/src/tray.rs`,
+   `tray_delay_view.rs`). Any style change on one platform must be mirrored on
+   the other in the same change. */
+
+/* Transparent fixed canvas for the Windows custom tray panel; each visible
+   `.tp-card` paints an opaque macOS-style menu surface while Win32
+   `SetWindowRgn` clips the HWND strictly to those rounded card bounds. */
+html.tray-panel-doc,
+body.tray-panel,
+body.tray-panel #root {
+  height: 100%;
+  min-height: 100%;
+  background: transparent !important;
+  overflow: hidden;
+}
+
+body.tray-panel {
+  margin: 0;
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: default;
+}
+
+.tp-card {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  padding: 5px;
+  overflow: hidden;
+  background: #f4f4f6;
+  color: var(--foreground);
+  box-shadow:
+    inset 0 0 0 1px rgba(0, 0, 0, 0.11),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+html.dark .tp-card {
+  background: #252529;
+  color: var(--foreground);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.tp-separator {
+  height: 1px;
+  margin: 4px 8px;
+  flex-shrink: 0;
+  background: rgba(0, 0, 0, 0.1);
+}
+
+html.dark .tp-separator {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+/* Native macOS NSMenu row rhythm and system-blue selection pill. */
+.tp-item {
+  display: flex;
+  width: 100%;
+  min-height: 25px;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  padding: 3px 8px;
+  color: inherit;
+  font-size: 13px;
+  line-height: 18px;
+  text-align: left;
+  outline: none;
+  cursor: default;
+}
+
+.tp-item[data-gutter="true"] {
+  padding-left: 6px;
+}
+
+.tp-item[data-submenu-open="true"] {
+  background: rgba(0, 0, 0, 0.08);
+}
+
+html.dark .tp-item[data-submenu-open="true"] {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.tp-item:not(:disabled):hover,
+.tp-item:not(:disabled):focus-visible {
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.tp-item:disabled {
+  opacity: 0.4;
+}
+
+.tp-gutter {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+}
+
+.tp-chevron {
+  margin-left: auto;
+  flex-shrink: 0;
+  opacity: 0.52;
+}
+
+.tp-item:not(:disabled):hover .tp-chevron,
+.tp-item:not(:disabled):focus-visible .tp-chevron {
+  opacity: 0.95;
+}
+
+.tp-update-arrow {
+  color: var(--ok);
+}
+
+.tp-item:not(:disabled):hover .tp-update-arrow,
+.tp-item:not(:disabled):focus-visible .tp-update-arrow {
+  color: var(--primary-foreground);
+}
+
+.tp-delay {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+
+.tp-delay[data-tone="ok"] {
+  color: var(--ok);
+}
+
+.tp-delay[data-tone="warn"] {
+  color: var(--warn);
+}
+
+.tp-delay[data-tone="bad"] {
+  color: var(--destructive);
+}
+
+/* Keep delay suffixes clearly legible on top of the system-blue highlight. */
+.tp-item:not(:disabled):hover .tp-delay,
+.tp-item:not(:disabled):focus-visible .tp-delay {
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.tp-scroll {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.tp-scroll::-webkit-scrollbar {
+  width: 5px;
+}
+
+.tp-scroll::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  background: rgba(127, 127, 127, 0.36);
+}

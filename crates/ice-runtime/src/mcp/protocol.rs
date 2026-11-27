@@ -433,7 +433,13 @@ fn settings_patch_schema() -> Value {
                 "additionalProperties": false
             },
             "auto_default_rules": {"type": "boolean"},
-            "language": {"type": "string", "enum": ["system", "zh", "en"]},
+            "language": {
+                "type": "string",
+                "enum": [
+                    "system", "zh", "zh-TW", "en", "ru", "ja", "fa",
+                    "ar", "ko", "tr", "vi", "id", "es", "de", "fr", "pt-BR", "uk"
+                ]
+            },
             "check_app_updates": {"type": "boolean"},
             "probe_exit_ip": {"type": "boolean"},
             "tray_display_mode": {"type": "string", "enum": ["icon_and_speed", "icon", "speed"]},

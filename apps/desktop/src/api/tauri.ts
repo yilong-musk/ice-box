@@ -3,6 +3,7 @@
 /** Desktop transport implementation of the shared application contract. */
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import type { ResolvedLanguage } from "../lib/language";
 import type { ApiContract, AppErrorPayload, AppSettings, AppProxyMode, CheckAppUpdateResponse, ConnectionStats, ConnectionsResponse, DelayTestResponse, GroupSelectionResponse, InstalledApp, ListRulesRequest, ListRulesResponse, McpStatus, NodeInfo, ProxyMode, RuleOverview, RuleSetStatus, SettingsPatch, StatusResponse, SubscriptionAutoUpdateInterval, SubscriptionMeta, TrafficDelta, TrafficPoint, TrafficSnapshot, UiMessage, UpdateProgressPayload } from "./contracts";
 
 export const api = {
@@ -97,7 +98,7 @@ export const api = {
     listen<UpdateProgressPayload>("app-update://progress", (event) =>
       handler(event.payload),
     ),
-  setTrayLanguage: (language: "zh" | "en") =>
+  setTrayLanguage: (language: ResolvedLanguage) =>
     invoke<void>("set_tray_language", { language }),
   /** Tray update prompt: mirror the version the sidebar arrow offers, or
    * `null` to drop the item when automatic checks are off. */

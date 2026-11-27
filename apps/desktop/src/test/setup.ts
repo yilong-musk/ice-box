@@ -3,7 +3,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
 import { afterEach, vi } from "vitest";
-import { THEME_STORAGE_KEY } from "../lib/theme";
+import { applyStoredTheme, THEME_STORAGE_KEY } from "../lib/theme";
 import { applyStoredLanguage, LANGUAGE_STORAGE_KEY } from "../lib/i18n";
 import { clearRulesSnapshot, clearSubscriptionsSnapshot } from "../lib/pageSnapshots";
 
@@ -90,6 +90,7 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   window.localStorage.removeItem(THEME_STORAGE_KEY);
+  applyStoredTheme();
   // The sidebar state persists across launches; each test starts from the
   // default (collapsed on the desktop shell).
   window.localStorage.removeItem("ice-box.sidebar-open");

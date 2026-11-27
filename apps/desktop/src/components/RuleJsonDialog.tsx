@@ -97,6 +97,7 @@ function RuleJsonDialog({
             <FieldLabel htmlFor="rule-json">{t("ruleJson.label")}</FieldLabel>
             <textarea
               id="rule-json"
+              dir="ltr"
               aria-label={t("ruleJson.label")}
               value={text}
               onChange={(e) => {

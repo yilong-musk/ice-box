@@ -6,6 +6,8 @@ import App from "../../../apps/desktop/src/App";
 import { api } from "./browser-api";
 import { bridgeStoredPreferences } from "./demo-preferences";
 import { readLanguagePreference } from "../../../apps/desktop/src/lib/language";
+import { applyStoredLanguage } from "../../../apps/desktop/src/lib/i18n";
+import { applyStoredTheme } from "../../../apps/desktop/src/lib/theme";
 import { applyFlagEmojiPolyfill } from "../../../apps/desktop/src/lib/flagEmoji";
 import flagFontUrl from "country-flag-emoji-polyfill/dist/TwemojiCountryFlags.woff2?url";
 import "./demo.css";
@@ -26,6 +28,8 @@ api.getSettings = async () => ({
 // Language and theme changes on the landing page (or the phone demo iframe)
 // reach this app through the shared storage bridge.
 bridgeStoredPreferences();
+applyStoredTheme();
+applyStoredLanguage();
 applyFlagEmojiPolyfill(flagFontUrl);
 
 createRoot(document.getElementById("root")!).render(
