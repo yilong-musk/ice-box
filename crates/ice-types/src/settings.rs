@@ -74,17 +74,61 @@ fn android_ident(name: &str) -> bool {
 }
 
 /// UI language preference. `System` follows the OS locale; the frontend
-/// resolves it to the closest supported language (`zh` / `en`).
+/// resolves it to the closest supported language.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
 pub enum LanguagePreference {
     /// Follow the system locale (default).
     #[default]
+    #[serde(rename = "system")]
     System,
     /// Simplified Chinese.
+    #[serde(rename = "zh")]
     Zh,
+    /// Traditional Chinese.
+    #[serde(rename = "zh-TW")]
+    ZhTw,
     /// English.
+    #[serde(rename = "en")]
     En,
+    /// Russian.
+    #[serde(rename = "ru")]
+    Ru,
+    /// Japanese.
+    #[serde(rename = "ja")]
+    Ja,
+    /// Persian (Farsi).
+    #[serde(rename = "fa")]
+    Fa,
+    /// Arabic.
+    #[serde(rename = "ar")]
+    Ar,
+    /// Korean.
+    #[serde(rename = "ko")]
+    Ko,
+    /// Turkish.
+    #[serde(rename = "tr")]
+    Tr,
+    /// Vietnamese.
+    #[serde(rename = "vi")]
+    Vi,
+    /// Indonesian.
+    #[serde(rename = "id")]
+    Id,
+    /// Spanish.
+    #[serde(rename = "es")]
+    Es,
+    /// German.
+    #[serde(rename = "de")]
+    De,
+    /// French.
+    #[serde(rename = "fr")]
+    Fr,
+    /// Brazilian Portuguese.
+    #[serde(rename = "pt-BR")]
+    PtBr,
+    /// Ukrainian.
+    #[serde(rename = "uk")]
+    Uk,
 }
 
 /// macOS only: what the menu-bar item draws — the icon with the live traffic
@@ -813,5 +857,35 @@ mod tests {
             ..AppSettings::default()
         };
         assert!(invalid.validate().is_err());
+    }
+
+    #[test]
+    fn language_preference_wire_format_round_trips() {
+        let cases = [
+            (LanguagePreference::System, "\"system\""),
+            (LanguagePreference::Zh, "\"zh\""),
+            (LanguagePreference::ZhTw, "\"zh-TW\""),
+            (LanguagePreference::En, "\"en\""),
+            (LanguagePreference::Ru, "\"ru\""),
+            (LanguagePreference::Ja, "\"ja\""),
+            (LanguagePreference::Fa, "\"fa\""),
+            (LanguagePreference::Ar, "\"ar\""),
+            (LanguagePreference::Ko, "\"ko\""),
+            (LanguagePreference::Tr, "\"tr\""),
+            (LanguagePreference::Vi, "\"vi\""),
+            (LanguagePreference::Id, "\"id\""),
+            (LanguagePreference::Es, "\"es\""),
+            (LanguagePreference::De, "\"de\""),
+            (LanguagePreference::Fr, "\"fr\""),
+            (LanguagePreference::PtBr, "\"pt-BR\""),
+            (LanguagePreference::Uk, "\"uk\""),
+        ];
+        for (value, wire) in cases {
+            assert_eq!(serde_json::to_string(&value).unwrap(), wire);
+            assert_eq!(
+                serde_json::from_str::<LanguagePreference>(wire).unwrap(),
+                value
+            );
+        }
     }
 }

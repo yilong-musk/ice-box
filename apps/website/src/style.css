@@ -35,7 +35,7 @@
     0 2px 4px oklch(0.2 0.006 270 / 5%),
     0 22px 48px -12px oklch(0.25 0.04 260 / 26%),
     0 64px 120px -48px oklch(0.25 0.06 260 / 34%);
-  --sans: -apple-system, BlinkMacSystemFont, "Inter Variable", Inter, "PingFang SC", "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif;
+  --sans: -apple-system, BlinkMacSystemFont, "Inter Variable", Inter, "PingFang SC", "PingFang TC", "Hiragino Sans", "Apple SD Gothic Neo", "Microsoft YaHei UI", "Microsoft JhengHei UI", "Yu Gothic UI", "Malgun Gothic", "Vazirmatn", "Geeza Pro", "Segoe UI", "Tahoma", system-ui, sans-serif;
   --mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
   color-scheme: light;
@@ -229,17 +229,16 @@ main {
   display: flex;
   align-items: center;
   gap: 4px;
-  margin-left: auto;
+  margin-inline-start: auto;
 }
 
-.icon-button,
-.nav-language {
+.icon-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   height: 34px;
   min-width: 34px;
-  padding: 0 10px;
+  padding: 0;
   border: 0;
   border-radius: 999px;
   background: transparent;
@@ -248,8 +247,165 @@ main {
   cursor: pointer;
 }
 
-.icon-button {
-  padding: 0;
+.nav-language-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.nav-language {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding-block: 0;
+  padding-inline: 11px 9px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-2);
+  font: 500 13px/1 var(--sans);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.nav-language[aria-expanded="true"] {
+  color: var(--ink);
+  background: var(--fill-hover);
+}
+
+.nav-language-icon {
+  width: 15px;
+  height: 15px;
+  opacity: 0.85;
+}
+
+.nav-language-label {
+  line-height: 1.2;
+}
+
+.nav-language-chevron {
+  width: 13px;
+  height: 13px;
+  opacity: 0.65;
+  transition: transform 0.2s var(--ease);
+}
+
+.nav-language[aria-expanded="true"] .nav-language-chevron {
+  transform: rotate(180deg);
+}
+
+.nav-language-menu {
+  position: absolute;
+  top: calc(100% + 10px);
+  inset-inline-end: 0;
+  z-index: 40;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(144px, 1fr));
+  gap: 3px;
+  width: max-content;
+  max-width: calc(100vw - 24px);
+  padding: 6px;
+  border-radius: 16px;
+  /* Solid elevated surface: nested backdrop-filter inside sticky .site-nav
+     cannot blur content outside the nav's backdrop root in Chromium, which
+     would leave unblurred ghost text behind translucent menus. */
+  background: oklch(1 0 0);
+  box-shadow:
+    0 0 0 1px var(--line-strong),
+    0 12px 32px -8px oklch(0.2 0.02 260 / 18%),
+    0 2px 8px -2px oklch(0.2 0.02 260 / 8%);
+  transform-origin: top right;
+  animation: nav-menu-in 0.16s var(--ease);
+}
+
+:root[dir="rtl"] .nav-language-menu {
+  transform-origin: top left;
+}
+
+:root[data-theme="dark"] .nav-language-menu {
+  background: oklch(0.215 0.006 270);
+  box-shadow:
+    0 0 0 1px oklch(1 0 0 / 14%),
+    0 18px 44px -8px rgb(0 0 0 / 56%),
+    0 2px 10px -2px rgb(0 0 0 / 32%);
+}
+
+.nav-language-menu[hidden] {
+  display: none;
+}
+
+@keyframes nav-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.97);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.nav-language-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 36px;
+  padding-block: 6px;
+  padding-inline: 11px 9px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ink-2);
+  font: 500 13.5px/1.25 var(--sans);
+  text-align: start;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.nav-language-option:hover {
+  background: var(--fill);
+  color: var(--ink);
+}
+
+.nav-language-option[aria-selected="true"] {
+  background: var(--blue-tint);
+  color: var(--blue-text);
+  font-weight: 600;
+}
+
+.nav-language-option:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: -2px;
+}
+
+.nav-language-option-label {
+  min-width: 0;
+}
+
+.nav-language-check {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  color: var(--blue-text);
+  opacity: 0;
+  transform: scale(0.8);
+  transition: opacity 0.12s ease, transform 0.15s var(--ease);
+}
+
+.nav-language-option[aria-selected="true"] .nav-language-check {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.nav-language-check .icon {
+  width: 14px;
+  height: 14px;
+  stroke-width: 2.4;
 }
 
 .icon-button .icon {
@@ -356,7 +512,8 @@ main {
   align-items: center;
   gap: 10px;
   margin-bottom: 28px;
-  padding: 6px 10px 6px 14px;
+  padding-block: 6px;
+  padding-inline: 14px 10px;
   border-radius: 999px;
   background: var(--card);
   box-shadow: var(--card-shadow);
@@ -378,6 +535,15 @@ main {
   transform: translateX(2px);
 }
 
+:root[dir="rtl"] .hero-release .icon,
+:root[dir="rtl"] .text-link .icon {
+  transform: scaleX(-1);
+}
+
+:root[dir="rtl"] .hero-release:hover .icon {
+  transform: translateX(-2px) scaleX(-1);
+}
+
 .hero h1 {
   font-size: clamp(44px, 6.6vw, 88px);
   font-weight: 700;
@@ -386,8 +552,23 @@ main {
   text-wrap: balance;
 }
 
-:root[lang="zh"] .hero h1 {
+:root:is([lang="zh"], [lang="zh-TW"], [lang="ja"], [lang="ko"]) .hero h1 {
   letter-spacing: -0.02em;
+}
+
+/* Negative letter-spacing disconnects Arabic and Persian cursive ligatures. */
+:root:is([lang="fa"], [lang="ar"]) :is(
+  .hero h1,
+  .hero-subtitle,
+  .section h2,
+  .section-body,
+  .kicker,
+  .button,
+  .feature-row h3,
+  .download-name,
+  .download-tab-name
+) {
+  letter-spacing: 0;
 }
 
 .hero h1 .accent {
@@ -498,7 +679,7 @@ main {
 
 .phone-float {
   position: absolute;
-  right: 0;
+  inset-inline-end: 0;
   bottom: 0;
   z-index: 2;
   pointer-events: none;
@@ -508,6 +689,10 @@ main {
   width: 380px;
   transform: scale(var(--phone-scale));
   transform-origin: bottom right;
+}
+
+:root[dir="rtl"] .phone-float .phone-demo-stage {
+  transform-origin: bottom left;
 }
 
 .phone-float .phone-frame {
@@ -539,7 +724,7 @@ main {
 .demo-caption > span:not(.status-dot) + span::before,
 .demo-caption strong + span::before {
   content: "·";
-  margin-right: 10px;
+  margin-inline-end: 10px;
 }
 
 /* ---------- Sections ---------- */
@@ -574,7 +759,7 @@ main {
   text-wrap: balance;
 }
 
-:root[lang="zh"] .section h2 {
+:root:is([lang="zh"], [lang="zh-TW"], [lang="ja"], [lang="ko"]) .section h2 {
   letter-spacing: -0.015em;
 }
 
@@ -597,7 +782,8 @@ main {
 }
 
 .group-label {
-  margin: 0 0 10px 18px;
+  margin: 0 0 10px;
+  margin-inline-start: 18px;
   color: var(--muted);
   font-size: 13px;
   font-weight: 600;
@@ -618,7 +804,8 @@ main {
   display: grid;
   grid-template-columns: 34px minmax(0, 1fr);
   gap: 16px;
-  padding: 18px 22px 18px 18px;
+  padding-block: 18px;
+  padding-inline: 18px 22px;
 }
 
 /* Separators start at the text, not the tile, as in a macOS settings list. */
@@ -626,8 +813,7 @@ main {
   content: "";
   position: absolute;
   top: 0;
-  right: 0;
-  left: 68px;
+  inset-inline: 68px 0;
   height: 1px;
   background: var(--line);
 }
@@ -753,14 +939,14 @@ main {
 
 .bubble-user {
   justify-self: end;
-  border-bottom-right-radius: 6px;
+  border-end-end-radius: 6px;
   background: var(--blue);
   color: #ffffff;
 }
 
 .bubble-agent {
   justify-self: start;
-  border-bottom-left-radius: 6px;
+  border-end-start-radius: 6px;
   background: var(--fill);
   color: var(--ink);
 }
@@ -792,7 +978,7 @@ main {
 
 .tool-ok {
   display: inline-flex;
-  margin-left: auto;
+  margin-inline-start: auto;
   color: var(--green);
 }
 
@@ -849,7 +1035,7 @@ main {
   flex-direction: column;
   gap: 8px;
   padding: 16px;
-  border-right: 1px solid var(--line);
+  border-inline-end: 1px solid var(--line);
   background: var(--bg);
 }
 
@@ -869,7 +1055,7 @@ main {
   background: transparent;
   color: inherit;
   font: inherit;
-  text-align: left;
+  text-align: start;
   cursor: pointer;
   transition: background-color 0.15s ease, box-shadow 0.15s ease;
 }
@@ -1020,7 +1206,7 @@ main {
   align-items: center;
   gap: 2px;
   flex: none;
-  margin-left: auto;
+  margin-inline-start: auto;
   padding: 3px;
   border-radius: 10px;
   background: var(--bg);
@@ -1323,11 +1509,16 @@ main {
   .demo-screen iframe,
   .download-tab,
   .download-tab-icon,
-  .download-arch-option {
+  .download-arch-option,
+  .nav-language,
+  .nav-language-chevron,
+  .nav-language-option,
+  .nav-language-check {
     transition: none;
   }
 
-  .download-pane {
+  .download-pane,
+  .nav-language-menu {
     animation: none;
   }
 
@@ -1407,7 +1598,7 @@ main {
     grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 6px;
     padding: 8px;
-    border-right: 0;
+    border-inline-end: 0;
     border-bottom: 1px solid var(--line);
   }
 
@@ -1445,7 +1636,7 @@ main {
   .download-current-dot {
     position: absolute;
     top: 8px;
-    right: 8px;
+    inset-inline-end: 8px;
     width: 6px;
     height: 6px;
   }
@@ -1471,6 +1662,12 @@ main {
 
   .nav-inner {
     height: 52px;
+  }
+
+  .nav-language-menu {
+    grid-template-columns: repeat(2, minmax(126px, 1fr));
+    max-height: min(68vh, 420px);
+    overflow-y: auto;
   }
 
   .hero {
@@ -1516,11 +1713,12 @@ main {
   }
 
   .feature-row {
-    padding: 16px 18px 16px 16px;
+    padding-block: 16px;
+    padding-inline: 16px 18px;
   }
 
   .feature-row + .feature-row::before {
-    left: 66px;
+    inset-inline: 66px 0;
   }
 
   .chat {
@@ -1539,7 +1737,7 @@ main {
 
   .download-arch-group {
     width: 100%;
-    margin-left: 0;
+    margin-inline-start: 0;
   }
 
   .download-arch-option {

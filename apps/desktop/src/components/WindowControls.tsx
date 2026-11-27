@@ -193,7 +193,7 @@ export function WindowControls() {
     <div
       // 14px from the top as from the left: the 20px hit target starts 10px
       // down, so the 12px light sits 14px below the window's top edge.
-      className="flex h-full shrink-0 items-start pl-2.5 pt-2.5"
+      className="flex h-full shrink-0 items-start ps-2.5 pt-2.5"
       data-testid="window-controls"
       data-hovered={hovered ? "true" : undefined}
     >

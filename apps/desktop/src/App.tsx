@@ -55,6 +55,7 @@ import {
 } from "@platform/windowChrome";
 import { useIsMobile } from "@/hooks/use-mobile";
 import {
+  isRtlLanguage,
   readLanguagePreference,
   t,
   useLanguagePreference,
@@ -400,7 +401,13 @@ function App() {
 }
 
 /** Collapse the sidebar to its icon rail, or expand it back to labels. */
-function SidebarCollapseToggle({ className }: { className?: string }) {
+function SidebarCollapseToggle({
+  className,
+  rtl,
+}: {
+  className?: string;
+  rtl: boolean;
+}) {
   const { open, toggleSidebar } = useSidebar();
   const label = t(open ? "app.nav.collapse" : "app.nav.expand");
   // Not a SidebarMenu: the toggle is window chrome, not a navigation entry,
@@ -411,7 +418,7 @@ function SidebarCollapseToggle({ className }: { className?: string }) {
   return (
     <SidebarMenuButton
       type="button"
-      tooltip={label}
+      tooltip={{ children: label, side: rtl ? "left" : "right" }}
       aria-label={label}
       aria-expanded={open}
       data-testid="sidebar-collapse-toggle"
@@ -426,9 +433,9 @@ function SidebarCollapseToggle({ className }: { className?: string }) {
       onClick={toggleSidebar}
     >
       {open ? (
-        <ChevronsLeft aria-hidden="true" />
+        <ChevronsLeft className="rtl:rotate-180" aria-hidden="true" />
       ) : (
-        <ChevronsRight aria-hidden="true" />
+        <ChevronsRight className="rtl:rotate-180" aria-hidden="true" />
       )}
     </SidebarMenuButton>
   );
@@ -670,6 +677,8 @@ function AppShell() {
 
   const phone = isPhoneShell();
   const desktop = isDesktopShell();
+  const rtl = isRtlLanguage(resolved);
+  const macosRtlTitlebar = rtl && detectWindowChrome() === "macos-overlay";
   const navItems = NAV_ITEMS.filter((item) => {
     if (item.id === "mcp") return desktop;
     if (item.id === "connections") return !phone;
@@ -848,7 +857,7 @@ function AppShell() {
         <div className="flex min-h-0 min-w-0 flex-1">
           <Sidebar
             collapsible="icon"
-            side="left"
+            side={rtl ? "right" : "left"}
             variant="sidebar"
             className={phone ? undefined : "border-sidebar-border"}
           >
@@ -865,7 +874,10 @@ function AppShell() {
                         isActive={tab === id}
                         aria-label={t(labelKey)}
                         aria-current={tab === id ? "page" : undefined}
-                        tooltip={t(labelKey)}
+                        tooltip={{
+                          children: t(labelKey),
+                          side: rtl ? "left" : "right",
+                        }}
                         className={NAV_BUTTON_CLASS}
                         onClick={() => selectTab(id)}
                       >
@@ -886,7 +898,7 @@ function AppShell() {
                   data-tauri-drag-region
                   data-testid="app-brand-row"
                 >
-                  {/* Collapse toggle on the brand row: at its right edge when
+                  {/* Collapse toggle on the brand row: at its trailing edge when
                       expanded (the logo and name stay centred), stacked above
                       the logo on the narrow collapsed rail. */}
                   {phone ? null : (
@@ -895,9 +907,12 @@ function AppShell() {
                     // -mt-3 (-12px) instead of the exact -mt-[14px] (half of
                     // 28px / size-7): the row's optical middle, the "ice-box"
                     // text, sits a little below the logo's box centre.
-                    <SidebarCollapseToggle className="absolute top-1/2 -right-3 -mt-3 size-7! rounded-md group-data-[collapsible=icon]:static group-data-[collapsible=icon]:mt-0 group-data-[collapsible=icon]:size-7! group-data-[collapsible=icon]:rounded-md group-data-[collapsible=icon]:[&_svg:not(.nav-icon)]:size-4!" />
+                    <SidebarCollapseToggle
+                      rtl={rtl}
+                      className="absolute top-1/2 -end-3 -mt-3 size-7! rounded-md group-data-[collapsible=icon]:static group-data-[collapsible=icon]:mt-0 group-data-[collapsible=icon]:size-7! group-data-[collapsible=icon]:rounded-md group-data-[collapsible=icon]:[&_svg:not(.nav-icon)]:size-4!"
+                    />
                   )}
-                  {/* The update arrow is a badge on the logo's bottom-right
+                  {/* The update arrow is a badge on the logo's bottom-end
                       corner, positioned out of flow, so the logo stays put
                       when an update turns up (expanded or collapsed). */}
                   <div className="relative shrink-0">
@@ -907,8 +922,8 @@ function AppShell() {
                         type="button"
                         // The switch art fills only the middle of its 48px
                         // box; these offsets land the badge on the art's
-                        // bottom-right corner rather than below it.
-                        className="absolute -right-1.5 bottom-0.5 z-10 flex size-[18px] items-center justify-center rounded-full bg-sidebar text-ok outline-none hover:text-ok/80 focus-visible:ring-2 focus-visible:ring-ring"
+                        // bottom-end corner rather than below it.
+                        className="absolute -end-1.5 bottom-0.5 z-10 flex size-[18px] items-center justify-center rounded-full bg-sidebar text-ok outline-none hover:text-ok/80 focus-visible:ring-2 focus-visible:ring-ring"
                         aria-label={t("app.updateAvailableAria", {
                           version: availableUpdate.version,
                         })}
@@ -942,12 +957,18 @@ function AppShell() {
               "flex min-h-0 min-w-0 flex-1 flex-col",
               // Pages slide up under the empty title bar and use that height;
               // page actions sit in a toolbar row inside the content instead.
-              // The caption strip (z-20) stays on top; the sidebar strip
-              // remains the drag region.
-              !phone && "relative z-10 -mt-12",
+              // In RTL on macOS, native traffic lights stay on the top-left,
+              // so keep the content below the title bar strip.
+              !phone && !macosRtlTitlebar && "relative z-10 -mt-12",
             )}
-            onMouseDown={phone ? undefined : onContentTitlebarMouseDown}
-            onDoubleClick={phone ? undefined : onContentTitlebarDoubleClick}
+            onMouseDown={
+              phone || macosRtlTitlebar ? undefined : onContentTitlebarMouseDown
+            }
+            onDoubleClick={
+              phone || macosRtlTitlebar
+                ? undefined
+                : onContentTitlebarDoubleClick
+            }
             data-testid="app-content"
             ref={contentRef}
             data-pinned={pinnedContentWidth == null ? undefined : "true"}
@@ -964,12 +985,12 @@ function AppShell() {
                 </h2>
                 <div
                   data-titlebar-actions
-                  className="ml-auto flex shrink-0 items-center"
+                  className="ms-auto flex shrink-0 items-center"
                 >
                   <TitlebarActionSlots
                     items={slotItems}
                     tab={tab}
-                    padding="not-empty:pr-3"
+                    padding="not-empty:pe-3"
                   />
                 </div>
               </header>
@@ -985,12 +1006,12 @@ function AppShell() {
             >
               {phone ? null : (
                 // Page actions (batch test, import, add rule) float at the
-                // bottom right of the content. Hidden while the current page
-                // puts nothing in its slot.
+                // bottom-end corner of the content. Hidden while the current
+                // page puts nothing in its slot.
                 <div
                   data-titlebar-actions
                   data-page-toolbar
-                  className="absolute right-6 bottom-6 z-30 flex items-center gap-2"
+                  className="absolute end-6 bottom-6 z-30 flex items-center gap-2"
                 >
                   <TitlebarActionSlots items={slotItems} tab={tab} padding="" />
                 </div>

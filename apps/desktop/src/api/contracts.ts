@@ -2,6 +2,7 @@
 
 /** Platform-neutral DTOs and application API. No transport imports. */
 import type { ErrorCode } from "./errorCodes";
+import type { LanguagePreference, ResolvedLanguage } from "../lib/language";
 
 
 export type CoreStatus =
@@ -221,7 +222,7 @@ export type AppSettings = {
   tun: TunSettings;
   auto_default_rules: boolean;
   /** "system" follows the OS locale; otherwise an explicit UI language. */
-  language: "system" | "zh" | "en";
+  language: LanguagePreference;
   /** Background update checks and the auto prompt. Defaults to on. */
   check_app_updates: boolean;
   /**
@@ -349,7 +350,7 @@ export type SettingsPatch = {
   app_proxies?: Record<string, AppProxyMode>;
   tun?: Partial<TunSettings> & { interface_name?: string | null };
   auto_default_rules?: boolean;
-  language?: "system" | "zh" | "en";
+  language?: LanguagePreference;
   check_app_updates?: boolean;
   probe_exit_ip?: boolean;
   tray_display_mode?: TrayDisplayMode;
@@ -598,7 +599,7 @@ export interface DesktopShellApi {
    */
   exportCoreLog(): Promise<"saved" | "cancelled">;
   listenAppUpdateProgress(handler: (payload: UpdateProgressPayload) => void): Promise<() => void>;
-  setTrayLanguage(language: "zh" | "en"): Promise<void>;
+  setTrayLanguage(language: ResolvedLanguage): Promise<void>;
   setTrayUpdateAvailable(version: string | null): Promise<void>;
   /** Home is visible. Desktop status polls refresh live group `now` only then. */
   setHomeActive(active: boolean): Promise<void>;

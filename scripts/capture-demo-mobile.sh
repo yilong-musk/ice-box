@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Capture the phone Home view in the website phone shell as a
-# local source for the composed README product shot (hero*.png):
+# local source for the composed README product shot (hero*.webp):
 #   docs/images/mobile-home.png      mobile-home.zh-CN.png
 # These captures are ignored by git.
 # Recaptures when the mobile package version differs from

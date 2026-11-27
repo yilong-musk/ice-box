@@ -452,7 +452,7 @@ try {
   await frame.locator('[data-active="true"]:has(> [data-testid="home-panel"])').waitFor();
 
   // Verify the download section's tablist navigation, Linux arch switcher, and
-  // uniform desktop height before and after toggling the page language.
+  // uniform desktop height before and after switching the page language.
   await page.locator("#download").scrollIntoViewIfNeeded();
   await page.evaluate(() => document.fonts.ready);
   await waitForAttribute(page.locator(".download-rail"), "aria-orientation", "vertical");
@@ -490,7 +490,12 @@ try {
     );
   }
 
-  await page.locator(".nav-language").click();
+  async function pickSiteLanguage(code) {
+    await page.locator(".nav-language").click();
+    await page.locator(`.nav-language-option[data-language="${code}"]`).click();
+  }
+
+  await pickSiteLanguage("zh");
   await frame.getByRole("button", { name: "应用", exact: true }).waitFor({
     timeout: 10_000,
   });
@@ -502,6 +507,51 @@ try {
   }
   await waitForText(page.locator('[data-linux-format="appimage"] .download-action'), "下载 AppImage");
   await assertUniformDesktopDownloadPanel(page, "1280px zh");
+
+  // Persian and Arabic switch both the landing page and the embedded phone app to RTL.
+  await pickSiteLanguage("fa");
+  await waitForAttribute(page.locator("html"), "dir", "rtl");
+  await waitForAttribute(frame.locator("html"), "dir", "rtl");
+  await frame.getByRole("button", { name: "برنامه‌ها", exact: true }).waitFor({
+    timeout: 10_000,
+  });
+
+  await pickSiteLanguage("ar");
+  await waitForAttribute(page.locator("html"), "dir", "rtl");
+  await waitForAttribute(frame.locator("html"), "dir", "rtl");
+  await waitForAttribute(frame.locator("html"), "lang", "ar");
+
+  // Switching back to an LTR locale restores `dir="ltr"` everywhere.
+  await pickSiteLanguage("en");
+  await waitForAttribute(page.locator("html"), "dir", "ltr");
+  await waitForAttribute(frame.locator("html"), "dir", "ltr");
+
+  // Keyboard navigation on the language popover: clicking opens it with focus
+  // on the trigger, ArrowDown moves into the selected option, and Tab closes
+  // the menu while advancing focus cleanly rather than dropping it to <body>.
+  await page.locator(".nav-language").click();
+  await page.keyboard.press("ArrowDown");
+  const focusedLang = await page.evaluate(
+    () => document.activeElement?.getAttribute("data-language") ?? null,
+  );
+  if (focusedLang !== "en") {
+    throw new Error(
+      `ArrowDown after opening language menu must focus active option "en", got ${JSON.stringify(focusedLang)}`,
+    );
+  }
+  await page.keyboard.press("Tab");
+  const tabResult = await page.evaluate(() => ({
+    menuHidden: document.querySelector(".nav-language-menu")?.hasAttribute("hidden") ?? false,
+    activeTag: document.activeElement?.tagName ?? null,
+    insideMenu: Boolean(
+      document.querySelector(".nav-language-menu")?.contains(document.activeElement),
+    ),
+  }));
+  if (!tabResult.menuHidden || tabResult.insideMenu || tabResult.activeTag === "BODY") {
+    throw new Error(
+      `Tab inside language menu must close it and advance focus cleanly, got ${JSON.stringify(tabResult)}`,
+    );
+  }
 
   // Theme changes travel through the same storage bridge as the language: the
   // frame follows a write from the app, and the app follows a write from the
@@ -518,6 +568,21 @@ try {
     window.localStorage.setItem("ice-box.theme", "light");
   });
   await waitForTheme(frame, false);
+  // Returning to a previously visited Settings tab (<Activity mode="hidden">)
+  // must keep the light theme instead of re-applying its stale dark state.
+  await frame
+    .getByTestId("phone-tab-bar")
+    .getByRole("button", { name: "Settings", exact: true })
+    .click();
+  await frame
+    .locator('[data-testid="settings-stack"][data-loaded="true"]')
+    .waitFor({ timeout: 15_000 });
+  await waitForTheme(frame, false);
+  if ((await frame.locator("#settings-theme").inputValue()) !== "light") {
+    throw new Error(
+      `Settings theme select must reflect "light" after returning from hidden Activity, got ${JSON.stringify(await frame.locator("#settings-theme").inputValue())}`,
+    );
+  }
 
   if (errors.length > 0) {
     throw new Error(`browser console errors:\n${errors.join("\n")}`);
@@ -548,6 +613,33 @@ try {
   }
   await captureContext.close();
   await verifyDownloadDesktopAndMobile(browser);
+
+  // Initial load with an RTL preference must set `lang`, `dir="rtl"`, and the
+  // stored dark theme on the landing page and both embedded demo iframes before
+  // any language switch happens.
+  const rtlContext = await browser.newContext({
+    viewport: { width: 1280, height: 1000 },
+    colorScheme: "dark",
+    locale: "ar-SA",
+  });
+  await rtlContext.addInitScript(() => {
+    window.localStorage.setItem("ice-box.theme", "dark");
+    window.localStorage.setItem("ice-box.language", "ar");
+  });
+  const rtlPage = await rtlContext.newPage();
+  await rtlPage.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
+  const rtlDesktopFrame = rtlPage.frameLocator(".demo-screen iframe");
+  const rtlPhoneFrame = rtlPage.frameLocator(".phone-viewport iframe");
+  await rtlDesktopFrame.locator('[data-testid="home-panel"]').waitFor({ timeout: 30_000 });
+  await rtlPhoneFrame.locator('[data-testid="phone-shell"]').waitFor({ timeout: 30_000 });
+  await waitForAttribute(rtlPage.locator("html"), "dir", "rtl");
+  await waitForAttribute(rtlDesktopFrame.locator("html"), "lang", "ar");
+  await waitForAttribute(rtlDesktopFrame.locator("html"), "dir", "rtl");
+  await waitForTheme(rtlDesktopFrame, true);
+  await waitForAttribute(rtlPhoneFrame.locator("html"), "lang", "ar");
+  await waitForAttribute(rtlPhoneFrame.locator("html"), "dir", "rtl");
+  await waitForTheme(rtlPhoneFrame, true);
+  await rtlContext.close();
 
   console.log("smoke-mobile-demo: OK");
 } catch (error) {

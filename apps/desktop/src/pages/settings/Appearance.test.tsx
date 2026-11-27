@@ -44,6 +44,28 @@ describe("AppearanceCard", () => {
     });
     expect(onLanguageChange).toHaveBeenCalledWith("en");
 
+    for (const next of [
+      "zh-TW",
+      "ru",
+      "ja",
+      "fa",
+      "ar",
+      "ko",
+      "tr",
+      "vi",
+      "id",
+      "es",
+      "de",
+      "fr",
+      "pt-BR",
+      "uk",
+    ] as const) {
+      fireEvent.change(within(container).getByLabelText(t("settings.language")), {
+        target: { value: next },
+      });
+      expect(onLanguageChange).toHaveBeenCalledWith(next);
+    }
+
     const tray = within(container).getByLabelText(t("settings.tray"));
     expect(tray).toHaveValue("icon_and_speed");
     fireEvent.change(tray, { target: { value: "speed" } });

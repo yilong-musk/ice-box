@@ -7,8 +7,11 @@ import runningStill from "../../desktop/src/assets/switch-logo/32/running-still.
 import runningStrip from "../../desktop/src/assets/switch-logo/32/running.png";
 import { version as appVersion } from "../../desktop/package.json";
 import {
+  LANGUAGE_LABELS,
   LANGUAGE_STORAGE_KEY,
+  SUPPORTED_LANGUAGES,
   isLanguagePreference,
+  languageDirection,
   resolveLanguage,
 } from "../../desktop/src/lib/language";
 import {
@@ -73,6 +76,8 @@ const ICONS = {
   play: '<path d="M8 5.6v12.8a.8.8 0 0 0 1.2.7l10.2-6.4a.8.8 0 0 0 0-1.4L9.2 4.9A.8.8 0 0 0 8 5.6z"/>',
   arrowRight: '<path d="M5 12h14"/><path d="m13 6 6 6-6 6"/>',
   chevronRight: '<path d="m9.5 6 6 6-6 6"/>',
+  chevronDown: '<path d="m6 9 6 6 6-6"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a13.5 13.5 0 0 1 0 18 13.5 13.5 0 0 1 0-18"/>',
   check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6l1.4 1.4M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4"/>',
@@ -145,7 +150,7 @@ const LINUX_ARCH_OPTIONS = [
   ["arm64", "arm64"],
 ];
 
-const windowLights = `<span class="window-lights" aria-hidden="true"><i></i><i></i><i></i></span>`;
+const windowLights = `<span class="window-lights" dir="ltr" aria-hidden="true"><i></i><i></i><i></i></span>`;
 
 const currentPlatform = detectPlatform(navigator.userAgent, navigator.maxTouchPoints);
 let selectedPlatform = currentPlatform ?? "macos";
@@ -179,7 +184,38 @@ root.innerHTML = `
       <div class="nav-actions">
         <a class="icon-button" href="${REPO_URL}" target="_blank" rel="noreferrer" aria-label="GitHub">${icon("github")}</a>
         <button class="icon-button nav-theme" type="button"><span class="theme-icon theme-icon-dark">${icon("moon")}</span><span class="theme-icon theme-icon-light">${icon("sun")}</span></button>
-        <button class="nav-language" type="button"></button>
+        <div class="nav-language-wrap">
+          <button
+            class="nav-language"
+            type="button"
+            aria-haspopup="listbox"
+            aria-expanded="false"
+            aria-controls="nav-language-menu"
+          >
+            ${icon("globe", "icon nav-language-icon")}
+            <span class="nav-language-label"></span>
+            ${icon("chevronDown", "icon nav-language-chevron")}
+          </button>
+          <div
+            id="nav-language-menu"
+            class="nav-language-menu"
+            role="listbox"
+            hidden
+          >
+            ${SUPPORTED_LANGUAGES.map(
+              (code) => `<button
+              type="button"
+              class="nav-language-option"
+              role="option"
+              data-language="${code}"
+              aria-selected="false"
+            >
+              <span class="nav-language-option-label" lang="${code}" dir="${languageDirection(code)}">${LANGUAGE_LABELS[code]}</span>
+              <span class="nav-language-check" aria-hidden="true">${icon("check", "icon icon-xs")}</span>
+            </button>`,
+            ).join("")}
+          </div>
+        </div>
       </div>
     </div>
   </header>
@@ -203,7 +239,7 @@ root.innerHTML = `
             <div class="phone-frame">
               <span class="phone-sim" aria-hidden="true"></span>
               <div class="phone-screen">
-                <div class="phone-status-bar" aria-hidden="true">
+                <div class="phone-status-bar" dir="ltr" aria-hidden="true">
                   <span class="phone-clock"></span>
                   <div class="phone-status-icons">${phoneStatusIcons}</div>
                 </div>
@@ -261,12 +297,12 @@ root.innerHTML = `
         <div class="window-bar">${windowLights}<span id="agent-window-title" class="window-title">${icon("mcp", "icon icon-xs")}<span ${t("agent.terminalTitle")}></span></span></div>
         <div class="chat">
           <p class="bubble bubble-user" ${t("agent.prompt")}></p>
-          <div class="tool-calls">
+          <div class="tool-calls" dir="ltr">
             <p class="tool-call"><span class="tool-name">ice-box.set_proxy_mode</span><span class="tool-args">{"mode":"global"}</span><span class="tool-ok">${icon("check", "icon icon-xs")}</span></p>
             <p class="tool-call"><span class="tool-name">ice-box.list_connections</span><span class="tool-args">{}</span><span class="tool-ok">${icon("check", "icon icon-xs")}</span></p>
           </div>
           <p class="bubble bubble-agent" ${t("agent.reply")}></p>
-          <p class="config"><span class="cfg-comment">// mcpServers.ice-box</span><br><span class="cfg-key">"command"</span>: <span class="cfg-str">".../ice-box"</span>,<br><span class="cfg-key">"args"</span>: [<span class="cfg-str">"--mcp-stdio"</span>, <span class="cfg-str">"--data-dir"</span>, <span class="cfg-str">"..."</span>]</p>
+          <p class="config" dir="ltr"><span class="cfg-comment">// mcpServers.ice-box</span><br><span class="cfg-key">"command"</span>: <span class="cfg-str">".../ice-box"</span>,<br><span class="cfg-key">"args"</span>: [<span class="cfg-str">"--mcp-stdio"</span>, <span class="cfg-str">"--data-dir"</span>, <span class="cfg-str">"..."</span>]</p>
         </div>
       </div>
     </section>
@@ -372,7 +408,11 @@ const parts = {
   phoneDemoFrame: root.querySelector(".phone-viewport iframe"),
   phoneFrame: root.querySelector(".phone-frame"),
   phoneClock: root.querySelector(".phone-clock"),
+  languageWrap: root.querySelector(".nav-language-wrap"),
   languageToggle: root.querySelector(".nav-language"),
+  languageLabel: root.querySelector(".nav-language-label"),
+  languageMenu: root.querySelector(".nav-language-menu"),
+  languageOptions: Array.from(root.querySelectorAll(".nav-language-option")),
   themeToggle: root.querySelector(".nav-theme"),
   nav: root.querySelector(".site-nav"),
   downloadRail: root.querySelector(".download-rail"),
@@ -713,21 +753,121 @@ function applyCopy(next) {
   parts.demoFrame.title = marketingText("demo.iframeTitle", language);
   parts.phoneDemoFrame.title = marketingText("phoneDemo.iframeTitle", language);
   syncThemeToggle();
-  parts.languageToggle.textContent = marketingText("nav.languageToggle", language);
-  parts.languageToggle.setAttribute(
-    "aria-label",
-    marketingText("nav.languageToggleAria", language),
-  );
+  const languageAria = marketingText("nav.languageAria", language);
+  parts.languageLabel.textContent = LANGUAGE_LABELS[language];
+  parts.languageLabel.setAttribute("lang", language);
+  parts.languageLabel.setAttribute("dir", languageDirection(language));
+  parts.languageToggle.setAttribute("aria-label", languageAria);
+  parts.languageMenu.setAttribute("aria-label", languageAria);
+  for (const option of parts.languageOptions) {
+    option.setAttribute(
+      "aria-selected",
+      option.dataset.language === language ? "true" : "false",
+    );
+  }
 }
 
-parts.languageToggle.addEventListener("click", () => {
-  const next = language === "zh" ? "en" : "zh";
+function isLanguageMenuOpen() {
+  return !parts.languageMenu.hidden;
+}
+
+function openLanguageMenu({ focusSelected = false } = {}) {
+  if (parts.languageMenu.hidden) {
+    parts.languageMenu.hidden = false;
+    parts.languageToggle.setAttribute("aria-expanded", "true");
+  }
+  if (focusSelected) {
+    const active =
+      parts.languageOptions.find((el) => el.dataset.language === language) ??
+      parts.languageOptions[0];
+    active?.focus();
+  }
+}
+
+function closeLanguageMenu({ restoreFocus = false } = {}) {
+  if (parts.languageMenu.hidden) return;
+  parts.languageMenu.hidden = true;
+  parts.languageToggle.setAttribute("aria-expanded", "false");
+  if (restoreFocus) parts.languageToggle.focus();
+}
+
+function selectLanguage(next) {
+  if (!isLanguagePreference(next)) return;
   try {
     window.localStorage.setItem(LANGUAGE_STORAGE_KEY, next);
   } catch {
     // Private mode / blocked storage: the pick still applies for this visit.
   }
-  applyCopy(next);
+  applyCopy(resolveLanguage(next));
+  closeLanguageMenu({ restoreFocus: true });
+}
+
+parts.languageToggle.addEventListener("click", () => {
+  if (isLanguageMenuOpen()) closeLanguageMenu();
+  else openLanguageMenu();
+});
+
+parts.languageToggle.addEventListener("keydown", (event) => {
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    openLanguageMenu({ focusSelected: true });
+  } else if (event.key === "Escape") {
+    closeLanguageMenu();
+  }
+});
+
+parts.languageMenu.addEventListener("click", (event) => {
+  const option = event.target.closest(".nav-language-option");
+  if (!option) return;
+  selectLanguage(option.dataset.language);
+});
+
+parts.languageMenu.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeLanguageMenu({ restoreFocus: true });
+    return;
+  }
+  if (event.key === "Tab") {
+    // Restore focus to the trigger before hiding the menu so the browser's
+    // default Tab/Shift+Tab continues cleanly from the trigger instead of
+    // dropping focus to <body> when the focused option becomes hidden.
+    closeLanguageMenu({ restoreFocus: true });
+    return;
+  }
+  const options = parts.languageOptions;
+  const currentIndex = options.indexOf(document.activeElement);
+  if (currentIndex === -1) return;
+  const cols =
+    window.getComputedStyle(parts.languageMenu).gridTemplateColumns.split(" ")
+      .length || 1;
+  const rtl = document.documentElement.dir === "rtl";
+  let nextIndex = null;
+  if (event.key === "ArrowDown") {
+    nextIndex = (currentIndex + cols) % options.length;
+  } else if (event.key === "ArrowUp") {
+    nextIndex = (currentIndex - cols + options.length) % options.length;
+  } else if (event.key === "ArrowRight") {
+    nextIndex =
+      (currentIndex + (rtl ? -1 : 1) + options.length) % options.length;
+  } else if (event.key === "ArrowLeft") {
+    nextIndex =
+      (currentIndex + (rtl ? 1 : -1) + options.length) % options.length;
+  } else if (event.key === "Home") {
+    nextIndex = 0;
+  } else if (event.key === "End") {
+    nextIndex = options.length - 1;
+  }
+  if (nextIndex !== null) {
+    event.preventDefault();
+    options[nextIndex]?.focus();
+  }
+});
+
+document.addEventListener("pointerdown", (event) => {
+  if (isLanguageMenuOpen() && !parts.languageWrap.contains(event.target)) {
+    closeLanguageMenu();
+  }
 });
 
 // The Live Demo writes `ice-box.language` and `ice-box.theme` when the visitor
