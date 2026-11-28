@@ -54,11 +54,21 @@
 
 **CLI 一鍵安裝**（自動下載對應平台壓縮檔並驗證 `SHA256SUMS`）：
 
-```bash
-# macOS (arm64) / Linux (x64, arm64)
-curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.sh | bash
+**macOS**（Apple Silicon）
 
-# Windows (x64, PowerShell)
+```bash
+curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.sh | bash
+```
+
+**Linux**（x64 / arm64）
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.sh | bash
+```
+
+**Windows**（x64，PowerShell）
+
+```powershell
 irm https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.ps1 | iex
 ```
 

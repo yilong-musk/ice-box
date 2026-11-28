@@ -54,11 +54,21 @@ macOS, Windows, Linux, Android를 위한 가벼운 프록시 클라이언트 —
 
 **CLI 한 줄 설치** (해당 플랫폼 릴리스 아카이브를 다운로드하고 `SHA256SUMS`를 검증합니다):
 
-```bash
-# macOS (arm64) / Linux (x64, arm64)
-curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.sh | bash
+**macOS** (Apple Silicon)
 
-# Windows (x64, PowerShell)
+```bash
+curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.sh | bash
+```
+
+**Linux** (x64 / arm64)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.sh | bash
+```
+
+**Windows** (x64, PowerShell)
+
+```powershell
 irm https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.ps1 | iex
 ```
 
