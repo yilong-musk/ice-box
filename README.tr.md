@@ -17,7 +17,7 @@ macOS, Windows, Linux ve Android için hafif proxy istemcisi — [sing-box](http
 [![Core](https://img.shields.io/badge/sing--box-1.14.4-6f42c1?style=flat-square)](https://github.com/SagerNet/sing-box)
 [![License](https://img.shields.io/github/license/yilong-musk/ice-box?style=flat-square)](LICENSE)
 
-[**İndir**](https://github.com/yilong-musk/ice-box/releases/latest) · [**Canlı Demo**](https://yilong-musk.github.io/ice-box/) · [Kurulum](#kurulum) · [Geliştirme](#geliştirme) · [Belgeler](#belgeler) · [Değişiklik Günlüğü](CHANGELOG.md)
+[**İndir**](https://github.com/yilong-musk/ice-box/releases/latest) · [**Canlı Demo**](https://yilong-musk.github.io/ice-box/) · [Kurulum](#kurulum) · [CLI](#cli) · [Geliştirme](#geliştirme) · [Belgeler](#belgeler) · [Değişiklik Günlüğü](CHANGELOG.md)
 
 [Bahasa Indonesia](README.id.md) · [Deutsch](README.de.md) · [English](README.md) · [Español](README.es.md) · [Français](README.fr.md) · [Português (BR)](README.pt-BR.md) · [Tiếng Việt](README.vi.md) · **Türkçe**<br>[Русский](README.ru.md) · [Українська](README.uk.md) · [العربية](README.ar.md) · [فارسی](README.fa.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [简体中文](README.zh-CN.md) · [繁體中文](README.zh-TW.md)
 
@@ -50,9 +50,13 @@ macOS, Windows, Linux ve Android için hafif proxy istemcisi — [sing-box](http
 | **Windows** (x64) | Windows 10+ | `ice-box_<version>_x64-setup.exe` | Kullanıcı bazlı NSIS yükleyicisi (imzasız; SmartScreen'i onaylayın). TUN yalnızca IPv4 TCP destekler ve Yönetici gerektirir. |
 | **Linux** (x64 / arm64) | Ubuntu 22.04+ | `.AppImage` / `.deb` | `chmod +x *.AppImage` veya `sudo apt install ./ice-box_*.deb`. GNOME tepsi simgesi için `gnome-shell-extension-appindicator` gerekir. |
 | **Android** (arm64) | Android 14+ | `ice-box_<version>_android_arm64.apk` | Proje anahtar deposuyla (keystore) imzalıdır; bu kaynaktan kuruluma izin verin. |
-| **CLI** (macOS / Windows / Linux) | macOS 12+ / Win 10+ / Ubuntu 22.04+ | `ice-box-cli_<version>_<os>_<arch>.tar.gz` / `.zip` | Dahili `sing-box` ile arayüzsüz CLI ve arka plan servisi ([`docs/cli.md`](docs/cli.md)). |
 
-**Tek satırda CLI kurulumu** (uygun sürüm arşivini indirir ve `SHA256SUMS` doğrular):
+- **Hızlı başlangıç**: Abonelik içe aktarın (**Abonelikler**) → mod ve düğüm seçin (**Ana Sayfa** / **Düğümler**) → güç düğmesine basın. Abonelik olmadan doğrudan modda çalışır.
+- **Güncellemeler**: **Ayarlar → Uygulama Güncellemeleri** üzerinden imzalı uygulama içi güncellemeler (`.deb`, `apt` için Releases sayfasını açar; Android sistem kurulumu için APK indirir).
+
+## CLI
+
+Dahili `sing-box` ile arayüzsüz CLI ve arka plan servisi ([`docs/cli.md`](docs/cli.md)). Uygun sürüm arşivini indirir ve `SHA256SUMS` doğrular.
 
 **macOS** (Apple Silicon) / **Linux** (x64 / arm64)
 
@@ -65,9 +69,6 @@ curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/in
 ```powershell
 irm https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.ps1 | iex
 ```
-
-- **Hızlı başlangıç**: Abonelik içe aktarın (**Abonelikler**) → mod ve düğüm seçin (**Ana Sayfa** / **Düğümler**) → güç düğmesine basın. Abonelik olmadan doğrudan modda çalışır.
-- **Güncellemeler**: **Ayarlar → Uygulama Güncellemeleri** üzerinden imzalı uygulama içi güncellemeler (`.deb`, `apt` için Releases sayfasını açar; Android sistem kurulumu için APK indirir).
 
 ## Geliştirme
 

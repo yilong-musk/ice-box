@@ -17,7 +17,7 @@
 [![Core](https://img.shields.io/badge/sing--box-1.14.4-6f42c1?style=flat-square)](https://github.com/SagerNet/sing-box)
 [![License](https://img.shields.io/github/license/yilong-musk/ice-box?style=flat-square)](LICENSE)
 
-[**Tải xuống**](https://github.com/yilong-musk/ice-box/releases/latest) · [**Demo trực tiếp**](https://yilong-musk.github.io/ice-box/) · [Cài đặt](#cài-đặt) · [Phát triển](#phát-triển) · [Tài liệu](#tài-liệu) · [Nhật ký thay đổi](CHANGELOG.md)
+[**Tải xuống**](https://github.com/yilong-musk/ice-box/releases/latest) · [**Demo trực tiếp**](https://yilong-musk.github.io/ice-box/) · [Cài đặt](#cài-đặt) · [CLI](#cli) · [Phát triển](#phát-triển) · [Tài liệu](#tài-liệu) · [Nhật ký thay đổi](CHANGELOG.md)
 
 [Bahasa Indonesia](README.id.md) · [Deutsch](README.de.md) · [English](README.md) · [Español](README.es.md) · [Français](README.fr.md) · [Português (BR)](README.pt-BR.md) · **Tiếng Việt** · [Türkçe](README.tr.md)<br>[Русский](README.ru.md) · [Українська](README.uk.md) · [العربية](README.ar.md) · [فارسی](README.fa.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [简体中文](README.zh-CN.md) · [繁體中文](README.zh-TW.md)
 
@@ -50,9 +50,13 @@ Tải từ [GitHub Releases](https://github.com/yilong-musk/ice-box/releases/lat
 | **Windows** (x64) | Windows 10+ | `ice-box_<version>_x64-setup.exe` | Bộ cài NSIS theo từng người dùng (chưa ký; xác nhận SmartScreen). TUN chỉ hỗ trợ IPv4 TCP và yêu cầu quyền Quản trị viên. |
 | **Linux** (x64 / arm64) | Ubuntu 22.04+ | `.AppImage` / `.deb` | `chmod +x *.AppImage` hoặc `sudo apt install ./ice-box_*.deb`. Khay hệ thống GNOME cần `gnome-shell-extension-appindicator`. |
 | **Android** (arm64) | Android 14+ | `ice-box_<version>_android_arm64.apk` | Ký bằng keystore của dự án; cho phép cài đặt từ nguồn này. |
-| **CLI** (macOS / Windows / Linux) | macOS 12+ / Win 10+ / Ubuntu 22.04+ | `ice-box-cli_<version>_<os>_<arch>.tar.gz` / `.zip` | CLI & daemon không giao diện kèm sẵn `sing-box` ([`docs/cli.md`](docs/cli.md)). |
 
-**Cài đặt nhanh CLI** (tự tải gói nén tương ứng và kiểm tra `SHA256SUMS`):
+- **Bắt đầu nhanh**: Nhập gói đăng ký (**Gói đăng ký**) → chọn chế độ & nút (**Trang chủ** / **Nút**) → nhấn nút nguồn. Hoạt động ở chế độ trực tiếp khi chưa có gói đăng ký.
+- **Cập nhật**: Cập nhật trong ứng dụng có ký số tại **Cài đặt → Cập nhật ứng dụng** (`.deb` mở trang Releases cho `apt`; Android tải APK để trình cài đặt hệ thống xử lý).
+
+## CLI
+
+CLI và daemon không giao diện kèm sẵn `sing-box` ([`docs/cli.md`](docs/cli.md)). Tự tải gói nén tương ứng và kiểm tra `SHA256SUMS`.
 
 **macOS** (Apple Silicon) / **Linux** (x64 / arm64)
 
@@ -65,9 +69,6 @@ curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/in
 ```powershell
 irm https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.ps1 | iex
 ```
-
-- **Bắt đầu nhanh**: Nhập gói đăng ký (**Gói đăng ký**) → chọn chế độ & nút (**Trang chủ** / **Nút**) → nhấn nút nguồn. Hoạt động ở chế độ trực tiếp khi chưa có gói đăng ký.
-- **Cập nhật**: Cập nhật trong ứng dụng có ký số tại **Cài đặt → Cập nhật ứng dụng** (`.deb` mở trang Releases cho `apt`; Android tải APK để trình cài đặt hệ thống xử lý).
 
 ## Phát triển
 

@@ -17,7 +17,7 @@
 [![Core](https://img.shields.io/badge/sing--box-1.14.4-6f42c1?style=flat-square)](https://github.com/SagerNet/sing-box)
 [![License](https://img.shields.io/github/license/yilong-musk/ice-box?style=flat-square)](LICENSE)
 
-[**下載**](https://github.com/yilong-musk/ice-box/releases/latest) · [**即時演示**](https://yilong-musk.github.io/ice-box/) · [安裝](#安裝) · [開發](#開發) · [文件](#文件) · [更新日誌](CHANGELOG.md)
+[**下載**](https://github.com/yilong-musk/ice-box/releases/latest) · [**即時演示**](https://yilong-musk.github.io/ice-box/) · [安裝](#安裝) · [CLI](#cli) · [開發](#開發) · [文件](#文件) · [更新日誌](CHANGELOG.md)
 
 [Bahasa Indonesia](README.id.md) · [Deutsch](README.de.md) · [English](README.md) · [Español](README.es.md) · [Français](README.fr.md) · [Português (BR)](README.pt-BR.md) · [Tiếng Việt](README.vi.md) · [Türkçe](README.tr.md)<br>[Русский](README.ru.md) · [Українська](README.uk.md) · [العربية](README.ar.md) · [فارسی](README.fa.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [简体中文](README.zh-CN.md) · **繁體中文**
 
@@ -50,9 +50,13 @@
 | **Windows**（x64） | Windows 10+ | `ice-box_<version>_x64-setup.exe` | 單一使用者 NSIS 安裝程式（未簽章，需於 SmartScreen 確認）。TUN 僅支援 IPv4 TCP 且需系統管理員權限。 |
 | **Linux**（x64 / arm64） | Ubuntu 22.04+ | `.AppImage` / `.deb` | `chmod +x *.AppImage` 或 `sudo apt install ./ice-box_*.deb`。GNOME 系統匣需安裝 `gnome-shell-extension-appindicator`。 |
 | **Android**（arm64） | Android 14+ | `ice-box_<version>_android_arm64.apk` | 使用專案金鑰庫簽署；安裝時需允許此來源。 |
-| **CLI**（macOS / Windows / Linux） | macOS 12+ / Win 10+ / Ubuntu 22.04+ | `ice-box-cli_<version>_<os>_<arch>.tar.gz` / `.zip` | 內建 `sing-box` 的無頭 CLI 與背景服務（[`docs/cli.md`](docs/cli.md)）。 |
 
-**CLI 一鍵安裝**（自動下載對應平台壓縮檔並驗證 `SHA256SUMS`）：
+- **快速上手**：在 **訂閱** 匯入連結 → 在 **首頁** / **節點** 選擇模式與節點 → 按下電源按鈕；無訂閱時以直連模式啟動。
+- **更新**：透過 **設定 → 應用程式更新** 進行簽章驗證的應用程式內更新（`.deb` 開啟 Releases 頁面由 `apt` 管理；Android 下載 APK 交由系統安裝）。
+
+## CLI
+
+內建 `sing-box` 的無頭 CLI 與背景服務（[`docs/cli.md`](docs/cli.md)）。安裝腳本會自動下載對應平台壓縮檔並驗證 `SHA256SUMS`。
 
 **macOS**（Apple Silicon）/ **Linux**（x64 / arm64）
 
@@ -65,9 +69,6 @@ curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/in
 ```powershell
 irm https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.ps1 | iex
 ```
-
-- **快速上手**：在 **訂閱** 匯入連結 → 在 **首頁** / **節點** 選擇模式與節點 → 按下電源按鈕；無訂閱時以直連模式啟動。
-- **更新**：透過 **設定 → 應用程式更新** 進行簽章驗證的應用程式內更新（`.deb` 開啟 Releases 頁面由 `apt` 管理；Android 下載 APK 交由系統安裝）。
 
 ## 開發
 

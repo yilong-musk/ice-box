@@ -17,7 +17,7 @@ Klien proksi ringan untuk macOS, Windows, Linux, dan Android — dibangun di ata
 [![Core](https://img.shields.io/badge/sing--box-1.14.4-6f42c1?style=flat-square)](https://github.com/SagerNet/sing-box)
 [![License](https://img.shields.io/github/license/yilong-musk/ice-box?style=flat-square)](LICENSE)
 
-[**Unduh**](https://github.com/yilong-musk/ice-box/releases/latest) · [**Demo Langsung**](https://yilong-musk.github.io/ice-box/) · [Pemasangan](#pemasangan) · [Pengembangan](#pengembangan) · [Dokumentasi](#dokumentasi) · [Catatan Perubahan](CHANGELOG.md)
+[**Unduh**](https://github.com/yilong-musk/ice-box/releases/latest) · [**Demo Langsung**](https://yilong-musk.github.io/ice-box/) · [Pemasangan](#pemasangan) · [CLI](#cli) · [Pengembangan](#pengembangan) · [Dokumentasi](#dokumentasi) · [Catatan Perubahan](CHANGELOG.md)
 
 **Bahasa Indonesia** · [Deutsch](README.de.md) · [English](README.md) · [Español](README.es.md) · [Français](README.fr.md) · [Português (BR)](README.pt-BR.md) · [Tiếng Việt](README.vi.md) · [Türkçe](README.tr.md)<br>[Русский](README.ru.md) · [Українська](README.uk.md) · [العربية](README.ar.md) · [فارسی](README.fa.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [简体中文](README.zh-CN.md) · [繁體中文](README.zh-TW.md)
 
@@ -50,9 +50,13 @@ Unduh dari [GitHub Releases](https://github.com/yilong-musk/ice-box/releases/lat
 | **Windows** (x64) | Windows 10+ | `ice-box_<version>_x64-setup.exe` | Pemasang NSIS per pengguna (tanpa tanda tangan; konfirmasi SmartScreen). TUN hanya IPv4 TCP dan memerlukan Administrator. |
 | **Linux** (x64 / arm64) | Ubuntu 22.04+ | `.AppImage` / `.deb` | `chmod +x *.AppImage` atau `sudo apt install ./ice-box_*.deb`. Baki GNOME memerlukan `gnome-shell-extension-appindicator`. |
 | **Android** (arm64) | Android 14+ | `ice-box_<version>_android_arm64.apk` | Ditandatangani dengan keystore proyek; izinkan pemasangan dari sumber ini. |
-| **CLI** (macOS / Windows / Linux) | macOS 12+ / Win 10+ / Ubuntu 22.04+ | `ice-box-cli_<version>_<os>_<arch>.tar.gz` / `.zip` | CLI & daemon tanpa GUI dengan `sing-box` bawaan ([`docs/cli.md`](docs/cli.md)). |
 
-**Pemasangan cepat CLI** (mengunduh arsip rilis yang sesuai dan memverifikasi `SHA256SUMS`):
+- **Mulai cepat**: Impor langganan (**Langganan**) → pilih mode & node (**Beranda** / **Node**) → tekan tombol daya. Berjalan dalam mode langsung saja tanpa langganan.
+- **Pembaruan**: Pembaruan dalam aplikasi bertanda tangan di **Setelan → Pembaruan Aplikasi** (`.deb` membuka Releases untuk `apt`; Android mengunduh APK untuk pemasangan sistem).
+
+## CLI
+
+CLI dan daemon tanpa GUI dengan `sing-box` bawaan ([`docs/cli.md`](docs/cli.md)). Mengunduh arsip rilis yang sesuai dan memverifikasi `SHA256SUMS`.
 
 **macOS** (Apple Silicon) / **Linux** (x64 / arm64)
 
@@ -65,9 +69,6 @@ curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/in
 ```powershell
 irm https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.ps1 | iex
 ```
-
-- **Mulai cepat**: Impor langganan (**Langganan**) → pilih mode & node (**Beranda** / **Node**) → tekan tombol daya. Berjalan dalam mode langsung saja tanpa langganan.
-- **Pembaruan**: Pembaruan dalam aplikasi bertanda tangan di **Setelan → Pembaruan Aplikasi** (`.deb` membuka Releases untuk `apt`; Android mengunduh APK untuk pemasangan sistem).
 
 ## Pengembangan
 

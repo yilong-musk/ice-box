@@ -17,7 +17,7 @@
 [![Core](https://img.shields.io/badge/sing--box-1.14.4-6f42c1?style=flat-square)](https://github.com/SagerNet/sing-box)
 [![License](https://img.shields.io/github/license/yilong-musk/ice-box?style=flat-square)](LICENSE)
 
-[**دانلود**](https://github.com/yilong-musk/ice-box/releases/latest) · [**دموی زنده**](https://yilong-musk.github.io/ice-box/) · [نصب](#نصب) · [توسعه](#توسعه) · [مستندات](#مستندات) · [تاریخچه تغییرات](CHANGELOG.md)
+[**دانلود**](https://github.com/yilong-musk/ice-box/releases/latest) · [**دموی زنده**](https://yilong-musk.github.io/ice-box/) · [نصب](#نصب) · [CLI](#cli) · [توسعه](#توسعه) · [مستندات](#مستندات) · [تاریخچه تغییرات](CHANGELOG.md)
 
 [Bahasa Indonesia](README.id.md) · [Deutsch](README.de.md) · [English](README.md) · [Español](README.es.md) · [Français](README.fr.md) · [Português (BR)](README.pt-BR.md) · [Tiếng Việt](README.vi.md) · [Türkçe](README.tr.md)<br>[Русский](README.ru.md) · [Українська](README.uk.md) · [العربية](README.ar.md) · **فارسی** · [日本語](README.ja.md) · [한국어](README.ko.md) · [简体中文](README.zh-CN.md) · [繁體中文](README.zh-TW.md)
 
@@ -50,9 +50,13 @@
 | **Windows** (x64) | Windows 10+ | `ice-box_<version>_x64-setup.exe` | نصب‌کننده NSIS ویژه کاربر (بدون امضا؛ SmartScreen را تایید کنید). حالت TUN فقط IPv4 TCP است و به Administrator نیاز دارد. |
 | **Linux** (x64 / arm64) | Ubuntu 22.04+ | `.AppImage` / `.deb` | دستور `chmod +x *.AppImage` یا `sudo apt install ./ice-box_*.deb` را اجرا کنید. سینی سیستم در GNOME به `gnome-shell-extension-appindicator` نیاز دارد. |
 | **Android** (arm64) | Android 14+ | `ice-box_<version>_android_arm64.apk` | با کلید پروژه (keystore) امضا شده؛ نصب از این منبع را مجاز کنید. |
-| **CLI** (macOS / Windows / Linux) | macOS 12+ / Win 10+ / Ubuntu 22.04+ | `ice-box-cli_<version>_<os>_<arch>.tar.gz` / `.zip` | ابزار خط فرمان و سرویس بدون رابط گرافیکی با هسته داخلی `sing-box` ([`docs/cli.md`](docs/cli.md)). |
 
-**نصب تک‌خطی CLI** (بسته متناسب با سیستم را دانلود و `SHA256SUMS` را بررسی می‌کند):
+- **شروع سریع**: اشتراک وارد کنید (**اشتراک‌ها**) ← حالت و نود را انتخاب کنید (**خانه** / **نودها**) ← دکمه پاور را بزنید. بدون اشتراک نیز در حالت مستقیم کار می‌کند.
+- **بروزرسانی**: بروزرسانی درون‌برنامه‌ای با تایید امضا در **تنظیمات ← بروزرسانی برنامه** (نسخه `.deb` صفحه Releases را برای `apt` باز می‌کند؛ Android فایل APK را برای نصب سیستمی دانلود می‌کند).
+
+## CLI
+
+ابزار خط فرمان و سرویس بدون رابط گرافیکی با هسته داخلی `sing-box` ([`docs/cli.md`](docs/cli.md)). بسته متناسب با سیستم را دانلود و `SHA256SUMS` را بررسی می‌کند.
 
 **macOS** (Apple Silicon) / **Linux** (x64 / arm64)
 
@@ -65,9 +69,6 @@ curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/in
 ```powershell
 irm https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.ps1 | iex
 ```
-
-- **شروع سریع**: اشتراک وارد کنید (**اشتراک‌ها**) ← حالت و نود را انتخاب کنید (**خانه** / **نودها**) ← دکمه پاور را بزنید. بدون اشتراک نیز در حالت مستقیم کار می‌کند.
-- **بروزرسانی**: بروزرسانی درون‌برنامه‌ای با تایید امضا در **تنظیمات ← بروزرسانی برنامه** (نسخه `.deb` صفحه Releases را برای `apt` باز می‌کند؛ Android فایل APK را برای نصب سیستمی دانلود می‌کند).
 
 ## توسعه
 

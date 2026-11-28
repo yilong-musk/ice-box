@@ -17,7 +17,7 @@ macOS, Windows, Linux, Android를 위한 가벼운 프록시 클라이언트 —
 [![Core](https://img.shields.io/badge/sing--box-1.14.4-6f42c1?style=flat-square)](https://github.com/SagerNet/sing-box)
 [![License](https://img.shields.io/github/license/yilong-musk/ice-box?style=flat-square)](LICENSE)
 
-[**다운로드**](https://github.com/yilong-musk/ice-box/releases/latest) · [**라이브 데모**](https://yilong-musk.github.io/ice-box/) · [설치](#설치) · [개발](#개발) · [문서](#문서) · [변경 로그](CHANGELOG.md)
+[**다운로드**](https://github.com/yilong-musk/ice-box/releases/latest) · [**라이브 데모**](https://yilong-musk.github.io/ice-box/) · [설치](#설치) · [CLI](#cli) · [개발](#개발) · [문서](#문서) · [변경 로그](CHANGELOG.md)
 
 [Bahasa Indonesia](README.id.md) · [Deutsch](README.de.md) · [English](README.md) · [Español](README.es.md) · [Français](README.fr.md) · [Português (BR)](README.pt-BR.md) · [Tiếng Việt](README.vi.md) · [Türkçe](README.tr.md)<br>[Русский](README.ru.md) · [Українська](README.uk.md) · [العربية](README.ar.md) · [فارسی](README.fa.md) · [日本語](README.ja.md) · **한국어** · [简体中文](README.zh-CN.md) · [繁體中文](README.zh-TW.md)
 
@@ -50,9 +50,13 @@ macOS, Windows, Linux, Android를 위한 가벼운 프록시 클라이언트 —
 | **Windows** (x64) | Windows 10+ | `ice-box_<version>_x64-setup.exe` | 사용자별 NSIS 설치 파일(미서명, SmartScreen 확인 필요). TUN은 IPv4 TCP 전용이며 관리자 권한 필요. |
 | **Linux** (x64 / arm64) | Ubuntu 22.04+ | `.AppImage` / `.deb` | `chmod +x *.AppImage` 또는 `sudo apt install ./ice-box_*.deb`. GNOME 트레이는 `gnome-shell-extension-appindicator` 필요. |
 | **Android** (arm64) | Android 14+ | `ice-box_<version>_android_arm64.apk` | 프로젝트 키스토어 서명; 이 출처의 앱 설치 허용 필요. |
-| **CLI** (macOS / Windows / Linux) | macOS 12+ / Win 10+ / Ubuntu 22.04+ | `ice-box-cli_<version>_<os>_<arch>.tar.gz` / `.zip` | `sing-box`가 내장된 헤드리스 CLI 및 데몬([`docs/cli.md`](docs/cli.md)). |
 
-**CLI 한 줄 설치** (해당 플랫폼 릴리스 아카이브를 다운로드하고 `SHA256SUMS`를 검증합니다):
+- **빠른 시작**: **구독** 가져오기 → **홈** / **노드**에서 모드와 노드 선택 → 전원 버튼 클릭. 구독 없이도 직접 연결 모드로 동작합니다.
+- **업데이트**: **설정 → 앱 업데이트**에서 서명 검증된 인앱 업데이트 설치(`.deb`는 `apt` 관리를 위해 Releases 페이지 열기; Android는 APK 다운로드 후 시스템 설치).
+
+## CLI
+
+`sing-box`가 내장된 헤드리스 CLI 및 데몬([`docs/cli.md`](docs/cli.md)). 해당 플랫폼 릴리스 아카이브를 다운로드하고 `SHA256SUMS`를 검증합니다.
 
 **macOS** (Apple Silicon) / **Linux** (x64 / arm64)
 
@@ -65,9 +69,6 @@ curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/in
 ```powershell
 irm https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.ps1 | iex
 ```
-
-- **빠른 시작**: **구독** 가져오기 → **홈** / **노드**에서 모드와 노드 선택 → 전원 버튼 클릭. 구독 없이도 직접 연결 모드로 동작합니다.
-- **업데이트**: **설정 → 앱 업데이트**에서 서명 검증된 인앱 업데이트 설치(`.deb`는 `apt` 관리를 위해 Releases 페이지 열기; Android는 APK 다운로드 후 시스템 설치).
 
 ## 개발
 

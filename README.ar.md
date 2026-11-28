@@ -17,7 +17,7 @@
 [![Core](https://img.shields.io/badge/sing--box-1.14.4-6f42c1?style=flat-square)](https://github.com/SagerNet/sing-box)
 [![License](https://img.shields.io/github/license/yilong-musk/ice-box?style=flat-square)](LICENSE)
 
-[**التنزيل**](https://github.com/yilong-musk/ice-box/releases/latest) · [**العرض التفاعلي**](https://yilong-musk.github.io/ice-box/) · [التثبيت](#التثبيت) · [التطوير](#التطوير) · [التوثيق](#التوثيق) · [سجل التغييرات](CHANGELOG.md)
+[**التنزيل**](https://github.com/yilong-musk/ice-box/releases/latest) · [**العرض التفاعلي**](https://yilong-musk.github.io/ice-box/) · [التثبيت](#التثبيت) · [CLI](#cli) · [التطوير](#التطوير) · [التوثيق](#التوثيق) · [سجل التغييرات](CHANGELOG.md)
 
 [Bahasa Indonesia](README.id.md) · [Deutsch](README.de.md) · [English](README.md) · [Español](README.es.md) · [Français](README.fr.md) · [Português (BR)](README.pt-BR.md) · [Tiếng Việt](README.vi.md) · [Türkçe](README.tr.md)<br>[Русский](README.ru.md) · [Українська](README.uk.md) · **العربية** · [فارسی](README.fa.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [简体中文](README.zh-CN.md) · [繁體中文](README.zh-TW.md)
 
@@ -50,9 +50,13 @@
 | **Windows** (x64) | Windows 10+ | `ice-box_<version>_x64-setup.exe` | مثبّت NSIS للمستخدم الحالي (غير موقّع؛ أكّد SmartScreen). يدعم TUN بروتوكول IPv4 TCP فقط ويتطلب حساب مسؤول (Administrator). |
 | **Linux** (x64 / arm64) | Ubuntu 22.04+ | `.AppImage` / `.deb` | شغّل `chmod +x *.AppImage` أو `sudo apt install ./ice-box_*.deb`. وتحتاج أيقونة شريط النظام في GNOME إلى `gnome-shell-extension-appindicator`. |
 | **Android** (arm64) | Android 14+ | `ice-box_<version>_android_arm64.apk` | موقّع بمفتاح المشروع (keystore)؛ اسمح بالتثبيت من هذا المصدر. |
-| **CLI** (macOS / Windows / Linux) | macOS 12+ / Win 10+ / Ubuntu 22.04+ | `ice-box-cli_<version>_<os>_<arch>.tar.gz` / `.zip` | واجهة سطر أوامر وخدمة خلفية بلا واجهة رسومية مع `sing-box` مدمج ([`docs/cli.md`](docs/cli.md)). |
 
-**تثبيت CLI بسطر واحد** (يُنزّل حزمة المنصة المطابقة ويتحقق من `SHA256SUMS`):
+- **البدء السريع**: استورد اشتراكًا (**الاشتراكات**) ← اختر الوضع والعقدة (**الرئيسية** / **العُقد**) ← اضغط زر التشغيل. يعمل بوضع الاتصال المباشر دون اشتراك.
+- **التحديثات**: تحديثات موقّعة داخل التطبيق في **الإعدادات ← تحديثات التطبيق** (حزمة `.deb` تفتح صفحة Releases لاستخدام `apt`؛ ويُنزّل Android ملف APK لتثبيته عبر النظام).
+
+## CLI
+
+واجهة سطر أوامر وخدمة خلفية بلا واجهة رسومية مع `sing-box` مدمج ([`docs/cli.md`](docs/cli.md)). يُنزّل حزمة المنصة المطابقة ويتحقق من `SHA256SUMS`.
 
 **macOS** (Apple Silicon) / **Linux** (x64 / arm64)
 
@@ -65,9 +69,6 @@ curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/in
 ```powershell
 irm https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.ps1 | iex
 ```
-
-- **البدء السريع**: استورد اشتراكًا (**الاشتراكات**) ← اختر الوضع والعقدة (**الرئيسية** / **العُقد**) ← اضغط زر التشغيل. يعمل بوضع الاتصال المباشر دون اشتراك.
-- **التحديثات**: تحديثات موقّعة داخل التطبيق في **الإعدادات ← تحديثات التطبيق** (حزمة `.deb` تفتح صفحة Releases لاستخدام `apt`؛ ويُنزّل Android ملف APK لتثبيته عبر النظام).
 
 ## التطوير
 

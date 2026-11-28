@@ -17,7 +17,7 @@ Cliente proxy ligero para macOS, Windows, Linux y Android — construido sobre [
 [![Core](https://img.shields.io/badge/sing--box-1.14.4-6f42c1?style=flat-square)](https://github.com/SagerNet/sing-box)
 [![License](https://img.shields.io/github/license/yilong-musk/ice-box?style=flat-square)](LICENSE)
 
-[**Descargar**](https://github.com/yilong-musk/ice-box/releases/latest) · [**Demo en vivo**](https://yilong-musk.github.io/ice-box/) · [Instalación](#instalación) · [Desarrollo](#desarrollo) · [Documentación](#documentación) · [Registro de cambios](CHANGELOG.md)
+[**Descargar**](https://github.com/yilong-musk/ice-box/releases/latest) · [**Demo en vivo**](https://yilong-musk.github.io/ice-box/) · [Instalación](#instalación) · [CLI](#cli) · [Desarrollo](#desarrollo) · [Documentación](#documentación) · [Registro de cambios](CHANGELOG.md)
 
 [Bahasa Indonesia](README.id.md) · [Deutsch](README.de.md) · [English](README.md) · **Español** · [Français](README.fr.md) · [Português (BR)](README.pt-BR.md) · [Tiếng Việt](README.vi.md) · [Türkçe](README.tr.md)<br>[Русский](README.ru.md) · [Українська](README.uk.md) · [العربية](README.ar.md) · [فارسی](README.fa.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [简体中文](README.zh-CN.md) · [繁體中文](README.zh-TW.md)
 
@@ -50,9 +50,13 @@ Descarga desde [GitHub Releases](https://github.com/yilong-musk/ice-box/releases
 | **Windows** (x64) | Windows 10+ | `ice-box_<version>_x64-setup.exe` | Instalador NSIS por usuario (sin firma; confirma en SmartScreen). TUN es solo IPv4 TCP y requiere Administrador. |
 | **Linux** (x64 / arm64) | Ubuntu 22.04+ | `.AppImage` / `.deb` | `chmod +x *.AppImage` o `sudo apt install ./ice-box_*.deb`. La bandeja de GNOME requiere `gnome-shell-extension-appindicator`. |
 | **Android** (arm64) | Android 14+ | `ice-box_<version>_android_arm64.apk` | Firmado con el almacén de claves del proyecto; permite instalar desde esta fuente. |
-| **CLI** (macOS / Windows / Linux) | macOS 12+ / Win 10+ / Ubuntu 22.04+ | `ice-box-cli_<version>_<os>_<arch>.tar.gz` / `.zip` | CLI y demonio sin interfaz gráfica con `sing-box` incluido ([`docs/cli.md`](docs/cli.md)). |
 
-**Instalación rápida de CLI** (descarga el archivo correspondiente y verifica `SHA256SUMS`):
+- **Inicio rápido**: Importa una suscripción (**Suscripciones**) → elige modo y nodo (**Inicio** / **Nodos**) → pulsa el botón de encendido. Funciona en modo solo directo sin suscripción.
+- **Actualizaciones**: Actualizaciones firmadas en la app desde **Ajustes → Actualizaciones de la app** (`.deb` abre Releases para `apt`; Android descarga el APK para instalación del sistema).
+
+## CLI
+
+CLI y demonio sin interfaz gráfica con `sing-box` incluido ([`docs/cli.md`](docs/cli.md)). Descarga el archivo correspondiente y verifica `SHA256SUMS`.
 
 **macOS** (Apple Silicon) / **Linux** (x64 / arm64)
 
@@ -65,9 +69,6 @@ curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/in
 ```powershell
 irm https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.ps1 | iex
 ```
-
-- **Inicio rápido**: Importa una suscripción (**Suscripciones**) → elige modo y nodo (**Inicio** / **Nodos**) → pulsa el botón de encendido. Funciona en modo solo directo sin suscripción.
-- **Actualizaciones**: Actualizaciones firmadas en la app desde **Ajustes → Actualizaciones de la app** (`.deb` abre Releases para `apt`; Android descarga el APK para instalación del sistema).
 
 ## Desarrollo
 

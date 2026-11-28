@@ -17,7 +17,7 @@ Schlanker Proxy-Client für macOS, Windows, Linux und Android — aufgebaut auf 
 [![Core](https://img.shields.io/badge/sing--box-1.14.4-6f42c1?style=flat-square)](https://github.com/SagerNet/sing-box)
 [![License](https://img.shields.io/github/license/yilong-musk/ice-box?style=flat-square)](LICENSE)
 
-[**Download**](https://github.com/yilong-musk/ice-box/releases/latest) · [**Live-Demo**](https://yilong-musk.github.io/ice-box/) · [Installation](#installation) · [Entwicklung](#entwicklung) · [Dokumentation](#dokumentation) · [Changelog](CHANGELOG.md)
+[**Download**](https://github.com/yilong-musk/ice-box/releases/latest) · [**Live-Demo**](https://yilong-musk.github.io/ice-box/) · [Installation](#installation) · [CLI](#cli) · [Entwicklung](#entwicklung) · [Dokumentation](#dokumentation) · [Changelog](CHANGELOG.md)
 
 [Bahasa Indonesia](README.id.md) · **Deutsch** · [English](README.md) · [Español](README.es.md) · [Français](README.fr.md) · [Português (BR)](README.pt-BR.md) · [Tiếng Việt](README.vi.md) · [Türkçe](README.tr.md)<br>[Русский](README.ru.md) · [Українська](README.uk.md) · [العربية](README.ar.md) · [فارسی](README.fa.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [简体中文](README.zh-CN.md) · [繁體中文](README.zh-TW.md)
 
@@ -50,9 +50,13 @@ Download über [GitHub Releases](https://github.com/yilong-musk/ice-box/releases
 | **Windows** (x64) | Windows 10+ | `ice-box_<version>_x64-setup.exe` | Benutzerbezogener NSIS-Installer (unsigniert; SmartScreen bestätigen). TUN unterstützt nur IPv4-TCP und erfordert Administratorrechte. |
 | **Linux** (x64 / arm64) | Ubuntu 22.04+ | `.AppImage` / `.deb` | `chmod +x *.AppImage` oder `sudo apt install ./ice-box_*.deb`. GNOME-Tray benötigt `gnome-shell-extension-appindicator`. |
 | **Android** (arm64) | Android 14+ | `ice-box_<version>_android_arm64.apk` | Mit dem Projekt-Keystore signiert; Installation aus dieser Quelle erlauben. |
-| **CLI** (macOS / Windows / Linux) | macOS 12+ / Win 10+ / Ubuntu 22.04+ | `ice-box-cli_<version>_<os>_<arch>.tar.gz` / `.zip` | Headless-CLI & Daemon mit gebündeltem `sing-box` ([`docs/cli.md`](docs/cli.md)). |
 
-**CLI-Einzeiler-Installation** (lädt das passende Release-Archiv herunter und prüft `SHA256SUMS`):
+- **Schnellstart**: Abonnement importieren (**Abonnements**) → Modus & Knoten wählen (**Start** / **Knoten**) → Ein-/Aus-Schaltfläche drücken. Läuft auch ohne Abonnement im Direktmodus.
+- **Updates**: Signierte In-App-Updates unter **Einstellungen → App-Updates** (`.deb` öffnet Releases für `apt`; Android lädt die APK zur Systeminstallation herunter).
+
+## CLI
+
+Headless-CLI und Daemon mit gebündeltem `sing-box` ([`docs/cli.md`](docs/cli.md)). Lädt das passende Release-Archiv herunter und prüft `SHA256SUMS`.
 
 **macOS** (Apple Silicon) / **Linux** (x64 / arm64)
 
@@ -65,9 +69,6 @@ curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/in
 ```powershell
 irm https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.ps1 | iex
 ```
-
-- **Schnellstart**: Abonnement importieren (**Abonnements**) → Modus & Knoten wählen (**Start** / **Knoten**) → Ein-/Aus-Schaltfläche drücken. Läuft auch ohne Abonnement im Direktmodus.
-- **Updates**: Signierte In-App-Updates unter **Einstellungen → App-Updates** (`.deb` öffnet Releases für `apt`; Android lädt die APK zur Systeminstallation herunter).
 
 ## Entwicklung
 

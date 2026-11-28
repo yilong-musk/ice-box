@@ -17,7 +17,7 @@ macOS、Windows、Linux、Android 向けの軽量プロキシクライアント 
 [![Core](https://img.shields.io/badge/sing--box-1.14.4-6f42c1?style=flat-square)](https://github.com/SagerNet/sing-box)
 [![License](https://img.shields.io/github/license/yilong-musk/ice-box?style=flat-square)](LICENSE)
 
-[**ダウンロード**](https://github.com/yilong-musk/ice-box/releases/latest) · [**ライブデモ**](https://yilong-musk.github.io/ice-box/) · [インストール](#インストール) · [開発](#開発) · [ドキュメント](#ドキュメント) · [更新履歴](CHANGELOG.md)
+[**ダウンロード**](https://github.com/yilong-musk/ice-box/releases/latest) · [**ライブデモ**](https://yilong-musk.github.io/ice-box/) · [インストール](#インストール) · [CLI](#cli) · [開発](#開発) · [ドキュメント](#ドキュメント) · [更新履歴](CHANGELOG.md)
 
 [Bahasa Indonesia](README.id.md) · [Deutsch](README.de.md) · [English](README.md) · [Español](README.es.md) · [Français](README.fr.md) · [Português (BR)](README.pt-BR.md) · [Tiếng Việt](README.vi.md) · [Türkçe](README.tr.md)<br>[Русский](README.ru.md) · [Українська](README.uk.md) · [العربية](README.ar.md) · [فارسی](README.fa.md) · **日本語** · [한국어](README.ko.md) · [简体中文](README.zh-CN.md) · [繁體中文](README.zh-TW.md)
 
@@ -50,9 +50,13 @@ macOS、Windows、Linux、Android 向けの軽量プロキシクライアント 
 | **Windows**（x64） | Windows 10+ | `ice-box_<version>_x64-setup.exe` | ユーザー単位の NSIS インストーラー（未署名、SmartScreen で要確認）。TUN は IPv4 TCP のみで管理者権限が必要。 |
 | **Linux**（x64 / arm64） | Ubuntu 22.04+ | `.AppImage` / `.deb` | `chmod +x *.AppImage` または `sudo apt install ./ice-box_*.deb`。GNOME トレイには `gnome-shell-extension-appindicator` が必要。 |
 | **Android**（arm64） | Android 14+ | `ice-box_<version>_android_arm64.apk` | プロジェクトキーストア署名。この提供元からのインストールを許可してください。 |
-| **CLI**（macOS / Windows / Linux） | macOS 12+ / Win 10+ / Ubuntu 22.04+ | `ice-box-cli_<version>_<os>_<arch>.tar.gz` / `.zip` | `sing-box` 同梱のヘッドレス CLI・デーモン（[`docs/cli.md`](docs/cli.md)）。 |
 
-**CLI ワンラインインストール**（対応するリリースアーカイブをダウンロードし `SHA256SUMS` を検証）：
+- **クイックスタート**：**サブスクリプション** をインポート → **ホーム** / **ノード** でモードとノードを選択 → 電源ボタンを押す。サブスクリプションなしでもダイレクトモードで動作します。
+- **アップデート**：**設定 → アプリの更新** から署名検証済みアップデートをインストール（`.deb` は `apt` 用に Releases ページを開き、Android は APK をダウンロードしてシステムインストーラーへ引き継ぎます）。
+
+## CLI
+
+`sing-box` 同梱のヘッドレス CLI・デーモン（[`docs/cli.md`](docs/cli.md)）。対応するリリースアーカイブをダウンロードし `SHA256SUMS` を検証します。
 
 **macOS**（Apple Silicon）/ **Linux**（x64 / arm64）
 
@@ -65,9 +69,6 @@ curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/in
 ```powershell
 irm https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.ps1 | iex
 ```
-
-- **クイックスタート**：**サブスクリプション** をインポート → **ホーム** / **ノード** でモードとノードを選択 → 電源ボタンを押す。サブスクリプションなしでもダイレクトモードで動作します。
-- **アップデート**：**設定 → アプリの更新** から署名検証済みアップデートをインストール（`.deb` は `apt` 用に Releases ページを開き、Android は APK をダウンロードしてシステムインストーラーへ引き継ぎます）。
 
 ## 開発
 

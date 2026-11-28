@@ -17,7 +17,7 @@
 [![Core](https://img.shields.io/badge/sing--box-1.14.4-6f42c1?style=flat-square)](https://github.com/SagerNet/sing-box)
 [![License](https://img.shields.io/github/license/yilong-musk/ice-box?style=flat-square)](LICENSE)
 
-[**Скачать**](https://github.com/yilong-musk/ice-box/releases/latest) · [**Интерактивное демо**](https://yilong-musk.github.io/ice-box/) · [Установка](#установка) · [Разработка](#разработка) · [Документация](#документация) · [Список изменений](CHANGELOG.md)
+[**Скачать**](https://github.com/yilong-musk/ice-box/releases/latest) · [**Интерактивное демо**](https://yilong-musk.github.io/ice-box/) · [Установка](#установка) · [CLI](#cli) · [Разработка](#разработка) · [Документация](#документация) · [Список изменений](CHANGELOG.md)
 
 [Bahasa Indonesia](README.id.md) · [Deutsch](README.de.md) · [English](README.md) · [Español](README.es.md) · [Français](README.fr.md) · [Português (BR)](README.pt-BR.md) · [Tiếng Việt](README.vi.md) · [Türkçe](README.tr.md)<br>**Русский** · [Українська](README.uk.md) · [العربية](README.ar.md) · [فارسی](README.fa.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [简体中文](README.zh-CN.md) · [繁體中文](README.zh-TW.md)
 
@@ -50,9 +50,13 @@
 | **Windows** (x64) | Windows 10+ | `ice-box_<version>_x64-setup.exe` | Установщик NSIS для текущего пользователя (без подписи; подтвердите SmartScreen). TUN поддерживает только IPv4 TCP и требует прав администратора. |
 | **Linux** (x64 / arm64) | Ubuntu 22.04+ | `.AppImage` / `.deb` | `chmod +x *.AppImage` или `sudo apt install ./ice-box_*.deb`. Для трея GNOME нужен `gnome-shell-extension-appindicator`. |
 | **Android** (arm64) | Android 14+ | `ice-box_<version>_android_arm64.apk` | Подписан ключом проекта; разрешите установку из этого источника. |
-| **CLI** (macOS / Windows / Linux) | macOS 12+ / Win 10+ / Ubuntu 22.04+ | `ice-box-cli_<version>_<os>_<arch>.tar.gz` / `.zip` | Консольный CLI и демон со встроенным `sing-box` ([`docs/cli.md`](docs/cli.md)). |
 
-**Установка CLI одной командой** (скачивает подходящий архив релиза и проверяет `SHA256SUMS`):
+- **Быстрый старт**: Импортируйте подписку (**Подписки**) → выберите режим и узел (**Главная** / **Узлы**) → нажмите кнопку питания. Работает в режиме «Напрямую» и без подписки.
+- **Обновления**: Подписанные обновления внутри приложения в **Настройки → Обновления приложения** (`.deb` открывает Releases для `apt`; Android скачивает APK для системной установки).
+
+## CLI
+
+Консольный CLI и демон со встроенным `sing-box` ([`docs/cli.md`](docs/cli.md)). Скачивает подходящий архив релиза и проверяет `SHA256SUMS`.
 
 **macOS** (Apple Silicon) / **Linux** (x64 / arm64)
 
@@ -65,9 +69,6 @@ curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/in
 ```powershell
 irm https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.ps1 | iex
 ```
-
-- **Быстрый старт**: Импортируйте подписку (**Подписки**) → выберите режим и узел (**Главная** / **Узлы**) → нажмите кнопку питания. Работает в режиме «Напрямую» и без подписки.
-- **Обновления**: Подписанные обновления внутри приложения в **Настройки → Обновления приложения** (`.deb` открывает Releases для `apt`; Android скачивает APK для системной установки).
 
 ## Разработка
 
