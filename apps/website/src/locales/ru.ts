@@ -90,6 +90,13 @@ export const ru: Record<MarketingKey, string> = {
   "download.android.requires": "Android 14 или новее",
   "download.android.note":
     "Пока не опубликовано в магазинах приложений. При запросе Android разрешите установку из этого источника.",
+  "download.cli.subtitle":
+    "Консольный CLI и демон без GUI для macOS, Windows и Linux — для агентов, серверов и скриптов.",
+  "download.cli.shellAria": "Выбрать команду установки CLI",
+  "download.cli.copy": "Копировать",
+  "download.cli.copied": "Скопировано",
+  "download.cli.archives": "Прямые архивы",
+  "download.cli.docs": "Документация CLI",
   "footer.source": "Исходный код",
   "footer.releases": "Релизы",
   "footer.changelog": "Список изменений",

@@ -21,7 +21,21 @@ export const LINUX_INSTALLER_VARIANTS = [
 
 export type LinuxInstallerVariant = (typeof LINUX_INSTALLER_VARIANTS)[number];
 
+export const CLI_TARGETS = [
+  "darwin-aarch64",
+  "windows-x86_64",
+  "linux-x86_64",
+  "linux-aarch64",
+] as const;
+
+export type CliTarget = (typeof CLI_TARGETS)[number];
+
+export const CLI_SHELLS = ["unix", "windows"] as const;
+
+export type CliShell = (typeof CLI_SHELLS)[number];
+
 const RELEASE_BASE = "https://github.com/yilong-musk/ice-box/releases/download";
+const RAW_MAIN_BASE = "https://raw.githubusercontent.com/yilong-musk/ice-box/main";
 
 const FILENAME: Record<InstallerPlatform, (version: string) => string> = {
   macos: (version) => `ice-box_${version}_aarch64.dmg`,
@@ -35,6 +49,23 @@ const LINUX_VARIANT_FILENAME: Record<LinuxInstallerVariant, (version: string) =>
   "deb-amd64": (version) => `ice-box_${version}_amd64.deb`,
   "appimage-aarch64": (version) => `ice-box_${version}_aarch64.AppImage`,
   "deb-arm64": (version) => `ice-box_${version}_arm64.deb`,
+};
+
+const CLI_FILENAME: Record<CliTarget, (version: string) => string> = {
+  "darwin-aarch64": (version) => `ice-box-cli_${version}_darwin_aarch64.tar.gz`,
+  "windows-x86_64": (version) => `ice-box-cli_${version}_windows_x86_64.zip`,
+  "linux-x86_64": (version) => `ice-box-cli_${version}_linux_x86_64.tar.gz`,
+  "linux-aarch64": (version) => `ice-box-cli_${version}_linux_aarch64.tar.gz`,
+};
+
+export const CLI_INSTALL_SCRIPT_URL: Record<CliShell, string> = {
+  unix: `${RAW_MAIN_BASE}/scripts/install-cli.sh`,
+  windows: `${RAW_MAIN_BASE}/scripts/install-cli.ps1`,
+};
+
+export const CLI_INSTALL_COMMAND: Record<CliShell, string> = {
+  unix: `curl -fsSL ${CLI_INSTALL_SCRIPT_URL.unix} | bash`,
+  windows: `irm ${CLI_INSTALL_SCRIPT_URL.windows} | iex`,
 };
 
 /** `v0.1.23` and `0.1.23` both become `0.1.23`. */
@@ -74,6 +105,19 @@ export function linuxInstallerDownloadUrl(
 ): string {
   const bare = bareVersion(version);
   return `${RELEASE_BASE}/v${bare}/${linuxInstallerFilename(bare, variant)}`;
+}
+
+export function cliFilename(version: string, target: CliTarget): string {
+  return CLI_FILENAME[target](bareVersion(version));
+}
+
+export function cliDownloadUrl(version: string, target: CliTarget): string {
+  const bare = bareVersion(version);
+  return `${RELEASE_BASE}/v${bare}/${cliFilename(bare, target)}`;
+}
+
+export function defaultCliShell(platform: InstallerPlatform | null): CliShell {
+  return platform === "windows" ? "windows" : "unix";
 }
 
 export type LinuxArch = "amd64" | "arm64";

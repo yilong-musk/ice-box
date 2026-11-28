@@ -50,6 +50,17 @@ macOS、Windows、Linux、Android 向けの軽量プロキシクライアント 
 | **Windows**（x64） | Windows 10+ | `ice-box_<version>_x64-setup.exe` | ユーザー単位の NSIS インストーラー（未署名、SmartScreen で要確認）。TUN は IPv4 TCP のみで管理者権限が必要。 |
 | **Linux**（x64 / arm64） | Ubuntu 22.04+ | `.AppImage` / `.deb` | `chmod +x *.AppImage` または `sudo apt install ./ice-box_*.deb`。GNOME トレイには `gnome-shell-extension-appindicator` が必要。 |
 | **Android**（arm64） | Android 14+ | `ice-box_<version>_android_arm64.apk` | プロジェクトキーストア署名。この提供元からのインストールを許可してください。 |
+| **CLI**（macOS / Windows / Linux） | macOS 12+ / Win 10+ / Ubuntu 22.04+ | `ice-box-cli_<version>_<os>_<arch>.tar.gz` / `.zip` | `sing-box` 同梱のヘッドレス CLI・デーモン（[`docs/cli.md`](docs/cli.md)）。 |
+
+**CLI ワンラインインストール**（対応するリリースアーカイブをダウンロードし `SHA256SUMS` を検証）：
+
+```bash
+# macOS (arm64) / Linux (x64, arm64)
+curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.sh | bash
+
+# Windows (x64, PowerShell)
+irm https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.ps1 | iex
+```
 
 - **クイックスタート**：**サブスクリプション** をインポート → **ホーム** / **ノード** でモードとノードを選択 → 電源ボタンを押す。サブスクリプションなしでもダイレクトモードで動作します。
 - **アップデート**：**設定 → アプリの更新** から署名検証済みアップデートをインストール（`.deb` は `apt` 用に Releases ページを開き、Android は APK をダウンロードしてシステムインストーラーへ引き継ぎます）。
@@ -72,6 +83,7 @@ npm run dev
 | `npm run fetch-singbox -- win && npm run build:win` | Windows インストーラーをビルド |
 | `npm run fetch-singbox -- linux-x64 && npm run build:linux` | Linux `.deb`・`.AppImage` をビルド（arm64 では `linux-arm64`） |
 | `npm run acceptance` / `acceptance:tun` / `acceptance:win` / `acceptance:linux` / `acceptance:linux-tun` | 実ホストでの受け入れゲート |
+| `bash scripts/package-cli.sh` | このホスト向けのクロスプラットフォーム CLI アーカイブをビルド・検証 |
 | `bash scripts/build-android-apk.sh debug arm64` | Android デバッグ APK をビルド（エミュレーター向けは `amd64`） |
 
 ```text
@@ -86,6 +98,7 @@ crates/         Rust ワークスペース（ice-app, ice-config, ice-core, ice-
 | ドキュメント | 対象範囲 |
 |---|---|
 | [`docs/architecture.md`](docs/architecture.md) | アーキテクチャ、モジュール境界、データフロー |
+| [`docs/cli.md`](docs/cli.md) | クロスプラットフォームのヘッドレス CLI・デーモン・Agent 自動化 |
 | [`docs/mcp.md`](docs/mcp.md) | デスクトップ MCP のセットアップ、ツール、セキュリティモデル |
 | [`docs/tun.md`](docs/tun.md) | TUN キャプチャ、権限昇格、復旧、プラットフォーム制限 |
 | [`docs/testing.md`](docs/testing.md) | ローカル／CI ゲート、手動実機テスト |

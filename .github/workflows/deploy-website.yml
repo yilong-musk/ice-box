@@ -99,41 +99,59 @@ jobs:
           present = {line.strip() for line in sys.argv[2].splitlines() if line.strip()}
           core = tuple(int(part) for part in version.split("-", 1)[0].split("."))
 
-          baseline = [
-              f"ice-box_{version}_aarch64.dmg",
-              f"ice-box_{version}_x64-setup.exe",
-              f"ice-box_{version}_android_arm64.apk",
-          ]
-          linux = [
-              f"ice-box_{version}_amd64.deb",
-              f"ice-box_{version}_amd64.AppImage",
-              f"ice-box_{version}_arm64.deb",
-              f"ice-box_{version}_aarch64.AppImage",
+          # (notice when the whole set is absent, asset names, version through
+          # which a completely missing set skips deploy). None means the set is
+          # required for every release. A partial set fails at every version.
+          # Linux desktop builds arrived after 0.4.0; CLI archives after 0.4.1.
+          groups = [
+              (
+                  None,
+                  [
+                      f"ice-box_{version}_aarch64.dmg",
+                      f"ice-box_{version}_x64-setup.exe",
+                      f"ice-box_{version}_android_arm64.apk",
+                  ],
+                  None,
+              ),
+              (
+                  "Linux desktop builds (no Linux assets)",
+                  [
+                      f"ice-box_{version}_amd64.deb",
+                      f"ice-box_{version}_amd64.AppImage",
+                      f"ice-box_{version}_arm64.deb",
+                      f"ice-box_{version}_aarch64.AppImage",
+                  ],
+                  (0, 4, 0),
+              ),
+              (
+                  "CLI archives (no CLI assets)",
+                  [
+                      f"ice-box-cli_{version}_darwin_aarch64.tar.gz",
+                      f"ice-box-cli_{version}_windows_x86_64.zip",
+                      f"ice-box-cli_{version}_linux_x86_64.tar.gz",
+                      f"ice-box-cli_{version}_linux_aarch64.tar.gz",
+                  ],
+                  (0, 4, 1),
+              ),
           ]
 
-          missing_baseline = [name for name in baseline if name not in present]
-          missing_linux = [name for name in linux if name not in present]
-
-          if missing_baseline:
-              for name in missing_baseline:
+          for notice, names, predates in groups:
+              missing = [name for name in names if name not in present]
+              if not missing:
+                  continue
+              if (
+                  notice is not None
+                  and predates is not None
+                  and len(missing) == len(names)
+                  and core <= predates
+              ):
+                  print(
+                      f"::notice::release v{version} predates {notice}; skipping deploy"
+                  )
+                  sys.exit(10)
+              for name in missing:
                   print(f"release v{version} is missing {name}", file=sys.stderr)
               sys.exit(1)
-
-          if not missing_linux:
-              sys.exit(0)
-
-          # Releases up to 0.4.0 predate Linux desktop builds; skip deploying
-          # until a release carrying the Linux assets ships rather than failing
-          # every merge. Partial Linux asset sets or versions > 0.4.0 still fail.
-          if len(missing_linux) == len(linux) and core <= (0, 4, 0):
-              print(
-                  f"::notice::release v{version} predates Linux desktop builds (no Linux assets); skipping deploy"
-              )
-              sys.exit(10)
-
-          for name in missing_linux:
-              print(f"release v{version} is missing {name}", file=sys.stderr)
-          sys.exit(1)
           PY
           if [[ "$status" -eq 10 ]]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"

@@ -90,6 +90,13 @@ export const vi: Record<MarketingKey, string> = {
   "download.android.requires": "Android 14 trở lên",
   "download.android.note":
     "Chưa có trên cửa hàng ứng dụng nào. Khi Android hỏi, hãy cho phép cài đặt từ nguồn này.",
+  "download.cli.subtitle":
+    "CLI và daemon không giao diện cho macOS, Windows và Linux — dành cho Agent, máy chủ và script tự động.",
+  "download.cli.shellAria": "Chọn lệnh cài đặt CLI",
+  "download.cli.copy": "Sao chép",
+  "download.cli.copied": "Đã sao chép",
+  "download.cli.archives": "Tải gói nén trực tiếp",
+  "download.cli.docs": "Tài liệu CLI",
   "footer.source": "Mã nguồn",
   "footer.releases": "Bản phát hành",
   "footer.changelog": "Nhật ký thay đổi",

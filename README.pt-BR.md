@@ -50,6 +50,17 @@ Baixe em [GitHub Releases](https://github.com/yilong-musk/ice-box/releases/lates
 | **Windows** (x64) | Windows 10+ | `ice-box_<version>_x64-setup.exe` | Instalador NSIS por usuário (sem assinatura; confirme no SmartScreen). O TUN suporta apenas IPv4 TCP e exige Administrador. |
 | **Linux** (x64 / arm64) | Ubuntu 22.04+ | `.AppImage` / `.deb` | `chmod +x *.AppImage` ou `sudo apt install ./ice-box_*.deb`. A bandeja do GNOME requer `gnome-shell-extension-appindicator`. |
 | **Android** (arm64) | Android 14+ | `ice-box_<version>_android_arm64.apk` | Assinado com o keystore do projeto; permita instalar desta fonte. |
+| **CLI** (macOS / Windows / Linux) | macOS 12+ / Win 10+ / Ubuntu 22.04+ | `ice-box-cli_<version>_<os>_<arch>.tar.gz` / `.zip` | CLI e daemon sem interface com `sing-box` incluído ([`docs/cli.md`](docs/cli.md)). |
+
+**Instalação rápida da CLI** (baixa o arquivo correspondente e verifica `SHA256SUMS`):
+
+```bash
+# macOS (arm64) / Linux (x64, arm64)
+curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.sh | bash
+
+# Windows (x64, PowerShell)
+irm https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.ps1 | iex
+```
 
 - **Início rápido**: Importe uma assinatura (**Assinaturas**) → escolha modo e nó (**Início** / **Nós**) → pressione energia. Funciona em modo direto sem assinatura.
 - **Atualizações**: Atualizações assinadas no app em **Ajustes → Atualizações do app** (`.deb` abre Releases para o `apt`; o Android baixa o APK para instalação pelo sistema).
@@ -72,6 +83,7 @@ npm run dev
 | `npm run fetch-singbox -- win && npm run build:win` | Gerar instalador para Windows |
 | `npm run fetch-singbox -- linux-x64 && npm run build:linux` | Gerar `.deb` e `.AppImage` para Linux (`linux-arm64` em arm64) |
 | `npm run acceptance` / `acceptance:tun` / `acceptance:win` / `acceptance:linux` / `acceptance:linux-tun` | Gates de aceitação em host real |
+| `bash scripts/package-cli.sh` | Gerar e verificar o pacote CLI multiplataforma para este host |
 | `bash scripts/build-android-apk.sh debug arm64` | Gerar APK de depuração Android (`amd64` para emulador) |
 
 ```text
@@ -86,6 +98,7 @@ crates/         Workspace Rust (ice-app, ice-config, ice-core, ice-engine, ice-s
 | Documento | Escopo |
 |---|---|
 | [`docs/architecture.md`](docs/architecture.md) | Arquitetura, limites dos módulos e fluxo de dados |
+| [`docs/cli.md`](docs/cli.md) | CLI multiplataforma sem interface, daemon e automação de agentes |
 | [`docs/mcp.md`](docs/mcp.md) | Configuração do MCP no desktop, ferramentas e modelo de segurança |
 | [`docs/tun.md`](docs/tun.md) | Captura TUN, elevação, recuperação e limites por plataforma |
 | [`docs/testing.md`](docs/testing.md) | Gates locais/CI e testes manuais ao vivo |

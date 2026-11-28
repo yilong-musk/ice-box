@@ -3,6 +3,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  CLI_INSTALL_COMMAND,
+  cliDownloadUrl,
+  cliFilename,
+  defaultCliShell,
   detectLinuxArch,
   detectPlatform,
   installerDownloadUrl,
@@ -76,6 +80,36 @@ test("rejects a version that could change the download path", () => {
   assert.throws(() => installerDownloadUrl("../secret", "macos"));
   assert.throws(() => installerDownloadUrl("0.1", "windows"));
   assert.throws(() => linuxInstallerDownloadUrl("../secret", "deb-amd64"));
+  assert.throws(() => cliDownloadUrl("../secret", "linux-x86_64"));
+});
+
+test("cli archive urls and install commands match published release assets", () => {
+  assert.equal(
+    cliFilename("v0.4.2", "darwin-aarch64"),
+    "ice-box-cli_0.4.2_darwin_aarch64.tar.gz",
+  );
+  assert.equal(
+    cliDownloadUrl("0.4.2", "darwin-aarch64"),
+    "https://github.com/yilong-musk/ice-box/releases/download/v0.4.2/ice-box-cli_0.4.2_darwin_aarch64.tar.gz",
+  );
+  assert.equal(
+    cliDownloadUrl("0.4.2", "windows-x86_64"),
+    "https://github.com/yilong-musk/ice-box/releases/download/v0.4.2/ice-box-cli_0.4.2_windows_x86_64.zip",
+  );
+  assert.equal(
+    cliDownloadUrl("0.4.2", "linux-x86_64"),
+    "https://github.com/yilong-musk/ice-box/releases/download/v0.4.2/ice-box-cli_0.4.2_linux_x86_64.tar.gz",
+  );
+  assert.equal(
+    cliDownloadUrl("0.4.2", "linux-aarch64"),
+    "https://github.com/yilong-musk/ice-box/releases/download/v0.4.2/ice-box-cli_0.4.2_linux_aarch64.tar.gz",
+  );
+  assert.match(CLI_INSTALL_COMMAND.unix, /scripts\/install-cli\.sh \| bash$/);
+  assert.match(CLI_INSTALL_COMMAND.windows, /scripts\/install-cli\.ps1 \| iex$/);
+  assert.equal(defaultCliShell("windows"), "windows");
+  assert.equal(defaultCliShell("macos"), "unix");
+  assert.equal(defaultCliShell("linux"), "unix");
+  assert.equal(defaultCliShell(null), "unix");
 });
 
 test("detectPlatform picks the installer we ship", () => {

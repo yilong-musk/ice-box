@@ -50,6 +50,17 @@ macOS, Windows, Linux ve Android için hafif proxy istemcisi — [sing-box](http
 | **Windows** (x64) | Windows 10+ | `ice-box_<version>_x64-setup.exe` | Kullanıcı bazlı NSIS yükleyicisi (imzasız; SmartScreen'i onaylayın). TUN yalnızca IPv4 TCP destekler ve Yönetici gerektirir. |
 | **Linux** (x64 / arm64) | Ubuntu 22.04+ | `.AppImage` / `.deb` | `chmod +x *.AppImage` veya `sudo apt install ./ice-box_*.deb`. GNOME tepsi simgesi için `gnome-shell-extension-appindicator` gerekir. |
 | **Android** (arm64) | Android 14+ | `ice-box_<version>_android_arm64.apk` | Proje anahtar deposuyla (keystore) imzalıdır; bu kaynaktan kuruluma izin verin. |
+| **CLI** (macOS / Windows / Linux) | macOS 12+ / Win 10+ / Ubuntu 22.04+ | `ice-box-cli_<version>_<os>_<arch>.tar.gz` / `.zip` | Dahili `sing-box` ile arayüzsüz CLI ve arka plan servisi ([`docs/cli.md`](docs/cli.md)). |
+
+**Tek satırda CLI kurulumu** (uygun sürüm arşivini indirir ve `SHA256SUMS` doğrular):
+
+```bash
+# macOS (arm64) / Linux (x64, arm64)
+curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.sh | bash
+
+# Windows (x64, PowerShell)
+irm https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.ps1 | iex
+```
 
 - **Hızlı başlangıç**: Abonelik içe aktarın (**Abonelikler**) → mod ve düğüm seçin (**Ana Sayfa** / **Düğümler**) → güç düğmesine basın. Abonelik olmadan doğrudan modda çalışır.
 - **Güncellemeler**: **Ayarlar → Uygulama Güncellemeleri** üzerinden imzalı uygulama içi güncellemeler (`.deb`, `apt` için Releases sayfasını açar; Android sistem kurulumu için APK indirir).
@@ -72,6 +83,7 @@ npm run dev
 | `npm run fetch-singbox -- win && npm run build:win` | Windows yükleyicisini derle |
 | `npm run fetch-singbox -- linux-x64 && npm run build:linux` | Linux `.deb` ve `.AppImage` derle (arm64'te `linux-arm64`) |
 | `npm run acceptance` / `acceptance:tun` / `acceptance:win` / `acceptance:linux` / `acceptance:linux-tun` | Gerçek makine kabul testleri |
+| `bash scripts/package-cli.sh` | Bu ana makine için çapraz platform arayüzsüz CLI arşivini derle ve doğrula |
 | `bash scripts/build-android-apk.sh debug arm64` | Android hata ayıklama APK'sı derle (emülatör için `amd64`) |
 
 ```text
@@ -86,6 +98,7 @@ crates/         Rust çalışma alanı (ice-app, ice-config, ice-core, ice-engin
 | Belge | Kapsam |
 |---|---|
 | [`docs/architecture.md`](docs/architecture.md) | Mimari, modül sınırları ve veri akışı |
+| [`docs/cli.md`](docs/cli.md) | Çapraz platform arayüzsüz CLI, arka plan servisi ve ajan otomasyonu |
 | [`docs/mcp.md`](docs/mcp.md) | Masaüstü MCP kurulumu, araçlar ve güvenlik modeli |
 | [`docs/tun.md`](docs/tun.md) | TUN yakalama, yetki yükseltme, kurtarma ve platform sınırlamaları |
 | [`docs/testing.md`](docs/testing.md) | Yerel/CI kapıları ve manuel canlı testler |

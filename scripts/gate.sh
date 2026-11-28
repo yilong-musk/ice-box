@@ -121,6 +121,9 @@ if [[ "$SCOPE" == all || "$SCOPE" == frontend ]]; then
   echo "== CLI archive verifier fixtures =="
   bash "$ROOT/scripts/test-verify-cli-archive.sh"
 
+  echo "== CLI installer fixtures =="
+  bash "$ROOT/scripts/test-install-cli.sh"
+
   echo "== tauri build retry fixtures =="
   bash "$ROOT/scripts/test-retry-tauri-build.sh"
 

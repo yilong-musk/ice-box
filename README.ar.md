@@ -50,6 +50,17 @@
 | **Windows** (x64) | Windows 10+ | `ice-box_<version>_x64-setup.exe` | مثبّت NSIS للمستخدم الحالي (غير موقّع؛ أكّد SmartScreen). يدعم TUN بروتوكول IPv4 TCP فقط ويتطلب حساب مسؤول (Administrator). |
 | **Linux** (x64 / arm64) | Ubuntu 22.04+ | `.AppImage` / `.deb` | شغّل `chmod +x *.AppImage` أو `sudo apt install ./ice-box_*.deb`. وتحتاج أيقونة شريط النظام في GNOME إلى `gnome-shell-extension-appindicator`. |
 | **Android** (arm64) | Android 14+ | `ice-box_<version>_android_arm64.apk` | موقّع بمفتاح المشروع (keystore)؛ اسمح بالتثبيت من هذا المصدر. |
+| **CLI** (macOS / Windows / Linux) | macOS 12+ / Win 10+ / Ubuntu 22.04+ | `ice-box-cli_<version>_<os>_<arch>.tar.gz` / `.zip` | واجهة سطر أوامر وخدمة خلفية بلا واجهة رسومية مع `sing-box` مدمج ([`docs/cli.md`](docs/cli.md)). |
+
+**تثبيت CLI بسطر واحد** (يُنزّل حزمة المنصة المطابقة ويتحقق من `SHA256SUMS`):
+
+```bash
+# macOS (arm64) / Linux (x64, arm64)
+curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.sh | bash
+
+# Windows (x64, PowerShell)
+irm https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.ps1 | iex
+```
 
 - **البدء السريع**: استورد اشتراكًا (**الاشتراكات**) ← اختر الوضع والعقدة (**الرئيسية** / **العُقد**) ← اضغط زر التشغيل. يعمل بوضع الاتصال المباشر دون اشتراك.
 - **التحديثات**: تحديثات موقّعة داخل التطبيق في **الإعدادات ← تحديثات التطبيق** (حزمة `.deb` تفتح صفحة Releases لاستخدام `apt`؛ ويُنزّل Android ملف APK لتثبيته عبر النظام).
@@ -72,6 +83,7 @@ npm run dev
 | `npm run fetch-singbox -- win && npm run build:win` | بناء مثبّت Windows |
 | `npm run fetch-singbox -- linux-x64 && npm run build:linux` | بناء حزمتَي `.deb` و`.AppImage` لنظام Linux (`linux-arm64` على arm64) |
 | `npm run acceptance` / `acceptance:tun` / `acceptance:win` / `acceptance:linux` / `acceptance:linux-tun` | بوابات القبول الحية على جهاز حقيقي |
+| `bash scripts/package-cli.sh` | بناء والتحقق من حزمة CLI بلا واجهة رسومية لهذا المضيف |
 | `bash scripts/build-android-apk.sh debug arm64` | بناء ملف Android APK تصحيحي (`amd64` للمحاكي) |
 
 ```text
@@ -86,6 +98,7 @@ crates/         مساحة عمل Rust (ice-app, ice-config, ice-core, ice-engin
 | المستند | النطاق |
 |---|---|
 | [`docs/architecture.md`](docs/architecture.md) | البنية المعمارية وحدود الوحدات وتدفق البيانات |
+| [`docs/cli.md`](docs/cli.md) | واجهة سطر الأوامر والخدمة الخلفية وأتمتة الوكلاء |
 | [`docs/mcp.md`](docs/mcp.md) | إعداد MCP لسطح المكتب والأدوات ونموذج الأمان |
 | [`docs/tun.md`](docs/tun.md) | التقاط TUN ورفع الصلاحيات والاسترداد وقيود المنصات |
 | [`docs/testing.md`](docs/testing.md) | البوابات المحلية وبوابات CI والاختبارات اليدوية الحية |

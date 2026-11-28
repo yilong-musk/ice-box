@@ -50,6 +50,17 @@ Download from [GitHub Releases](https://github.com/yilong-musk/ice-box/releases/
 | **Windows** (x64) | Windows 10+ | `ice-box_<version>_x64-setup.exe` | Per-user NSIS installer (unsigned; confirm SmartScreen). TUN is IPv4 TCP only and requires Administrator. |
 | **Linux** (x64 / arm64) | Ubuntu 22.04+ | `.AppImage` / `.deb` | `chmod +x *.AppImage` or `sudo apt install ./ice-box_*.deb`. GNOME tray needs `gnome-shell-extension-appindicator`. |
 | **Android** (arm64) | Android 14+ | `ice-box_<version>_android_arm64.apk` | Signed with the project keystore; allow installing from this source. |
+| **CLI** (macOS / Windows / Linux) | macOS 12+ / Win 10+ / Ubuntu 22.04+ | `ice-box-cli_<version>_<os>_<arch>.tar.gz` / `.zip` | Headless CLI & daemon with bundled `sing-box` ([`docs/cli.md`](docs/cli.md)). |
+
+**CLI one-line install** (downloads the matching release archive and verifies `SHA256SUMS`):
+
+```bash
+# macOS (arm64) / Linux (x64, arm64)
+curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.sh | bash
+
+# Windows (x64, PowerShell)
+irm https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.ps1 | iex
+```
 
 - **Quick start**: Import a subscription (**Subscriptions**) → pick mode & node (**Home** / **Nodes**) → press power. Works in direct mode without a subscription.
 - **Updates**: Signed in-app updates in **Settings → App Updates** (`.deb` opens Releases for `apt`; Android downloads APK for system install).

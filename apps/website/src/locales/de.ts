@@ -90,6 +90,13 @@ export const de: Record<MarketingKey, string> = {
   "download.android.requires": "Android 14 oder neuer",
   "download.android.note":
     "Noch in keinem App-Store verfügbar. Erlaube bei der Android-Abfrage Installationen aus dieser Quelle.",
+  "download.cli.subtitle":
+    "Headless-CLI und Daemon für macOS, Windows und Linux — entwickelt für Agenten, Server und Skripte.",
+  "download.cli.shellAria": "CLI-Installationsbefehl wählen",
+  "download.cli.copy": "Kopieren",
+  "download.cli.copied": "Kopiert",
+  "download.cli.archives": "Direkte Archive",
+  "download.cli.docs": "CLI-Doku",
   "footer.source": "Quellcode",
   "footer.releases": "Releases",
   "footer.changelog": "Changelog",

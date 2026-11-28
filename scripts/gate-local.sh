@@ -786,6 +786,7 @@ run_fixtures_bucket() {
     scripts/test-check-glibc-floor.sh \
     scripts/test-verify-linux-bundles.sh \
     scripts/test-verify-cli-archive.sh \
+    scripts/test-install-cli.sh \
     scripts/test-retry-tauri-build.sh; do
     if [[ -f "$ROOT/$fixture" ]]; then
       batch_add "$(basename "$fixture" .sh)" bash "$ROOT/$fixture"

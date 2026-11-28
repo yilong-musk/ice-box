@@ -84,9 +84,17 @@ impl AppHost for HeadlessHost {
 ///
 /// Order:
 /// 1. Explicit `--resource-dir` or `ICE_BOX_RESOURCE_DIR` (preferred)
-/// 2. Sibling `resources/` or same directory as `current_exe()` when it contains `sing-box[.exe]` or `geoip/` (preferred)
+/// 2. Sibling `resources/` or the executable directory, when it contains
+///    `sing-box[.exe]` or `geoip/` (preferred). On Unix the canonical parent
+///    is searched first, so a symlink in `/usr/local/bin` or `~/.local/bin`
+///    still finds the bundled `resources/` next to the real binary, then the
+///    invocation directory if it differs. Windows keeps the invocation
+///    directory: installs add that directory to `PATH`, and `canonicalize`
+///    would rewrite it with the `\\?\` prefix.
 /// 3. Standard Linux FHS install directories (`/usr/lib/ice-box`, `/usr/share/ice-box`) (preferred)
-/// 4. Fallback `exe_dir` / `None` (dev builds resolve `third_party/sing-box` via `orchestrate`)
+/// 4. Fallback: the first searched executable directory, or `None` when the
+///    executable path is unknown (dev builds resolve `third_party/sing-box`
+///    via `orchestrate`)
 pub fn resolve_resource_dir(explicit: Option<PathBuf>) -> Option<PathBuf> {
     resolve_resource_dir_with_preference(explicit).0
 }
@@ -100,19 +108,38 @@ pub(crate) fn resolve_resource_dir_with_preference(
     if let Some(env_dir) = std::env::var_os("ICE_BOX_RESOURCE_DIR").filter(|v| !v.is_empty()) {
         return (Some(PathBuf::from(env_dir)), true);
     }
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(Path::to_path_buf));
-    resolve_resource_dir_from_candidates_with_preference(exe_dir.as_deref())
+    let exe_path = std::env::current_exe().ok();
+    resolve_resource_dir_from_exe_path_with_preference(exe_path.as_deref())
 }
 
-#[cfg(test)]
-pub(crate) fn resolve_resource_dir_from_candidates(exe_dir: Option<&Path>) -> Option<PathBuf> {
-    resolve_resource_dir_from_candidates_with_preference(exe_dir).0
+pub(crate) fn resolve_resource_dir_from_exe_path_with_preference(
+    exe_path: Option<&Path>,
+) -> (Option<PathBuf>, bool) {
+    let mut exe_dirs = Vec::new();
+    if let Some(path) = exe_path {
+        // Unix installs symlink ~/.local/bin/ice-box-cli onto the real binary.
+        // Search that canonical parent first so bundled resources win over a
+        // stray sing-box next to the symlink. Windows installs add the exe
+        // directory to PATH instead, and canonicalize rewrites those paths
+        // with the \\?\ prefix, so the invocation directory stays as-is.
+        #[cfg(unix)]
+        if let Ok(canonical) = std::fs::canonicalize(path) {
+            if let Some(parent) = canonical.parent() {
+                exe_dirs.push(parent.to_path_buf());
+            }
+        }
+        if let Some(parent) = path.parent() {
+            let parent_buf = parent.to_path_buf();
+            if !exe_dirs.iter().any(|existing| existing == &parent_buf) {
+                exe_dirs.push(parent_buf);
+            }
+        }
+    }
+    resolve_resource_dir_from_dirs_with_preference(&exe_dirs)
 }
 
-pub(crate) fn resolve_resource_dir_from_candidates_with_preference(
-    exe_dir: Option<&Path>,
+pub(crate) fn resolve_resource_dir_from_dirs_with_preference(
+    exe_dirs: &[PathBuf],
 ) -> (Option<PathBuf>, bool) {
     let bin_name = if cfg!(windows) {
         "sing-box.exe"
@@ -120,7 +147,7 @@ pub(crate) fn resolve_resource_dir_from_candidates_with_preference(
         "sing-box"
     };
     let mut candidates = Vec::new();
-    if let Some(dir) = exe_dir {
+    for dir in exe_dirs {
         candidates.push(dir.join("resources"));
         candidates.push(dir.to_path_buf());
     }
@@ -134,7 +161,7 @@ pub(crate) fn resolve_resource_dir_from_candidates_with_preference(
             return (Some(candidate), true);
         }
     }
-    (exe_dir.map(Path::to_path_buf), false)
+    (exe_dirs.first().cloned(), false)
 }
 
 /// Run the headless daemon until terminated by an OS signal.

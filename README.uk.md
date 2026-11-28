@@ -50,6 +50,17 @@
 | **Windows** (x64) | Windows 10+ | `ice-box_<version>_x64-setup.exe` | Інсталятор NSIS для поточного користувача (без підпису; підтвердьте SmartScreen). TUN підтримує лише IPv4 TCP і потребує прав адміністратора. |
 | **Linux** (x64 / arm64) | Ubuntu 22.04+ | `.AppImage` / `.deb` | `chmod +x *.AppImage` або `sudo apt install ./ice-box_*.deb`. Для трею GNOME потрібен `gnome-shell-extension-appindicator`. |
 | **Android** (arm64) | Android 14+ | `ice-box_<version>_android_arm64.apk` | Підписаний ключем проєкту; дозвольте встановлення з цього джерела. |
+| **CLI** (macOS / Windows / Linux) | macOS 12+ / Win 10+ / Ubuntu 22.04+ | `ice-box-cli_<version>_<os>_<arch>.tar.gz` / `.zip` | CLI і демон без графічного інтерфейсу з вбудованим `sing-box` ([`docs/cli.md`](docs/cli.md)). |
+
+**Встановлення CLI однією командою** (завантажує відповідний архів релізу та перевіряє `SHA256SUMS`):
+
+```bash
+# macOS (arm64) / Linux (x64, arm64)
+curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.sh | bash
+
+# Windows (x64, PowerShell)
+irm https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.ps1 | iex
+```
 
 - **Швидкий старт**: Імпортуйте підписку (**Підписки**) → оберіть режим і вузол (**Головна** / **Вузли**) → натисніть кнопку живлення. Працює в режимі «Напряму» й без підписки.
 - **Оновлення**: Підписані оновлення в застосунку через **Параметри → Оновлення застосунку** (`.deb` відкриває Releases для `apt`; Android завантажує APK для системного встановлення).
@@ -72,6 +83,7 @@ npm run dev
 | `npm run fetch-singbox -- win && npm run build:win` | Збірка інсталятора для Windows |
 | `npm run fetch-singbox -- linux-x64 && npm run build:linux` | Збірка `.deb` і `.AppImage` для Linux (`linux-arm64` на arm64) |
 | `npm run acceptance` / `acceptance:tun` / `acceptance:win` / `acceptance:linux` / `acceptance:linux-tun` | Приймальні перевірки на реальному хості |
+| `bash scripts/package-cli.sh` | Зібрати й перевірити кросплатформний CLI-архів для цього хоста |
 | `bash scripts/build-android-apk.sh debug arm64` | Збірка налагоджувального APK для Android (`amd64` для емулятора) |
 
 ```text
@@ -86,6 +98,7 @@ crates/         Робочий простір Rust (ice-app, ice-config, ice-cor
 | Документ | Зміст |
 |---|---|
 | [`docs/architecture.md`](docs/architecture.md) | Архітектура, межі модулів і потоки даних |
+| [`docs/cli.md`](docs/cli.md) | Кросплатформний CLI без GUI, демон і автоматизація агентів |
 | [`docs/mcp.md`](docs/mcp.md) | Налаштування MCP на десктопі, інструменти та модель безпеки |
 | [`docs/tun.md`](docs/tun.md) | Перехоплення TUN, підвищення прав, відновлення та обмеження платформ |
 | [`docs/testing.md`](docs/testing.md) | Локальні й CI-перевірки та ручні живі тести |

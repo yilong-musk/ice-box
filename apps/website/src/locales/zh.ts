@@ -87,6 +87,13 @@ export const zh = {
   "download.android.requires": "Android 14 或更高",
   "download.android.note":
     "暂未上架应用商店，安装时请按系统提示允许来自此来源的应用。",
+  "download.cli.subtitle":
+    "面向 macOS、Windows 与 Linux 的无头 CLI 与守护进程，适用于 Agent、服务器和自动化脚本。",
+  "download.cli.shellAria": "选择 CLI 安装命令",
+  "download.cli.copy": "复制",
+  "download.cli.copied": "已复制",
+  "download.cli.archives": "直接下载压缩包",
+  "download.cli.docs": "CLI 文档",
   "footer.source": "源代码",
   "footer.releases": "版本发布",
   "footer.changelog": "更新日志",

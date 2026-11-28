@@ -50,6 +50,17 @@ Unduh dari [GitHub Releases](https://github.com/yilong-musk/ice-box/releases/lat
 | **Windows** (x64) | Windows 10+ | `ice-box_<version>_x64-setup.exe` | Pemasang NSIS per pengguna (tanpa tanda tangan; konfirmasi SmartScreen). TUN hanya IPv4 TCP dan memerlukan Administrator. |
 | **Linux** (x64 / arm64) | Ubuntu 22.04+ | `.AppImage` / `.deb` | `chmod +x *.AppImage` atau `sudo apt install ./ice-box_*.deb`. Baki GNOME memerlukan `gnome-shell-extension-appindicator`. |
 | **Android** (arm64) | Android 14+ | `ice-box_<version>_android_arm64.apk` | Ditandatangani dengan keystore proyek; izinkan pemasangan dari sumber ini. |
+| **CLI** (macOS / Windows / Linux) | macOS 12+ / Win 10+ / Ubuntu 22.04+ | `ice-box-cli_<version>_<os>_<arch>.tar.gz` / `.zip` | CLI & daemon tanpa GUI dengan `sing-box` bawaan ([`docs/cli.md`](docs/cli.md)). |
+
+**Pemasangan cepat CLI** (mengunduh arsip rilis yang sesuai dan memverifikasi `SHA256SUMS`):
+
+```bash
+# macOS (arm64) / Linux (x64, arm64)
+curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.sh | bash
+
+# Windows (x64, PowerShell)
+irm https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.ps1 | iex
+```
 
 - **Mulai cepat**: Impor langganan (**Langganan**) → pilih mode & node (**Beranda** / **Node**) → tekan tombol daya. Berjalan dalam mode langsung saja tanpa langganan.
 - **Pembaruan**: Pembaruan dalam aplikasi bertanda tangan di **Setelan → Pembaruan Aplikasi** (`.deb` membuka Releases untuk `apt`; Android mengunduh APK untuk pemasangan sistem).
@@ -72,6 +83,7 @@ npm run dev
 | `npm run fetch-singbox -- win && npm run build:win` | Bangun pemasang Windows |
 | `npm run fetch-singbox -- linux-x64 && npm run build:linux` | Bangun `.deb` & `.AppImage` Linux (`linux-arm64` di arm64) |
 | `npm run acceptance` / `acceptance:tun` / `acceptance:win` / `acceptance:linux` / `acceptance:linux-tun` | Gerbang penerimaan langsung pada host nyata |
+| `bash scripts/package-cli.sh` | Bangun dan verifikasi arsip CLI lintas platform untuk host ini |
 | `bash scripts/build-android-apk.sh debug arm64` | Bangun APK debug Android (`amd64` untuk emulator) |
 
 ```text
@@ -86,6 +98,7 @@ crates/         Workspace Rust (ice-app, ice-config, ice-core, ice-engine, ice-s
 | Dokumen | Cakupan |
 |---|---|
 | [`docs/architecture.md`](docs/architecture.md) | Arsitektur, batas modul, dan alur data |
+| [`docs/cli.md`](docs/cli.md) | CLI lintas platform tanpa GUI, daemon, dan otomatisasi Agent |
 | [`docs/mcp.md`](docs/mcp.md) | Pengaturan MCP desktop, alat, dan model keamanan |
 | [`docs/tun.md`](docs/tun.md) | Pengambilalihan TUN, elevasi, pemulihan, dan batasan platform |
 | [`docs/testing.md`](docs/testing.md) | Gerbang lokal/CI dan pengujian langsung manual |

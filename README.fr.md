@@ -50,6 +50,17 @@ Téléchargez depuis [GitHub Releases](https://github.com/yilong-musk/ice-box/re
 | **Windows** (x64) | Windows 10+ | `ice-box_<version>_x64-setup.exe` | Installeur NSIS par utilisateur (non signé ; confirmez SmartScreen). TUN gère uniquement IPv4 TCP et requiert un compte Administrateur. |
 | **Linux** (x64 / arm64) | Ubuntu 22.04+ | `.AppImage` / `.deb` | `chmod +x *.AppImage` ou `sudo apt install ./ice-box_*.deb`. La barre système GNOME nécessite `gnome-shell-extension-appindicator`. |
 | **Android** (arm64) | Android 14+ | `ice-box_<version>_android_arm64.apk` | Signé avec le keystore du projet ; autorisez l'installation depuis cette source. |
+| **CLI** (macOS / Windows / Linux) | macOS 12+ / Win 10+ / Ubuntu 22.04+ | `ice-box-cli_<version>_<os>_<arch>.tar.gz` / `.zip` | CLI et démon sans interface avec `sing-box` intégré ([`docs/cli.md`](docs/cli.md)). |
+
+**Installation rapide de la CLI** (télécharge l'archive correspondante et vérifie `SHA256SUMS`) :
+
+```bash
+# macOS (arm64) / Linux (x64, arm64)
+curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.sh | bash
+
+# Windows (x64, PowerShell)
+irm https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.ps1 | iex
+```
 
 - **Démarrage rapide** : Importez un abonnement (**Abonnements**) → choisissez mode et nœud (**Accueil** / **Nœuds**) → appuyez sur le bouton d'alimentation. Fonctionne en mode direct sans abonnement.
 - **Mises à jour** : Mises à jour signées intégrées dans **Réglages → Mises à jour** (`.deb` ouvre Releases pour `apt` ; Android télécharge l'APK pour l'installeur système).
@@ -72,6 +83,7 @@ npm run dev
 | `npm run fetch-singbox -- win && npm run build:win` | Construire l'installeur Windows |
 | `npm run fetch-singbox -- linux-x64 && npm run build:linux` | Construire `.deb` et `.AppImage` Linux (`linux-arm64` sur arm64) |
 | `npm run acceptance` / `acceptance:tun` / `acceptance:win` / `acceptance:linux` / `acceptance:linux-tun` | Portes d'acceptation sur machine réelle |
+| `bash scripts/package-cli.sh` | Construire et vérifier l'archive CLI multiplateforme pour cet hôte |
 | `bash scripts/build-android-apk.sh debug arm64` | Construire l'APK Android de débogage (`amd64` pour l'émulateur) |
 
 ```text
@@ -86,6 +98,7 @@ crates/         Espace de travail Rust (ice-app, ice-config, ice-core, ice-engin
 | Document | Contenu |
 |---|---|
 | [`docs/architecture.md`](docs/architecture.md) | Architecture, limites des modules et flux de données |
+| [`docs/cli.md`](docs/cli.md) | CLI multiplateforme sans interface, démon et automatisation Agent |
 | [`docs/mcp.md`](docs/mcp.md) | Configuration MCP bureau, outils et modèle de sécurité |
 | [`docs/tun.md`](docs/tun.md) | Capture TUN, élévation, récupération et limites par plateforme |
 | [`docs/testing.md`](docs/testing.md) | Portes locales/CI et tests manuels en conditions réelles |
