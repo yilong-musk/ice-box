@@ -54,13 +54,7 @@ Unduh dari [GitHub Releases](https://github.com/yilong-musk/ice-box/releases/lat
 
 **Pemasangan cepat CLI** (mengunduh arsip rilis yang sesuai dan memverifikasi `SHA256SUMS`):
 
-**macOS** (Apple Silicon)
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.sh | bash
-```
-
-**Linux** (x64 / arm64)
+**macOS** (Apple Silicon) / **Linux** (x64 / arm64)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.sh | bash

@@ -54,13 +54,7 @@ macOS, Windows, Linux ve Android için hafif proxy istemcisi — [sing-box](http
 
 **Tek satırda CLI kurulumu** (uygun sürüm arşivini indirir ve `SHA256SUMS` doğrular):
 
-**macOS** (Apple Silicon)
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.sh | bash
-```
-
-**Linux** (x64 / arm64)
+**macOS** (Apple Silicon) / **Linux** (x64 / arm64)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.sh | bash

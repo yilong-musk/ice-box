@@ -54,13 +54,7 @@
 
 **CLI 一键安装**（自动下载对应平台压缩包并校验 `SHA256SUMS`）：
 
-**macOS**（Apple Silicon）
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.sh | bash
-```
-
-**Linux**（x64 / arm64）
+**macOS**（Apple Silicon）/ **Linux**（x64 / arm64）
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.sh | bash

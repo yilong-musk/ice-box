@@ -54,13 +54,7 @@ Download from [GitHub Releases](https://github.com/yilong-musk/ice-box/releases/
 
 **CLI one-line install** (downloads the matching release archive and verifies `SHA256SUMS`):
 
-**macOS** (Apple Silicon)
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.sh | bash
-```
-
-**Linux** (x64 / arm64)
+**macOS** (Apple Silicon) / **Linux** (x64 / arm64)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.sh | bash
