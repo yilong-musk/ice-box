@@ -84,13 +84,17 @@ impl AppHost for HeadlessHost {
 ///
 /// Order:
 /// 1. Explicit `--resource-dir` or `ICE_BOX_RESOURCE_DIR` (preferred)
-/// 2. Sibling `resources/` or same directory as `current_exe()`, checking the
-///    canonicalized symlink target first (so symlinks in `/usr/local/bin` or
-///    `~/.local/bin` still find the bundled `resources/` next to the real
-///    binary on macOS and Linux), then the invocation directory if different,
-///    when it contains `sing-box[.exe]` or `geoip/` (preferred)
+/// 2. Sibling `resources/` or the executable directory, when it contains
+///    `sing-box[.exe]` or `geoip/` (preferred). On Unix the canonical parent
+///    is searched first, so a symlink in `/usr/local/bin` or `~/.local/bin`
+///    still finds the bundled `resources/` next to the real binary, then the
+///    invocation directory if it differs. Windows keeps the invocation
+///    directory: installs add that directory to `PATH`, and `canonicalize`
+///    would rewrite it with the `\\?\` prefix.
 /// 3. Standard Linux FHS install directories (`/usr/lib/ice-box`, `/usr/share/ice-box`) (preferred)
-/// 4. Fallback `exe_dir` / `None` (dev builds resolve `third_party/sing-box` via `orchestrate`)
+/// 4. Fallback: the first searched executable directory, or `None` when the
+///    executable path is unknown (dev builds resolve `third_party/sing-box`
+///    via `orchestrate`)
 pub fn resolve_resource_dir(explicit: Option<PathBuf>) -> Option<PathBuf> {
     resolve_resource_dir_with_preference(explicit).0
 }
@@ -113,6 +117,12 @@ pub(crate) fn resolve_resource_dir_from_exe_path_with_preference(
 ) -> (Option<PathBuf>, bool) {
     let mut exe_dirs = Vec::new();
     if let Some(path) = exe_path {
+        // Unix installs symlink ~/.local/bin/ice-box-cli onto the real binary.
+        // Search that canonical parent first so bundled resources win over a
+        // stray sing-box next to the symlink. Windows installs add the exe
+        // directory to PATH instead, and canonicalize rewrites those paths
+        // with the \\?\ prefix, so the invocation directory stays as-is.
+        #[cfg(unix)]
         if let Ok(canonical) = std::fs::canonicalize(path) {
             if let Some(parent) = canonical.parent() {
                 exe_dirs.push(parent.to_path_buf());
@@ -126,19 +136,6 @@ pub(crate) fn resolve_resource_dir_from_exe_path_with_preference(
         }
     }
     resolve_resource_dir_from_dirs_with_preference(&exe_dirs)
-}
-
-#[cfg(test)]
-pub(crate) fn resolve_resource_dir_from_candidates(exe_dir: Option<&Path>) -> Option<PathBuf> {
-    resolve_resource_dir_from_candidates_with_preference(exe_dir).0
-}
-
-#[cfg(test)]
-pub(crate) fn resolve_resource_dir_from_candidates_with_preference(
-    exe_dir: Option<&Path>,
-) -> (Option<PathBuf>, bool) {
-    let dirs: Vec<PathBuf> = exe_dir.into_iter().map(Path::to_path_buf).collect();
-    resolve_resource_dir_from_dirs_with_preference(&dirs)
 }
 
 pub(crate) fn resolve_resource_dir_from_dirs_with_preference(

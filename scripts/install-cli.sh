@@ -10,7 +10,7 @@
 #   --version <ver>       Release version (e.g. 0.4.2 or v0.4.2; default: latest)
 #   --install-dir <dir>   Install root (default: ~/.local/share/ice-box-cli)
 #   --bin-dir <dir>       Symlink directory (default: ~/.local/bin)
-#   --platform <alias>    Override target (mac-arm64|mac-x64|linux-x64|linux-arm64)
+#   --platform <alias>    Override target (mac-arm64|linux-x64|linux-arm64)
 #   --repo <owner/name>   GitHub repository (default: yilong-musk/ice-box)
 #   --no-verify           Skip SHA256SUMS verification (not recommended)
 #   --skip-smoke          Skip running `ice-box-cli --version` after install
@@ -47,7 +47,7 @@ Options:
   --version <ver>       Release version (e.g. 0.4.2 or v0.4.2; default: latest)
   --install-dir <dir>   Install root (default: ~/.local/share/ice-box-cli)
   --bin-dir <dir>       Symlink directory (default: ~/.local/bin)
-  --platform <alias>    Override target (mac-arm64|mac-x64|linux-x64|linux-arm64)
+  --platform <alias>    Override target (mac-arm64|linux-x64|linux-arm64)
   --repo <owner/name>   GitHub repository (default: yilong-musk/ice-box)
   --no-verify           Skip SHA256SUMS verification
   --skip-smoke          Skip post-install `--version` verification
@@ -146,11 +146,19 @@ EOF
   if [[ -n "$platform_override" ]]; then
     case "$platform_override" in
     mac-arm64 | darwin_aarch64) archive_target="darwin_aarch64"; is_macos=1 ;;
-    mac-x64 | darwin_x86_64) archive_target="darwin_x86_64"; is_macos=1 ;;
+    mac-x64 | darwin_x86_64)
+      # Releases publish Apple Silicon archives only. A custom mirror may
+      # still host the darwin_x86_64 archive package-cli.sh can build.
+      if [[ -z "${ICE_BOX_RELEASE_BASE_URL:-}" ]]; then
+        die "prebuilt macOS CLI archives currently ship for Apple Silicon (arm64) only; build locally with: bash scripts/package-cli.sh --platform mac-x64"
+      fi
+      archive_target="darwin_x86_64"
+      is_macos=1
+      ;;
     linux-x64 | linux_x86_64) archive_target="linux_x86_64" ;;
     linux-arm64 | linux_aarch64) archive_target="linux_aarch64" ;;
     *)
-      die "unsupported --platform '$platform_override' (expected mac-arm64, mac-x64, linux-x64, or linux-arm64)"
+      die "unsupported --platform '$platform_override' (expected mac-arm64, linux-x64, or linux-arm64)"
       ;;
     esac
   else
@@ -309,6 +317,14 @@ EOF
     xattr -dr com.apple.quarantine "$staging" 2>/dev/null || true
   fi
 
+  # Prove the new tree runs before replacing the previous install.
+  if [[ "$skip_smoke" != "1" ]]; then
+    if ! "$staging/ice-box-cli" --version; then
+      rm -rf "$staging"
+      die "staged binary failed smoke check"
+    fi
+  fi
+
   local current_dir="$install_dir/current"
   local backup_dir="$install_dir/.previous-$$"
   rm -rf "$backup_dir"
@@ -322,13 +338,14 @@ EOF
     fi
     die "failed to activate new installation at $current_dir"
   fi
-  rm -rf "$backup_dir"
-
-  ln -sfn "$current_dir/ice-box-cli" "$bin_dir/ice-box-cli"
-
-  if [[ "$skip_smoke" != "1" ]]; then
-    "$bin_dir/ice-box-cli" --version
+  if ! ln -sfn "$current_dir/ice-box-cli" "$bin_dir/ice-box-cli"; then
+    rm -rf "$current_dir"
+    if [[ -e "$backup_dir" ]]; then
+      mv "$backup_dir" "$current_dir" || true
+    fi
+    die "failed to symlink $bin_dir/ice-box-cli"
   fi
+  rm -rf "$backup_dir"
 
   echo "Installed ice-box-cli (${tag}) to $current_dir"
   echo "Symlinked binary at $bin_dir/ice-box-cli"

@@ -21,11 +21,7 @@ import {
   resolveTheme,
 } from "../../desktop/src/lib/theme";
 import {
-  CLI_INSTALL_COMMAND,
-  CLI_TARGETS,
   INSTALLER_PLATFORMS,
-  cliDownloadUrl,
-  defaultCliShell,
   detectLinuxArch,
   detectPlatform,
   installerDownloadUrl,
@@ -45,6 +41,7 @@ import { DEMO_RESIZE_MESSAGE } from "./browser-window-chrome";
 import { phoneStatusIcons } from "./phone-status-icons.js";
 import "./phone-demo.css";
 import "./style.css";
+import { bindCliDownloadCard, renderCliDownloadCard } from "./cli-download.js";
 
 /** Same source as the desktop app and the Live Demo title bar (`APP_VERSION`). */
 const displayVersion = `v${appVersion}`;
@@ -156,18 +153,6 @@ const LINUX_ARCH_OPTIONS = [
   ["arm64", "arm64"],
 ];
 
-const CLI_SHELL_OPTIONS = [
-  ["unix", "macOS / Linux"],
-  ["windows", "Windows"],
-];
-
-const CLI_ARCHIVE_LABELS = {
-  "darwin-aarch64": "macOS (arm64)",
-  "windows-x86_64": "Windows (x64)",
-  "linux-x86_64": "Linux (x64)",
-  "linux-aarch64": "Linux (arm64)",
-};
-
 const windowLights = `<span class="window-lights" dir="ltr" aria-hidden="true"><i></i><i></i><i></i></span>`;
 
 const currentPlatform = detectPlatform(navigator.userAgent, navigator.maxTouchPoints);
@@ -176,9 +161,6 @@ let detectedLinuxArch =
   currentPlatform === "linux" ? detectLinuxArch(navigator.userAgent) : "amd64";
 let selectedLinuxArch = detectedLinuxArch;
 let linuxArchManuallySelected = false;
-let selectedCliShell = defaultCliShell(currentPlatform);
-let cliCopied = false;
-let cliCopyTimer = null;
 
 function platformPrimaryUrl(platform) {
   return platform === "linux"
@@ -405,44 +387,14 @@ root.innerHTML = `
           ).join("")}
         </div>
       </div>
-      <div class="download-cli-card reveal" data-cli-card>
-        <div class="download-cli-head">
-          <span class="download-emblem download-cli-emblem">${icon("terminal", "platform-mark")}</span>
-          <div class="download-pane-identity">
-            <div class="download-pane-title-row">
-              <h3 class="download-cli-title">ice-box CLI</h3>
-              <span class="download-version">${displayVersion}</span>
-            </div>
-            <p class="download-cli-subtitle" ${t("download.cli.subtitle")}></p>
-          </div>
-          <div class="download-arch-group" role="group" data-cli-shell-group>
-            ${CLI_SHELL_OPTIONS.map(
-              ([shell, label]) =>
-                `<button type="button" class="download-arch-option" data-cli-shell="${shell}" aria-pressed="${shell === selectedCliShell ? "true" : "false"}">${label}</button>`,
-            ).join("")}
-          </div>
-        </div>
-        <div class="download-cli-command" dir="ltr">
-          <pre class="download-cli-code"><code data-cli-command>${CLI_INSTALL_COMMAND[selectedCliShell]}</code></pre>
-          <button type="button" class="button download-cli-copy" data-cli-copy>
-            <span class="download-cli-copy-icon">${icon("copy", "icon icon-xs")}</span>
-            <span class="download-cli-copied-icon" hidden>${icon("check", "icon icon-xs")}</span>
-            <span class="download-cli-copy-label"></span>
-          </button>
-        </div>
-        <div class="download-cli-footer">
-          <div class="download-cli-archives">
-            <span class="download-cli-archives-label" ${t("download.cli.archives")}></span>
-            <div class="download-cli-links">
-              ${CLI_TARGETS.map(
-                (target) =>
-                  `<a class="download-cli-link" data-cli-archive="${target}" href="${cliDownloadUrl(appVersion, target)}">${icon("download", "icon icon-xs")}<span>${CLI_ARCHIVE_LABELS[target]}</span></a>`,
-              ).join("")}
-            </div>
-          </div>
-          <a class="text-link download-cli-docs" href="${REPO_URL}/blob/main/docs/cli.md" target="_blank" rel="noreferrer"><span ${t("download.cli.docs")}></span>${icon("arrowRight", "icon icon-xs")}</a>
-        </div>
-      </div>
+      ${renderCliDownloadCard({
+        icon,
+        t,
+        displayVersion,
+        appVersion,
+        repoUrl: REPO_URL,
+        platform: currentPlatform,
+      })}
       <p class="download-more reveal"><a class="text-link" href="${REPO_URL}/releases" target="_blank" rel="noreferrer"><span ${t("download.allReleases")}></span>${icon("arrowRight", "icon icon-xs")}</a></p>
     </section>
   </main>
@@ -476,13 +428,9 @@ const parts = {
   nav: root.querySelector(".site-nav"),
   downloadRail: root.querySelector(".download-rail"),
   linuxArchGroup: root.querySelector("[data-linux-arch-group]"),
-  cliShellGroup: root.querySelector("[data-cli-shell-group]"),
-  cliCommand: root.querySelector("[data-cli-command]"),
-  cliCopyButton: root.querySelector("[data-cli-copy]"),
-  cliCopyLabel: root.querySelector(".download-cli-copy-label"),
-  cliCopyIcon: root.querySelector(".download-cli-copy-icon"),
-  cliCopiedIcon: root.querySelector(".download-cli-copied-icon"),
 };
+
+const cliDownload = bindCliDownloadCard(root.querySelector("[data-cli-card]"));
 
 const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 
@@ -700,83 +648,6 @@ parts.linuxArchGroup.addEventListener("click", (event) => {
   applyDownloadCopy(language);
 });
 
-function syncCliCopyButton(next) {
-  const label = marketingText(
-    cliCopied ? "download.cli.copied" : "download.cli.copy",
-    next,
-  );
-  parts.cliCopyLabel.textContent = label;
-  parts.cliCopyButton.setAttribute("aria-label", label);
-  parts.cliCopyButton.classList.toggle("is-copied", cliCopied);
-  parts.cliCopyIcon.hidden = cliCopied;
-  parts.cliCopiedIcon.hidden = !cliCopied;
-}
-
-function selectCliShell(shell) {
-  if (shell !== "unix" && shell !== "windows") return;
-  selectedCliShell = shell;
-  if (cliCopyTimer != null) {
-    window.clearTimeout(cliCopyTimer);
-    cliCopyTimer = null;
-  }
-  cliCopied = false;
-  for (const option of parts.cliShellGroup.querySelectorAll("[data-cli-shell]")) {
-    option.setAttribute(
-      "aria-pressed",
-      option.dataset.cliShell === selectedCliShell ? "true" : "false",
-    );
-  }
-  parts.cliCommand.textContent = CLI_INSTALL_COMMAND[selectedCliShell];
-  syncCliCopyButton(language);
-}
-
-async function copyCliCommand() {
-  const command = CLI_INSTALL_COMMAND[selectedCliShell];
-  let copied = false;
-  if (navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(command);
-      copied = true;
-    } catch {
-      // Fall back to a hidden textarea when clipboard permissions are unavailable.
-    }
-  }
-  if (!copied) {
-    const area = document.createElement("textarea");
-    area.value = command;
-    area.setAttribute("readonly", "");
-    area.style.position = "fixed";
-    area.style.opacity = "0";
-    document.body.appendChild(area);
-    area.select();
-    try {
-      copied = document.execCommand("copy");
-    } catch {
-      copied = false;
-    }
-    area.remove();
-  }
-  if (!copied) return;
-  cliCopied = true;
-  syncCliCopyButton(language);
-  if (cliCopyTimer != null) window.clearTimeout(cliCopyTimer);
-  cliCopyTimer = window.setTimeout(() => {
-    cliCopied = false;
-    cliCopyTimer = null;
-    syncCliCopyButton(language);
-  }, 2000);
-}
-
-parts.cliShellGroup.addEventListener("click", (event) => {
-  const button = event.target.closest("[data-cli-shell]");
-  if (!button) return;
-  selectCliShell(button.dataset.cliShell);
-});
-
-parts.cliCopyButton.addEventListener("click", () => {
-  void copyCliCommand();
-});
-
 /** Platform rail tabs, detail panes, requirements, and first-launch notes. */
 function applyDownloadCopy(next) {
   parts.downloadRail.setAttribute(
@@ -787,11 +658,7 @@ function applyDownloadCopy(next) {
     "aria-label",
     marketingText("download.linux.archAria", next),
   );
-  parts.cliShellGroup.setAttribute(
-    "aria-label",
-    marketingText("download.cli.shellAria", next),
-  );
-  syncCliCopyButton(next);
+  cliDownload.setLanguage(next);
   const yours = marketingText("download.yours", next);
   const actionTemplate = marketingText("download.actionPlatform", next);
 

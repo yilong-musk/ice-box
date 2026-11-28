@@ -14,7 +14,7 @@ pub use commands::run;
 #[cfg(test)]
 mod tests {
     use crate::daemon::{
-        resolve_resource_dir_from_candidates, resolve_resource_dir_from_candidates_with_preference,
+        resolve_resource_dir_from_dirs_with_preference,
         resolve_resource_dir_from_exe_path_with_preference,
     };
     use crate::env_exec::{format_env_script, ShellFlavor};
@@ -112,7 +112,8 @@ mod tests {
     fn resource_dir_prefers_sibling_resources_dir_over_exe_dir() {
         let root = temp_dir("res");
         let empty = temp_dir("res-empty");
-        let (_, empty_prefer) = resolve_resource_dir_from_candidates_with_preference(Some(&empty));
+        let (_, empty_prefer) =
+            resolve_resource_dir_from_dirs_with_preference(std::slice::from_ref(&empty));
         assert!(!empty_prefer);
 
         let nested = root.join("resources");
@@ -124,10 +125,11 @@ mod tests {
         };
         fs::write(nested.join(bin), b"core").unwrap();
         assert_eq!(
-            resolve_resource_dir_from_candidates(Some(&root)),
+            resolve_resource_dir_from_dirs_with_preference(std::slice::from_ref(&root)).0,
             Some(nested.clone())
         );
-        let (dir, prefer) = resolve_resource_dir_from_candidates_with_preference(Some(&root));
+        let (dir, prefer) =
+            resolve_resource_dir_from_dirs_with_preference(std::slice::from_ref(&root));
         assert_eq!(dir, Some(nested));
         assert!(prefer);
 
@@ -139,10 +141,14 @@ mod tests {
         fs::write(&exe_path, b"cli").unwrap();
         let (exe_resolved, exe_prefer) =
             resolve_resource_dir_from_exe_path_with_preference(Some(&exe_path));
-        assert_eq!(
-            exe_resolved,
-            Some(fs::canonicalize(root.join("resources")).unwrap())
-        );
+        // Unix returns the canonical directory so a symlink install finds
+        // bundled resources. Windows returns the invocation directory unchanged.
+        let expected_resources = if cfg!(unix) {
+            fs::canonicalize(root.join("resources")).unwrap()
+        } else {
+            root.join("resources")
+        };
+        assert_eq!(exe_resolved, Some(expected_resources));
         assert!(exe_prefer);
 
         let _ = fs::remove_dir_all(root);

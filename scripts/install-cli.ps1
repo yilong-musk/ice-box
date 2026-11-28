@@ -18,7 +18,10 @@ param(
     [switch]$NoVerify = ($env:ICE_BOX_NO_VERIFY -eq "1"),
     [switch]$NoPathUpdate = ($env:ICE_BOX_NO_PATH_UPDATE -eq "1"),
     [switch]$SkipSmoke = ($env:ICE_BOX_SKIP_SMOKE -eq "1"),
-    [switch]$Uninstall = ($env:ICE_BOX_UNINSTALL -eq "1")
+    [switch]$Uninstall = ($env:ICE_BOX_UNINSTALL -eq "1"),
+    # Offline fixtures set this to exercise activation under pwsh on non-Windows
+    # hosts. Published archives are Windows x64 only.
+    [switch]$SkipArchCheck = ($env:ICE_BOX_SKIP_ARCH_CHECK -eq "1")
 )
 
 Set-StrictMode -Version Latest
@@ -35,10 +38,48 @@ function Normalize-PathEntry {
     return $Entry.Trim().TrimEnd('\', '/')
 }
 
+function Test-PlatformNotSupported {
+    param($ErrorRecord)
+    $current = $ErrorRecord.Exception
+    while ($null -ne $current) {
+        if ($current -is [System.PlatformNotSupportedException]) {
+            return $true
+        }
+        $current = $current.InnerException
+    }
+    return $false
+}
+
+function Get-UserPathVariable {
+    try {
+        return [Environment]::GetEnvironmentVariable("Path", "User")
+    } catch {
+        # pwsh on macOS/Linux has no user-scope environment block. The call is
+        # often wrapped in MethodInvocationException, so match the inner type.
+        if (Test-PlatformNotSupported $_) {
+            return $null
+        }
+        throw
+    }
+}
+
+function Set-UserPathVariable {
+    param([string]$Value)
+    try {
+        [Environment]::SetEnvironmentVariable("Path", $Value, "User")
+        return $true
+    } catch {
+        if (Test-PlatformNotSupported $_) {
+            return $false
+        }
+        throw
+    }
+}
+
 function Add-ToUserPath {
     param([string]$Dir)
     $normalizedTarget = Normalize-PathEntry $Dir
-    $currentUserPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    $currentUserPath = Get-UserPathVariable
     $entries = @()
     if (-not [string]::IsNullOrWhiteSpace($currentUserPath)) {
         $entries = @($currentUserPath.Split(';') | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
@@ -52,8 +93,9 @@ function Add-ToUserPath {
     }
     if (-not $alreadyPresent) {
         $updated = ($entries + @($Dir)) -join ';'
-        [Environment]::SetEnvironmentVariable("Path", $updated, "User")
-        Write-Host "Added $Dir to user PATH."
+        if (Set-UserPathVariable $updated) {
+            Write-Host "Added $Dir to user PATH."
+        }
     }
 
     $sessionEntries = @()
@@ -75,7 +117,7 @@ function Add-ToUserPath {
 function Remove-FromUserPath {
     param([string]$Dir)
     $normalizedTarget = Normalize-PathEntry $Dir
-    $currentUserPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    $currentUserPath = Get-UserPathVariable
     if ([string]::IsNullOrWhiteSpace($currentUserPath)) {
         return
     }
@@ -88,8 +130,9 @@ function Remove-FromUserPath {
     )
     $updated = $kept -join ';'
     if ($updated -ne $currentUserPath) {
-        [Environment]::SetEnvironmentVariable("Path", $updated, "User")
-        Write-Host "Removed $Dir from user PATH."
+        if (Set-UserPathVariable $updated) {
+            Write-Host "Removed $Dir from user PATH."
+        }
     }
 }
 
@@ -110,16 +153,18 @@ if ($Repo -notmatch '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$') {
     throw "install-cli: invalid repository name: $Repo"
 }
 
-if (-not [Environment]::Is64BitOperatingSystem) {
-    throw "install-cli: prebuilt Windows CLI archives require 64-bit Windows (x64)."
-}
+if (-not $SkipArchCheck) {
+    if (-not [Environment]::Is64BitOperatingSystem) {
+        throw "install-cli: prebuilt Windows CLI archives require 64-bit Windows (x64)."
+    }
 
-$arch = $env:PROCESSOR_ARCHITECTURE
-if ($env:PROCESSOR_ARCHITEW6432) {
-    $arch = $env:PROCESSOR_ARCHITEW6432
-}
-if ($arch -and $arch -notin @("AMD64", "x86_64")) {
-    throw "install-cli: prebuilt Windows CLI archives currently ship for x64 only (detected: $arch)."
+    $arch = $env:PROCESSOR_ARCHITECTURE
+    if ($env:PROCESSOR_ARCHITEW6432) {
+        $arch = $env:PROCESSOR_ARCHITEW6432
+    }
+    if ($arch -and $arch -notin @("AMD64", "x86_64")) {
+        throw "install-cli: prebuilt Windows CLI archives currently ship for x64 only (detected: $arch)."
+    }
 }
 
 function Resolve-LatestTag {
@@ -232,6 +277,25 @@ try {
     $backupDir = Join-Path $InstallDir (".previous-" + [Guid]::NewGuid().ToString("N"))
 
     Copy-Item -LiteralPath $extracted -Destination $stagingDir -Recurse -Force
+    $stagedExe = Join-Path $stagingDir "ice-box-cli.exe"
+    # Offline fixtures run under pwsh on macOS/Linux and ship a shebang script
+    # named ice-box-cli.exe. Windows CreateProcess does not need this bit.
+    if ($env:OS -ne "Windows_NT") {
+        & chmod +x $stagedExe
+        if ($LASTEXITCODE -ne 0) {
+            Remove-Item -LiteralPath $stagingDir -Recurse -Force -ErrorAction SilentlyContinue
+            throw "install-cli: failed to mark $stagedExe executable"
+        }
+    }
+    # Prove the new tree runs before replacing the previous install.
+    if (-not $SkipSmoke) {
+        & $stagedExe --version
+        if ($LASTEXITCODE -ne 0) {
+            Remove-Item -LiteralPath $stagingDir -Recurse -Force -ErrorAction SilentlyContinue
+            throw "install-cli: staged binary failed smoke check (exit $LASTEXITCODE)"
+        }
+    }
+
     $movedBackup = $false
     try {
         if (Test-Path -LiteralPath $currentDir) {
@@ -239,6 +303,9 @@ try {
             $movedBackup = $true
         }
         Move-Item -LiteralPath $stagingDir -Destination $currentDir -Force
+        if (-not $NoPathUpdate) {
+            Add-ToUserPath $currentDir
+        }
         if ($movedBackup -and (Test-Path -LiteralPath $backupDir)) {
             Remove-Item -LiteralPath $backupDir -Recurse -Force
         }
@@ -246,22 +313,15 @@ try {
         if (Test-Path -LiteralPath $stagingDir) {
             Remove-Item -LiteralPath $stagingDir -Recurse -Force -ErrorAction SilentlyContinue
         }
-        if ($movedBackup -and (Test-Path -LiteralPath $backupDir) -and -not (Test-Path -LiteralPath $currentDir)) {
-            Move-Item -LiteralPath $backupDir -Destination $currentDir -Force -ErrorAction SilentlyContinue
+        if ($movedBackup -and (Test-Path -LiteralPath $backupDir)) {
+            if (Test-Path -LiteralPath $currentDir) {
+                Remove-Item -LiteralPath $currentDir -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            if (-not (Test-Path -LiteralPath $currentDir)) {
+                Move-Item -LiteralPath $backupDir -Destination $currentDir -Force -ErrorAction SilentlyContinue
+            }
         }
         throw "install-cli: failed to activate installation at $currentDir (is ice-box-cli.exe still running?): $_"
-    }
-
-    if (-not $NoPathUpdate) {
-        Add-ToUserPath $currentDir
-    }
-
-    $installedExe = Join-Path $currentDir "ice-box-cli.exe"
-    if (-not $SkipSmoke) {
-        & $installedExe --version
-        if ($LASTEXITCODE -ne 0) {
-            throw "install-cli: installed binary failed smoke check (exit $LASTEXITCODE)"
-        }
     }
 
     Write-Host "Installed ice-box-cli ($tag) to $currentDir"
