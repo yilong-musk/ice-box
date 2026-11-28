@@ -50,6 +50,17 @@ Tải từ [GitHub Releases](https://github.com/yilong-musk/ice-box/releases/lat
 | **Windows** (x64) | Windows 10+ | `ice-box_<version>_x64-setup.exe` | Bộ cài NSIS theo từng người dùng (chưa ký; xác nhận SmartScreen). TUN chỉ hỗ trợ IPv4 TCP và yêu cầu quyền Quản trị viên. |
 | **Linux** (x64 / arm64) | Ubuntu 22.04+ | `.AppImage` / `.deb` | `chmod +x *.AppImage` hoặc `sudo apt install ./ice-box_*.deb`. Khay hệ thống GNOME cần `gnome-shell-extension-appindicator`. |
 | **Android** (arm64) | Android 14+ | `ice-box_<version>_android_arm64.apk` | Ký bằng keystore của dự án; cho phép cài đặt từ nguồn này. |
+| **CLI** (macOS / Windows / Linux) | macOS 12+ / Win 10+ / Ubuntu 22.04+ | `ice-box-cli_<version>_<os>_<arch>.tar.gz` / `.zip` | CLI & daemon không giao diện kèm sẵn `sing-box` ([`docs/cli.md`](docs/cli.md)). |
+
+**Cài đặt nhanh CLI** (tự tải gói nén tương ứng và kiểm tra `SHA256SUMS`):
+
+```bash
+# macOS (arm64) / Linux (x64, arm64)
+curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.sh | bash
+
+# Windows (x64, PowerShell)
+irm https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.ps1 | iex
+```
 
 - **Bắt đầu nhanh**: Nhập gói đăng ký (**Gói đăng ký**) → chọn chế độ & nút (**Trang chủ** / **Nút**) → nhấn nút nguồn. Hoạt động ở chế độ trực tiếp khi chưa có gói đăng ký.
 - **Cập nhật**: Cập nhật trong ứng dụng có ký số tại **Cài đặt → Cập nhật ứng dụng** (`.deb` mở trang Releases cho `apt`; Android tải APK để trình cài đặt hệ thống xử lý).
@@ -72,6 +83,7 @@ npm run dev
 | `npm run fetch-singbox -- win && npm run build:win` | Đóng gói bộ cài Windows |
 | `npm run fetch-singbox -- linux-x64 && npm run build:linux` | Đóng gói `.deb` & `.AppImage` cho Linux (`linux-arm64` trên arm64) |
 | `npm run acceptance` / `acceptance:tun` / `acceptance:win` / `acceptance:linux` / `acceptance:linux-tun` | Cổng kiểm thử nghiệm thu trên máy thật |
+| `bash scripts/package-cli.sh` | Đóng gói và kiểm chứng tệp nén CLI đa nền tảng cho máy hiện tại |
 | `bash scripts/build-android-apk.sh debug arm64` | Đóng gói APK gỡ lỗi Android (`amd64` cho trình giả lập) |
 
 ```text
@@ -86,6 +98,7 @@ crates/         Workspace Rust (ice-app, ice-config, ice-core, ice-engine, ice-s
 | Tài liệu | Phạm vi |
 |---|---|
 | [`docs/architecture.md`](docs/architecture.md) | Kiến trúc, ranh giới mô-đun và luồng dữ liệu |
+| [`docs/cli.md`](docs/cli.md) | CLI không giao diện đa nền tảng, daemon và tự động hóa Agent |
 | [`docs/mcp.md`](docs/mcp.md) | Thiết lập MCP trên máy tính, công cụ và mô hình bảo mật |
 | [`docs/tun.md`](docs/tun.md) | Bắt lưu lượng TUN, nâng quyền, khôi phục và giới hạn nền tảng |
 | [`docs/testing.md`](docs/testing.md) | Cổng kiểm tra cục bộ/CI và kiểm thử trực tiếp thủ công |

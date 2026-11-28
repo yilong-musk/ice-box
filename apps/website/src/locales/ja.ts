@@ -90,6 +90,13 @@ export const ja: Record<MarketingKey, string> = {
   "download.android.requires": "Android 14 以降",
   "download.android.note":
     "アプリストアでは未配信です。インストール時に Android から確認が出たら、この提供元からのインストールを許可してください。",
+  "download.cli.subtitle":
+    "macOS、Windows、Linux 向けのヘッドレス CLI とデーモン。Agent、サーバー、スクリプト自動化に対応します。",
+  "download.cli.shellAria": "CLI インストールコマンドを選択",
+  "download.cli.copy": "コピー",
+  "download.cli.copied": "コピー済み",
+  "download.cli.archives": "アーカイブ直接ダウンロード",
+  "download.cli.docs": "CLI ドキュメント",
   "footer.source": "ソースコード",
   "footer.releases": "リリース",
   "footer.changelog": "更新履歴",

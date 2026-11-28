@@ -490,6 +490,31 @@ try {
     );
   }
 
+  // Verify the headless CLI download card: shell switcher, direct archive URLs,
+  // copy action, and preserved selection across language switches.
+  const cliCommand = page.locator("[data-cli-command]");
+  if (!(await cliCommand.textContent())?.includes("install-cli.sh")) {
+    throw new Error(`CLI card should default to unix install command, got ${await cliCommand.textContent()}`);
+  }
+  await page.locator('[data-cli-shell="windows"]').click();
+  await waitForAttribute(page.locator('[data-cli-shell="windows"]'), "aria-pressed", "true");
+  if (!(await cliCommand.textContent())?.includes("install-cli.ps1")) {
+    throw new Error(`CLI Windows toggle did not update command: ${await cliCommand.textContent()}`);
+  }
+  for (const [target, suffix] of [
+    ["darwin-aarch64", "_darwin_aarch64.tar.gz"],
+    ["windows-x86_64", "_windows_x86_64.zip"],
+    ["linux-x86_64", "_linux_x86_64.tar.gz"],
+    ["linux-aarch64", "_linux_aarch64.tar.gz"],
+  ]) {
+    const href = await page.locator(`[data-cli-archive="${target}"]`).getAttribute("href");
+    if (!href?.endsWith(suffix)) {
+      throw new Error(`CLI archive ${target} href must end with ${suffix}, got ${href}`);
+    }
+  }
+  await page.locator("[data-cli-copy]").click();
+  await waitForText(page.locator(".download-cli-copy-label"), "Copied");
+
   async function pickSiteLanguage(code) {
     await page.locator(".nav-language").click();
     await page.locator(`.nav-language-option[data-language="${code}"]`).click();
@@ -501,9 +526,10 @@ try {
   });
   if (
     (await page.locator('[data-download-tab="linux"]').getAttribute("aria-selected")) !== "true" ||
-    (await page.locator('[data-linux-arch="arm64"]').getAttribute("aria-pressed")) !== "true"
+    (await page.locator('[data-linux-arch="arm64"]').getAttribute("aria-pressed")) !== "true" ||
+    (await page.locator('[data-cli-shell="windows"]').getAttribute("aria-pressed")) !== "true"
   ) {
-    throw new Error("language switch did not preserve active download platform and Linux arch");
+    throw new Error("language switch did not preserve active download platform, Linux arch, and CLI shell");
   }
   await waitForText(page.locator('[data-linux-format="appimage"] .download-action'), "下载 AppImage");
   await assertUniformDesktopDownloadPanel(page, "1280px zh");
@@ -512,6 +538,7 @@ try {
   await pickSiteLanguage("fa");
   await waitForAttribute(page.locator("html"), "dir", "rtl");
   await waitForAttribute(frame.locator("html"), "dir", "rtl");
+  await waitForAttribute(page.locator(".download-cli-command"), "dir", "ltr");
   await frame.getByRole("button", { name: "برنامه‌ها", exact: true }).waitFor({
     timeout: 10_000,
   });

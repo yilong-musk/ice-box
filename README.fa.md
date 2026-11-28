@@ -50,6 +50,17 @@
 | **Windows** (x64) | Windows 10+ | `ice-box_<version>_x64-setup.exe` | نصب‌کننده NSIS ویژه کاربر (بدون امضا؛ SmartScreen را تایید کنید). حالت TUN فقط IPv4 TCP است و به Administrator نیاز دارد. |
 | **Linux** (x64 / arm64) | Ubuntu 22.04+ | `.AppImage` / `.deb` | دستور `chmod +x *.AppImage` یا `sudo apt install ./ice-box_*.deb` را اجرا کنید. سینی سیستم در GNOME به `gnome-shell-extension-appindicator` نیاز دارد. |
 | **Android** (arm64) | Android 14+ | `ice-box_<version>_android_arm64.apk` | با کلید پروژه (keystore) امضا شده؛ نصب از این منبع را مجاز کنید. |
+| **CLI** (macOS / Windows / Linux) | macOS 12+ / Win 10+ / Ubuntu 22.04+ | `ice-box-cli_<version>_<os>_<arch>.tar.gz` / `.zip` | ابزار خط فرمان و سرویس بدون رابط گرافیکی با هسته داخلی `sing-box` ([`docs/cli.md`](docs/cli.md)). |
+
+**نصب تک‌خطی CLI** (بسته متناسب با سیستم را دانلود و `SHA256SUMS` را بررسی می‌کند):
+
+```bash
+# macOS (arm64) / Linux (x64, arm64)
+curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.sh | bash
+
+# Windows (x64, PowerShell)
+irm https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.ps1 | iex
+```
 
 - **شروع سریع**: اشتراک وارد کنید (**اشتراک‌ها**) ← حالت و نود را انتخاب کنید (**خانه** / **نودها**) ← دکمه پاور را بزنید. بدون اشتراک نیز در حالت مستقیم کار می‌کند.
 - **بروزرسانی**: بروزرسانی درون‌برنامه‌ای با تایید امضا در **تنظیمات ← بروزرسانی برنامه** (نسخه `.deb` صفحه Releases را برای `apt` باز می‌کند؛ Android فایل APK را برای نصب سیستمی دانلود می‌کند).
@@ -72,6 +83,7 @@ npm run dev
 | `npm run fetch-singbox -- win && npm run build:win` | ساخت نصب‌کننده Windows |
 | `npm run fetch-singbox -- linux-x64 && npm run build:linux` | ساخت بسته‌های `.deb` و `.AppImage` برای Linux (`linux-arm64` در arm64) |
 | `npm run acceptance` / `acceptance:tun` / `acceptance:win` / `acceptance:linux` / `acceptance:linux-tun` | گیت‌های پذیرش زنده روی دستگاه واقعی |
+| `bash scripts/package-cli.sh` | ساخت و بررسی بسته CLI بدون رابط گرافیکی برای این میزبان |
 | `bash scripts/build-android-apk.sh debug arm64` | ساخت فایل APK دیباگ Android (`amd64` برای شبیه‌ساز) |
 
 ```text
@@ -86,6 +98,7 @@ crates/         فضای کار Rust (ice-app, ice-config, ice-core, ice-engine,
 | سند | دامنه |
 |---|---|
 | [`docs/architecture.md`](docs/architecture.md) | معماری، مرزهای ماژول‌ها و جریان داده |
+| [`docs/cli.md`](docs/cli.md) | ابزار CLI چندپلتفرمی، سرویس پس‌زمینه و خودکارسازی ایجنت‌ها |
 | [`docs/mcp.md`](docs/mcp.md) | راه‌اندازی MCP دسکتاپ، ابزارها و مدل امنیتی |
 | [`docs/tun.md`](docs/tun.md) | هدایت ترافیک TUN، ارتقای دسترسی، بازیابی و محدودیت‌های پلتفرم |
 | [`docs/testing.md`](docs/testing.md) | گیت‌های محلی/CI و تست‌های زنده دستی |

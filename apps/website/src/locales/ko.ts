@@ -90,6 +90,13 @@ export const ko: Record<MarketingKey, string> = {
   "download.android.requires": "Android 14 이상",
   "download.android.note":
     "아직 앱 스토어에 등록되어 있지 않습니다. Android에서 요청하면 이 출처의 앱 설치를 허용하세요.",
+  "download.cli.subtitle":
+    "macOS, Windows, Linux용 헤드리스 CLI 및 데몬 — Agent, 서버, 스크립트 자동화를 위해 설계되었습니다.",
+  "download.cli.shellAria": "CLI 설치 명령 선택",
+  "download.cli.copy": "복사",
+  "download.cli.copied": "복사됨",
+  "download.cli.archives": "직접 다운로드",
+  "download.cli.docs": "CLI 문서",
   "footer.source": "소스 코드",
   "footer.releases": "릴리스",
   "footer.changelog": "변경 로그",

@@ -90,6 +90,13 @@ export const es: Record<MarketingKey, string> = {
   "download.android.requires": "Android 14 o posterior",
   "download.android.note":
     "Todavía no está en ninguna tienda de aplicaciones. Cuando Android lo solicite, permite las instalaciones desde esta fuente.",
+  "download.cli.subtitle":
+    "CLI y demonio sin interfaz gráfica para macOS, Windows y Linux — diseñados para agentes, servidores y scripts.",
+  "download.cli.shellAria": "Elegir comando de instalación de CLI",
+  "download.cli.copy": "Copiar",
+  "download.cli.copied": "Copiado",
+  "download.cli.archives": "Archivos directos",
+  "download.cli.docs": "Documentación CLI",
   "footer.source": "Código fuente",
   "footer.releases": "Versiones",
   "footer.changelog": "Registro de cambios",

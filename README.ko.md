@@ -50,6 +50,17 @@ macOS, Windows, Linux, Android를 위한 가벼운 프록시 클라이언트 —
 | **Windows** (x64) | Windows 10+ | `ice-box_<version>_x64-setup.exe` | 사용자별 NSIS 설치 파일(미서명, SmartScreen 확인 필요). TUN은 IPv4 TCP 전용이며 관리자 권한 필요. |
 | **Linux** (x64 / arm64) | Ubuntu 22.04+ | `.AppImage` / `.deb` | `chmod +x *.AppImage` 또는 `sudo apt install ./ice-box_*.deb`. GNOME 트레이는 `gnome-shell-extension-appindicator` 필요. |
 | **Android** (arm64) | Android 14+ | `ice-box_<version>_android_arm64.apk` | 프로젝트 키스토어 서명; 이 출처의 앱 설치 허용 필요. |
+| **CLI** (macOS / Windows / Linux) | macOS 12+ / Win 10+ / Ubuntu 22.04+ | `ice-box-cli_<version>_<os>_<arch>.tar.gz` / `.zip` | `sing-box`가 내장된 헤드리스 CLI 및 데몬([`docs/cli.md`](docs/cli.md)). |
+
+**CLI 한 줄 설치** (해당 플랫폼 릴리스 아카이브를 다운로드하고 `SHA256SUMS`를 검증합니다):
+
+```bash
+# macOS (arm64) / Linux (x64, arm64)
+curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.sh | bash
+
+# Windows (x64, PowerShell)
+irm https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.ps1 | iex
+```
 
 - **빠른 시작**: **구독** 가져오기 → **홈** / **노드**에서 모드와 노드 선택 → 전원 버튼 클릭. 구독 없이도 직접 연결 모드로 동작합니다.
 - **업데이트**: **설정 → 앱 업데이트**에서 서명 검증된 인앱 업데이트 설치(`.deb`는 `apt` 관리를 위해 Releases 페이지 열기; Android는 APK 다운로드 후 시스템 설치).
@@ -72,6 +83,7 @@ npm run dev
 | `npm run fetch-singbox -- win && npm run build:win` | Windows 설치 파일 빌드 |
 | `npm run fetch-singbox -- linux-x64 && npm run build:linux` | Linux `.deb` 및 `.AppImage` 빌드(arm64는 `linux-arm64`) |
 | `npm run acceptance` / `acceptance:tun` / `acceptance:win` / `acceptance:linux` / `acceptance:linux-tun` | 실제 호스트 인수 테스트 게이트 |
+| `bash scripts/package-cli.sh` | 현재 호스트용 크로스 플랫폼 헤드리스 CLI 아카이브 빌드 및 검증 |
 | `bash scripts/build-android-apk.sh debug arm64` | Android 디버그 APK 빌드(에뮬레이터는 `amd64`) |
 
 ```text
@@ -86,6 +98,7 @@ crates/         Rust 워크스페이스 (ice-app, ice-config, ice-core, ice-engi
 | 문서 | 범위 |
 |---|---|
 | [`docs/architecture.md`](docs/architecture.md) | 아키텍처, 모듈 경계 및 데이터 흐름 |
+| [`docs/cli.md`](docs/cli.md) | 크로스 플랫폼 헤드리스 CLI, 데몬 및 Agent 자동화 |
 | [`docs/mcp.md`](docs/mcp.md) | 데스크톱 MCP 설정, 도구 및 보안 모델 |
 | [`docs/tun.md`](docs/tun.md) | TUN 캡처, 권한 상승, 복구 및 플랫폼 제한 사항 |
 | [`docs/testing.md`](docs/testing.md) | 로컬/CI 게이트 및 수동 실기기 테스트 |

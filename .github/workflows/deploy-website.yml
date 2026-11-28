@@ -110,28 +110,48 @@ jobs:
               f"ice-box_{version}_arm64.deb",
               f"ice-box_{version}_aarch64.AppImage",
           ]
+          cli = [
+              f"ice-box-cli_{version}_darwin_aarch64.tar.gz",
+              f"ice-box-cli_{version}_windows_x86_64.zip",
+              f"ice-box-cli_{version}_linux_x86_64.tar.gz",
+              f"ice-box-cli_{version}_linux_aarch64.tar.gz",
+          ]
 
           missing_baseline = [name for name in baseline if name not in present]
           missing_linux = [name for name in linux if name not in present]
+          missing_cli = [name for name in cli if name not in present]
 
           if missing_baseline:
               for name in missing_baseline:
                   print(f"release v{version} is missing {name}", file=sys.stderr)
               sys.exit(1)
 
-          if not missing_linux:
+          if missing_linux:
+              # Releases up to 0.4.0 predate Linux desktop builds; skip deploying
+              # until a release carrying the Linux assets ships rather than failing
+              # every merge. Partial Linux asset sets or versions > 0.4.0 still fail.
+              if len(missing_linux) == len(linux) and core <= (0, 4, 0):
+                  print(
+                      f"::notice::release v{version} predates Linux desktop builds (no Linux assets); skipping deploy"
+                  )
+                  sys.exit(10)
+              for name in missing_linux:
+                  print(f"release v{version} is missing {name}", file=sys.stderr)
+              sys.exit(1)
+
+          if not missing_cli:
               sys.exit(0)
 
-          # Releases up to 0.4.0 predate Linux desktop builds; skip deploying
-          # until a release carrying the Linux assets ships rather than failing
-          # every merge. Partial Linux asset sets or versions > 0.4.0 still fail.
-          if len(missing_linux) == len(linux) and core <= (0, 4, 0):
+          # Releases up to 0.4.1 predate cross-platform CLI archives; skip
+          # deploying until a release carrying the CLI assets ships rather than
+          # failing every merge. Partial CLI asset sets or versions > 0.4.1 still fail.
+          if len(missing_cli) == len(cli) and core <= (0, 4, 1):
               print(
-                  f"::notice::release v{version} predates Linux desktop builds (no Linux assets); skipping deploy"
+                  f"::notice::release v{version} predates CLI archives (no CLI assets); skipping deploy"
               )
               sys.exit(10)
 
-          for name in missing_linux:
+          for name in missing_cli:
               print(f"release v{version} is missing {name}", file=sys.stderr)
           sys.exit(1)
           PY

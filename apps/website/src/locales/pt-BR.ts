@@ -90,6 +90,13 @@ export const ptBr: Record<MarketingKey, string> = {
   "download.android.requires": "Android 14 ou posterior",
   "download.android.note":
     "Ainda não está em nenhuma loja de apps. Quando o Android pedir, permita instalações desta fonte.",
+  "download.cli.subtitle":
+    "CLI e daemon sem interface para macOS, Windows e Linux — feitos para agentes, servidores e scripts.",
+  "download.cli.shellAria": "Escolher comando de instalação da CLI",
+  "download.cli.copy": "Copiar",
+  "download.cli.copied": "Copiado",
+  "download.cli.archives": "Arquivos diretos",
+  "download.cli.docs": "Docs da CLI",
   "footer.source": "Código-fonte",
   "footer.releases": "Versões",
   "footer.changelog": "Changelog",

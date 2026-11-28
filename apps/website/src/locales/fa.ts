@@ -90,6 +90,13 @@ export const fa: Record<MarketingKey, string> = {
   "download.android.requires": "Android 14 یا جدیدتر",
   "download.android.note":
     "هنوز در فروشگاه‌های برنامه منتشر نشده است. هنگام درخواست Android، نصب از این منبع را مجاز کنید.",
+  "download.cli.subtitle":
+    "CLI و سرویس بدون رابط گرافیکی برای macOS، Windows و Linux — ساخته شده برای ایجنت‌ها، سرورها و اسکریپت‌ها.",
+  "download.cli.shellAria": "انتخاب دستور نصب CLI",
+  "download.cli.copy": "کپی",
+  "download.cli.copied": "کپی شد",
+  "download.cli.archives": "بسته‌های مستقیم",
+  "download.cli.docs": "مستندات CLI",
   "footer.source": "کد منبع",
   "footer.releases": "نسخه‌ها",
   "footer.changelog": "تاریخچه تغییرات",

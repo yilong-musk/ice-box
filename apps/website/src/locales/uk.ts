@@ -90,6 +90,13 @@ export const uk: Record<MarketingKey, string> = {
   "download.android.requires": "Android 14 або новіша",
   "download.android.note":
     "Поки немає в жодному магазині застосунків. Коли Android запитає, дозвольте встановлення з цього джерела.",
+  "download.cli.subtitle":
+    "CLI і демон без графічного інтерфейсу для macOS, Windows і Linux — для агентів, серверів і скриптів.",
+  "download.cli.shellAria": "Вибрати команду встановлення CLI",
+  "download.cli.copy": "Копіювати",
+  "download.cli.copied": "Скопійовано",
+  "download.cli.archives": "Прямі архіви",
+  "download.cli.docs": "Документація CLI",
   "footer.source": "Вихідний код",
   "footer.releases": "Релізи",
   "footer.changelog": "Журнал змін",

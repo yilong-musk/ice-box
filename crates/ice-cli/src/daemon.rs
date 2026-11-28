@@ -84,7 +84,11 @@ impl AppHost for HeadlessHost {
 ///
 /// Order:
 /// 1. Explicit `--resource-dir` or `ICE_BOX_RESOURCE_DIR` (preferred)
-/// 2. Sibling `resources/` or same directory as `current_exe()` when it contains `sing-box[.exe]` or `geoip/` (preferred)
+/// 2. Sibling `resources/` or same directory as `current_exe()`, checking the
+///    canonicalized symlink target first (so symlinks in `/usr/local/bin` or
+///    `~/.local/bin` still find the bundled `resources/` next to the real
+///    binary on macOS and Linux), then the invocation directory if different,
+///    when it contains `sing-box[.exe]` or `geoip/` (preferred)
 /// 3. Standard Linux FHS install directories (`/usr/lib/ice-box`, `/usr/share/ice-box`) (preferred)
 /// 4. Fallback `exe_dir` / `None` (dev builds resolve `third_party/sing-box` via `orchestrate`)
 pub fn resolve_resource_dir(explicit: Option<PathBuf>) -> Option<PathBuf> {
@@ -100,10 +104,28 @@ pub(crate) fn resolve_resource_dir_with_preference(
     if let Some(env_dir) = std::env::var_os("ICE_BOX_RESOURCE_DIR").filter(|v| !v.is_empty()) {
         return (Some(PathBuf::from(env_dir)), true);
     }
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(Path::to_path_buf));
-    resolve_resource_dir_from_candidates_with_preference(exe_dir.as_deref())
+    let exe_path = std::env::current_exe().ok();
+    resolve_resource_dir_from_exe_path_with_preference(exe_path.as_deref())
+}
+
+pub(crate) fn resolve_resource_dir_from_exe_path_with_preference(
+    exe_path: Option<&Path>,
+) -> (Option<PathBuf>, bool) {
+    let mut exe_dirs = Vec::new();
+    if let Some(path) = exe_path {
+        if let Ok(canonical) = std::fs::canonicalize(path) {
+            if let Some(parent) = canonical.parent() {
+                exe_dirs.push(parent.to_path_buf());
+            }
+        }
+        if let Some(parent) = path.parent() {
+            let parent_buf = parent.to_path_buf();
+            if !exe_dirs.iter().any(|existing| existing == &parent_buf) {
+                exe_dirs.push(parent_buf);
+            }
+        }
+    }
+    resolve_resource_dir_from_dirs_with_preference(&exe_dirs)
 }
 
 #[cfg(test)]
@@ -111,8 +133,16 @@ pub(crate) fn resolve_resource_dir_from_candidates(exe_dir: Option<&Path>) -> Op
     resolve_resource_dir_from_candidates_with_preference(exe_dir).0
 }
 
+#[cfg(test)]
 pub(crate) fn resolve_resource_dir_from_candidates_with_preference(
     exe_dir: Option<&Path>,
+) -> (Option<PathBuf>, bool) {
+    let dirs: Vec<PathBuf> = exe_dir.into_iter().map(Path::to_path_buf).collect();
+    resolve_resource_dir_from_dirs_with_preference(&dirs)
+}
+
+pub(crate) fn resolve_resource_dir_from_dirs_with_preference(
+    exe_dirs: &[PathBuf],
 ) -> (Option<PathBuf>, bool) {
     let bin_name = if cfg!(windows) {
         "sing-box.exe"
@@ -120,7 +150,7 @@ pub(crate) fn resolve_resource_dir_from_candidates_with_preference(
         "sing-box"
     };
     let mut candidates = Vec::new();
-    if let Some(dir) = exe_dir {
+    for dir in exe_dirs {
         candidates.push(dir.join("resources"));
         candidates.push(dir.to_path_buf());
     }
@@ -134,7 +164,7 @@ pub(crate) fn resolve_resource_dir_from_candidates_with_preference(
             return (Some(candidate), true);
         }
     }
-    (exe_dir.map(Path::to_path_buf), false)
+    (exe_dirs.first().cloned(), false)
 }
 
 /// Run the headless daemon until terminated by an OS signal.

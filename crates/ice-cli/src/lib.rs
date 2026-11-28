@@ -15,6 +15,7 @@ pub use commands::run;
 mod tests {
     use crate::daemon::{
         resolve_resource_dir_from_candidates, resolve_resource_dir_from_candidates_with_preference,
+        resolve_resource_dir_from_exe_path_with_preference,
     };
     use crate::env_exec::{format_env_script, ShellFlavor};
     use crate::exit::{
@@ -129,8 +130,54 @@ mod tests {
         let (dir, prefer) = resolve_resource_dir_from_candidates_with_preference(Some(&root));
         assert_eq!(dir, Some(nested));
         assert!(prefer);
+
+        let exe_path = root.join(if cfg!(windows) {
+            "ice-box-cli.exe"
+        } else {
+            "ice-box-cli"
+        });
+        fs::write(&exe_path, b"cli").unwrap();
+        let (exe_resolved, exe_prefer) =
+            resolve_resource_dir_from_exe_path_with_preference(Some(&exe_path));
+        assert_eq!(
+            exe_resolved,
+            Some(fs::canonicalize(root.join("resources")).unwrap())
+        );
+        assert!(exe_prefer);
+
         let _ = fs::remove_dir_all(root);
         let _ = fs::remove_dir_all(empty);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resource_dir_follows_symlinked_executable_to_bundled_resources() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_dir("symlink");
+        let real_dir = root.join("install").join("current");
+        let resources_dir = real_dir.join("resources");
+        let bin_dir = root.join("bin");
+        fs::create_dir_all(&resources_dir).unwrap();
+        fs::create_dir_all(&bin_dir).unwrap();
+
+        let real_cli = real_dir.join("ice-box-cli");
+        fs::write(&real_cli, b"cli").unwrap();
+        fs::write(resources_dir.join("sing-box"), b"bundled").unwrap();
+        // Put an unrelated sing-box in bin_dir to verify canonical target resources win.
+        fs::write(bin_dir.join("sing-box"), b"other").unwrap();
+
+        let mid_link = root.join("mid-link");
+        let bin_link = bin_dir.join("ice-box-cli");
+        symlink(&real_cli, &mid_link).unwrap();
+        symlink(&mid_link, &bin_link).unwrap();
+
+        let (dir, prefer) = resolve_resource_dir_from_exe_path_with_preference(Some(&bin_link));
+        let expected = fs::canonicalize(&resources_dir).unwrap();
+        assert_eq!(dir, Some(expected));
+        assert!(prefer);
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

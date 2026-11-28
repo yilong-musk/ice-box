@@ -1376,6 +1376,142 @@ main {
   line-height: 1.6;
 }
 
+.download-cli-card {
+  max-width: 960px;
+  margin: 20px auto 0;
+  padding: 26px 32px 24px;
+  border-radius: 20px;
+  background: var(--card);
+  box-shadow:
+    var(--card-shadow),
+    0 18px 44px -26px oklch(0.2 0.02 260 / 18%);
+}
+
+:root[data-theme="dark"] .download-cli-card {
+  box-shadow:
+    var(--card-shadow),
+    0 24px 56px -24px rgb(0 0 0 / 50%);
+}
+
+.download-cli-head {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.download-cli-title {
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.025em;
+}
+
+.download-cli-subtitle {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 14.5px;
+  line-height: 1.5;
+}
+
+.download-cli-command {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 20px;
+  padding: 10px 10px 10px 16px;
+  border-radius: 13px;
+  background: var(--bg-sunken);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.download-cli-code {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow-x: auto;
+  color: var(--ink);
+  font: 13px/1.55 var(--mono);
+  white-space: nowrap;
+}
+
+.download-cli-copy {
+  flex: none;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 9px;
+  font-size: 13px;
+  gap: 6px;
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.download-cli-copy.is-copied {
+  color: var(--green);
+}
+
+.download-cli-copy-icon,
+.download-cli-copied-icon {
+  display: inline-flex;
+  align-items: center;
+}
+
+.download-cli-copy-icon[hidden],
+.download-cli-copied-icon[hidden] {
+  display: none;
+}
+
+.download-cli-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 20px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.download-cli-archives {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  min-width: 0;
+}
+
+.download-cli-archives-label {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.download-cli-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.download-cli-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: 8px;
+  background: var(--fill);
+  color: var(--ink-2);
+  font: 500 12.5px/1.3 var(--mono);
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.download-cli-link:hover {
+  background: var(--blue-tint);
+  color: var(--blue-text);
+}
+
+.download-cli-docs {
+  font-size: 13.5px;
+}
+
 .download-more {
   margin-top: 28px;
   text-align: center;
@@ -1510,6 +1646,7 @@ main {
   .download-tab,
   .download-tab-icon,
   .download-arch-option,
+  .download-cli-link,
   .nav-language,
   .nav-language-chevron,
   .nav-language-option,
@@ -1652,6 +1789,11 @@ main {
 
   .download-note-box {
     margin-top: 22px;
+  }
+
+  .download-cli-card {
+    max-width: 600px;
+    padding: 24px;
   }
 }
 
@@ -1802,6 +1944,27 @@ main {
 
   .download-files .dot-sep {
     display: none;
+  }
+
+  .download-cli-card {
+    padding: 20px;
+  }
+
+  .download-cli-head {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 14px;
+  }
+
+  .download-cli-command {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 12px;
+  }
+
+  .download-cli-copy {
+    width: 100%;
+    justify-content: center;
   }
 
   .footer-inner {

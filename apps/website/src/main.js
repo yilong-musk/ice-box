@@ -21,7 +21,11 @@ import {
   resolveTheme,
 } from "../../desktop/src/lib/theme";
 import {
+  CLI_INSTALL_COMMAND,
+  CLI_TARGETS,
   INSTALLER_PLATFORMS,
+  cliDownloadUrl,
+  defaultCliShell,
   detectLinuxArch,
   detectPlatform,
   installerDownloadUrl,
@@ -82,6 +86,8 @@ const ICONS = {
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6l1.4 1.4M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4"/>',
   moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>',
+  terminal: '<path d="m5 7 5 5-5 5"/><path d="M12 19h7"/>',
+  copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
   github:
     '<path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.4 5.4 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/><path d="M9 18c-4.51 2-5-2-7-2"/>',
 };
@@ -150,6 +156,18 @@ const LINUX_ARCH_OPTIONS = [
   ["arm64", "arm64"],
 ];
 
+const CLI_SHELL_OPTIONS = [
+  ["unix", "macOS / Linux"],
+  ["windows", "Windows"],
+];
+
+const CLI_ARCHIVE_LABELS = {
+  "darwin-aarch64": "macOS (arm64)",
+  "windows-x86_64": "Windows (x64)",
+  "linux-x86_64": "Linux (x64)",
+  "linux-aarch64": "Linux (arm64)",
+};
+
 const windowLights = `<span class="window-lights" dir="ltr" aria-hidden="true"><i></i><i></i><i></i></span>`;
 
 const currentPlatform = detectPlatform(navigator.userAgent, navigator.maxTouchPoints);
@@ -158,6 +176,9 @@ let detectedLinuxArch =
   currentPlatform === "linux" ? detectLinuxArch(navigator.userAgent) : "amd64";
 let selectedLinuxArch = detectedLinuxArch;
 let linuxArchManuallySelected = false;
+let selectedCliShell = defaultCliShell(currentPlatform);
+let cliCopied = false;
+let cliCopyTimer = null;
 
 function platformPrimaryUrl(platform) {
   return platform === "linux"
@@ -384,6 +405,44 @@ root.innerHTML = `
           ).join("")}
         </div>
       </div>
+      <div class="download-cli-card reveal" data-cli-card>
+        <div class="download-cli-head">
+          <span class="download-emblem download-cli-emblem">${icon("terminal", "platform-mark")}</span>
+          <div class="download-pane-identity">
+            <div class="download-pane-title-row">
+              <h3 class="download-cli-title">ice-box CLI</h3>
+              <span class="download-version">${displayVersion}</span>
+            </div>
+            <p class="download-cli-subtitle" ${t("download.cli.subtitle")}></p>
+          </div>
+          <div class="download-arch-group" role="group" data-cli-shell-group>
+            ${CLI_SHELL_OPTIONS.map(
+              ([shell, label]) =>
+                `<button type="button" class="download-arch-option" data-cli-shell="${shell}" aria-pressed="${shell === selectedCliShell ? "true" : "false"}">${label}</button>`,
+            ).join("")}
+          </div>
+        </div>
+        <div class="download-cli-command" dir="ltr">
+          <pre class="download-cli-code"><code data-cli-command>${CLI_INSTALL_COMMAND[selectedCliShell]}</code></pre>
+          <button type="button" class="button download-cli-copy" data-cli-copy>
+            <span class="download-cli-copy-icon">${icon("copy", "icon icon-xs")}</span>
+            <span class="download-cli-copied-icon" hidden>${icon("check", "icon icon-xs")}</span>
+            <span class="download-cli-copy-label"></span>
+          </button>
+        </div>
+        <div class="download-cli-footer">
+          <div class="download-cli-archives">
+            <span class="download-cli-archives-label" ${t("download.cli.archives")}></span>
+            <div class="download-cli-links">
+              ${CLI_TARGETS.map(
+                (target) =>
+                  `<a class="download-cli-link" data-cli-archive="${target}" href="${cliDownloadUrl(appVersion, target)}">${icon("download", "icon icon-xs")}<span>${CLI_ARCHIVE_LABELS[target]}</span></a>`,
+              ).join("")}
+            </div>
+          </div>
+          <a class="text-link download-cli-docs" href="${REPO_URL}/blob/main/docs/cli.md" target="_blank" rel="noreferrer"><span ${t("download.cli.docs")}></span>${icon("arrowRight", "icon icon-xs")}</a>
+        </div>
+      </div>
       <p class="download-more reveal"><a class="text-link" href="${REPO_URL}/releases" target="_blank" rel="noreferrer"><span ${t("download.allReleases")}></span>${icon("arrowRight", "icon icon-xs")}</a></p>
     </section>
   </main>
@@ -417,6 +476,12 @@ const parts = {
   nav: root.querySelector(".site-nav"),
   downloadRail: root.querySelector(".download-rail"),
   linuxArchGroup: root.querySelector("[data-linux-arch-group]"),
+  cliShellGroup: root.querySelector("[data-cli-shell-group]"),
+  cliCommand: root.querySelector("[data-cli-command]"),
+  cliCopyButton: root.querySelector("[data-cli-copy]"),
+  cliCopyLabel: root.querySelector(".download-cli-copy-label"),
+  cliCopyIcon: root.querySelector(".download-cli-copy-icon"),
+  cliCopiedIcon: root.querySelector(".download-cli-copied-icon"),
 };
 
 const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
@@ -635,6 +700,83 @@ parts.linuxArchGroup.addEventListener("click", (event) => {
   applyDownloadCopy(language);
 });
 
+function syncCliCopyButton(next) {
+  const label = marketingText(
+    cliCopied ? "download.cli.copied" : "download.cli.copy",
+    next,
+  );
+  parts.cliCopyLabel.textContent = label;
+  parts.cliCopyButton.setAttribute("aria-label", label);
+  parts.cliCopyButton.classList.toggle("is-copied", cliCopied);
+  parts.cliCopyIcon.hidden = cliCopied;
+  parts.cliCopiedIcon.hidden = !cliCopied;
+}
+
+function selectCliShell(shell) {
+  if (shell !== "unix" && shell !== "windows") return;
+  selectedCliShell = shell;
+  if (cliCopyTimer != null) {
+    window.clearTimeout(cliCopyTimer);
+    cliCopyTimer = null;
+  }
+  cliCopied = false;
+  for (const option of parts.cliShellGroup.querySelectorAll("[data-cli-shell]")) {
+    option.setAttribute(
+      "aria-pressed",
+      option.dataset.cliShell === selectedCliShell ? "true" : "false",
+    );
+  }
+  parts.cliCommand.textContent = CLI_INSTALL_COMMAND[selectedCliShell];
+  syncCliCopyButton(language);
+}
+
+async function copyCliCommand() {
+  const command = CLI_INSTALL_COMMAND[selectedCliShell];
+  let copied = false;
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(command);
+      copied = true;
+    } catch {
+      // Fall back to a hidden textarea when clipboard permissions are unavailable.
+    }
+  }
+  if (!copied) {
+    const area = document.createElement("textarea");
+    area.value = command;
+    area.setAttribute("readonly", "");
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    try {
+      copied = document.execCommand("copy");
+    } catch {
+      copied = false;
+    }
+    area.remove();
+  }
+  if (!copied) return;
+  cliCopied = true;
+  syncCliCopyButton(language);
+  if (cliCopyTimer != null) window.clearTimeout(cliCopyTimer);
+  cliCopyTimer = window.setTimeout(() => {
+    cliCopied = false;
+    cliCopyTimer = null;
+    syncCliCopyButton(language);
+  }, 2000);
+}
+
+parts.cliShellGroup.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-cli-shell]");
+  if (!button) return;
+  selectCliShell(button.dataset.cliShell);
+});
+
+parts.cliCopyButton.addEventListener("click", () => {
+  void copyCliCommand();
+});
+
 /** Platform rail tabs, detail panes, requirements, and first-launch notes. */
 function applyDownloadCopy(next) {
   parts.downloadRail.setAttribute(
@@ -645,6 +787,11 @@ function applyDownloadCopy(next) {
     "aria-label",
     marketingText("download.linux.archAria", next),
   );
+  parts.cliShellGroup.setAttribute(
+    "aria-label",
+    marketingText("download.cli.shellAria", next),
+  );
+  syncCliCopyButton(next);
   const yours = marketingText("download.yours", next);
   const actionTemplate = marketingText("download.actionPlatform", next);
 

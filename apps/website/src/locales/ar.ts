@@ -90,6 +90,13 @@ export const ar: Record<MarketingKey, string> = {
   "download.android.requires": "Android 14 أو أحدث",
   "download.android.note":
     "غير متوفر في أي متجر تطبيقات بعد. عندما يطلب Android ذلك، اسمح بالتثبيت من هذا المصدر.",
+  "download.cli.subtitle":
+    "واجهة سطر أوامر وخدمة خلفية بلا واجهة رسومية لأنظمة macOS وWindows وLinux — مصممة للوكلاء والخوادم والسكربتات.",
+  "download.cli.shellAria": "اختر أمر تثبيت CLI",
+  "download.cli.copy": "نسخ",
+  "download.cli.copied": "تم النسخ",
+  "download.cli.archives": "حزم مباشرة",
+  "download.cli.docs": "توثيق CLI",
   "footer.source": "الشيفرة المصدرية",
   "footer.releases": "الإصدارات",
   "footer.changelog": "سجل التغييرات",

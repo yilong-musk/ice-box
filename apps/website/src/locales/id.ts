@@ -90,6 +90,13 @@ export const id: Record<MarketingKey, string> = {
   "download.android.requires": "Android 14 atau lebih baru",
   "download.android.note":
     "Belum tersedia di toko aplikasi mana pun. Saat Android meminta izin, izinkan pemasangan dari sumber ini.",
+  "download.cli.subtitle":
+    "CLI dan daemon tanpa GUI untuk macOS, Windows, dan Linux — dirancang untuk Agent, server, dan skrip.",
+  "download.cli.shellAria": "Pilih perintah pemasangan CLI",
+  "download.cli.copy": "Salin",
+  "download.cli.copied": "Disalin",
+  "download.cli.archives": "Arsip langsung",
+  "download.cli.docs": "Dokumen CLI",
   "footer.source": "Kode sumber",
   "footer.releases": "Rilis",
   "footer.changelog": "Catatan perubahan",

@@ -10,9 +10,47 @@
 - **Without a GUI (headless daemon):** `ice-box-cli daemon` runs the full runtime in the foreground, manages `sing-box` and background watchdogs, and opens the local authenticated control listener automatically.
 - **Multiple isolated instances:** pass `--data-dir <PATH>` (or set `ICE_BOX_DATA_DIR`) to run isolated sessions for CI jobs or sandboxed Agents.
 
-## Packages
+## Install
 
-Each release publishes portable archives containing `ice-box-cli`, the pinned `sing-box` core, bundled GeoIP/GeoSite `.srs` rule-sets, and platform elevation helpers:
+### Quick install (recommended)
+
+The installer scripts detect your OS/architecture, download the matching [GitHub Release](https://github.com/yilong-musk/ice-box/releases/latest) archive, verify `SHA256SUMS`, and install `ice-box-cli` together with its bundled `sing-box` core, GeoIP/GeoSite rule-sets, and elevation helpers.
+
+**macOS (Apple Silicon) & Linux (x64 / arm64):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.sh | bash
+```
+
+Installs into `~/.local/share/ice-box-cli/current`, symlinks `~/.local/bin/ice-box-cli`, and clears macOS Gatekeeper quarantine attributes automatically. Customize with flags (`--version vX.Y.Z`, `--install-dir <DIR>`, `--bin-dir <DIR>`, `--uninstall`) or `ICE_BOX_*` environment variables:
+
+```bash
+# Pin a version
+curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.sh | bash -s -- --version v0.4.2
+
+# Uninstall
+curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.sh | bash -s -- --uninstall
+```
+
+**Windows (x64, PowerShell):**
+
+```powershell
+irm https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.ps1 | iex
+```
+
+Installs into `%LOCALAPPDATA%\ice-box-cli\current` and adds it to your user `Path`. Customize via environment variables (`ICE_BOX_VERSION`, `ICE_BOX_INSTALL_DIR`, `ICE_BOX_NO_PATH_UPDATE=1`, `ICE_BOX_UNINSTALL=1`) or script parameters when downloaded:
+
+```powershell
+# Pin a version
+$env:ICE_BOX_VERSION = "0.4.2"; irm https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.ps1 | iex
+
+# Uninstall
+$env:ICE_BOX_UNINSTALL = "1"; irm https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.ps1 | iex
+```
+
+### Portable archives (manual install)
+
+Each release after `v0.4.1` publishes portable archives containing `ice-box-cli`, the pinned `sing-box` core, bundled GeoIP/GeoSite `.srs` rule-sets, and platform elevation helpers:
 
 | Platform | Archive | Bundled resources |
 |---|---|---|
@@ -20,6 +58,10 @@ Each release publishes portable archives containing `ice-box-cli`, the pinned `s
 | Windows (x64) | `ice-box-cli_<version>_windows_x86_64.zip` | `resources/sing-box.exe`, `resources/libcronet.dll`, `resources/ice-tun-launcher.exe`, `resources/geoip/*.srs` |
 | Linux (x64) | `ice-box-cli_<version>_linux_x86_64.tar.gz` | `resources/sing-box`, `resources/ice-helper`, `resources/geoip/*.srs` |
 | Linux (arm64) | `ice-box-cli_<version>_linux_aarch64.tar.gz` | `resources/sing-box`, `resources/ice-helper`, `resources/geoip/*.srs` |
+
+Extract the archive, keep `ice-box-cli` next to its `resources/` directory, and either add the directory to `PATH` or symlink `ice-box-cli` into a directory on `PATH` (such as `~/.local/bin` or `/usr/local/bin`). `ice-box-cli daemon` canonicalizes symlinked executables automatically to locate the bundled `resources/` directory (or override via `--resource-dir` / `ICE_BOX_RESOURCE_DIR`). On macOS, clear quarantine if downloaded via a browser: `xattr -dr com.apple.quarantine <extracted-dir>`.
+
+### Build from source
 
 Build a local archive from source with:
 
@@ -29,7 +71,7 @@ bash scripts/fetch-geoip.sh
 bash scripts/package-cli.sh
 ```
 
-`ice-box-cli daemon` automatically resolves `resources/` next to the executable (or override via `--resource-dir` / `ICE_BOX_RESOURCE_DIR`).
+To build only the CLI binary (for controlling an existing desktop MCP session or using a custom `--resource-dir`), run `cargo build --release -p ice-cli`.
 
 ## Quick start for Agents and automation
 

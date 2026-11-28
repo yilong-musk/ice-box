@@ -50,6 +50,17 @@
 | **Windows**（x64） | Windows 10+ | `ice-box_<version>_x64-setup.exe` | 單一使用者 NSIS 安裝程式（未簽章，需於 SmartScreen 確認）。TUN 僅支援 IPv4 TCP 且需系統管理員權限。 |
 | **Linux**（x64 / arm64） | Ubuntu 22.04+ | `.AppImage` / `.deb` | `chmod +x *.AppImage` 或 `sudo apt install ./ice-box_*.deb`。GNOME 系統匣需安裝 `gnome-shell-extension-appindicator`。 |
 | **Android**（arm64） | Android 14+ | `ice-box_<version>_android_arm64.apk` | 使用專案金鑰庫簽署；安裝時需允許此來源。 |
+| **CLI**（macOS / Windows / Linux） | macOS 12+ / Win 10+ / Ubuntu 22.04+ | `ice-box-cli_<version>_<os>_<arch>.tar.gz` / `.zip` | 內建 `sing-box` 的無頭 CLI 與背景服務（[`docs/cli.md`](docs/cli.md)）。 |
+
+**CLI 一鍵安裝**（自動下載對應平台壓縮檔並驗證 `SHA256SUMS`）：
+
+```bash
+# macOS (arm64) / Linux (x64, arm64)
+curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.sh | bash
+
+# Windows (x64, PowerShell)
+irm https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.ps1 | iex
+```
 
 - **快速上手**：在 **訂閱** 匯入連結 → 在 **首頁** / **節點** 選擇模式與節點 → 按下電源按鈕；無訂閱時以直連模式啟動。
 - **更新**：透過 **設定 → 應用程式更新** 進行簽章驗證的應用程式內更新（`.deb` 開啟 Releases 頁面由 `apt` 管理；Android 下載 APK 交由系統安裝）。
@@ -72,6 +83,7 @@ npm run dev
 | `npm run fetch-singbox -- win && npm run build:win` | 建置 Windows 安裝程式 |
 | `npm run fetch-singbox -- linux-x64 && npm run build:linux` | 建置 Linux `.deb` 與 `.AppImage`（arm64 請使用 `linux-arm64`） |
 | `npm run acceptance` / `acceptance:tun` / `acceptance:win` / `acceptance:linux` / `acceptance:linux-tun` | 真實主機驗收測試 |
+| `bash scripts/package-cli.sh` | 建置並驗證此主機的跨平台無頭 CLI 壓縮檔 |
 | `bash scripts/build-android-apk.sh debug arm64` | 建置 Android 除錯 APK（模擬器請使用 `amd64`） |
 
 ```text
@@ -86,6 +98,7 @@ crates/         Rust 工作區（ice-app, ice-config, ice-core, ice-engine, ice-
 | 文件 | 範圍 |
 |---|---|
 | [`docs/architecture.md`](docs/architecture.md) | 系統架構、模組邊界與資料流 |
+| [`docs/cli.md`](docs/cli.md) | 跨平台無頭 CLI、背景服務與 Agent 自動化 |
 | [`docs/mcp.md`](docs/mcp.md) | 桌面端 MCP 設定、工具與安全模型 |
 | [`docs/tun.md`](docs/tun.md) | TUN 擷取、權限提升、復原與平台限制 |
 | [`docs/testing.md`](docs/testing.md) | 本機／CI 檢查關卡與手動實機測試 |

@@ -88,6 +88,13 @@ export const zhTw: Record<MarketingKey, string> = {
   "download.android.requires": "Android 14 或更高",
   "download.android.note":
     "尚未上架應用程式商店，安裝時請依系統提示允許來自此來源的應用程式。",
+  "download.cli.subtitle":
+    "面向 macOS、Windows 與 Linux 的無頭 CLI 與背景服務，適用於 Agent、伺服器與自動化腳本。",
+  "download.cli.shellAria": "選擇 CLI 安裝指令",
+  "download.cli.copy": "複製",
+  "download.cli.copied": "已複製",
+  "download.cli.archives": "直接下載壓縮檔",
+  "download.cli.docs": "CLI 文件",
   "footer.source": "原始碼",
   "footer.releases": "版本發布",
   "footer.changelog": "更新日誌",

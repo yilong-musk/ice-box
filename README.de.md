@@ -50,6 +50,17 @@ Download über [GitHub Releases](https://github.com/yilong-musk/ice-box/releases
 | **Windows** (x64) | Windows 10+ | `ice-box_<version>_x64-setup.exe` | Benutzerbezogener NSIS-Installer (unsigniert; SmartScreen bestätigen). TUN unterstützt nur IPv4-TCP und erfordert Administratorrechte. |
 | **Linux** (x64 / arm64) | Ubuntu 22.04+ | `.AppImage` / `.deb` | `chmod +x *.AppImage` oder `sudo apt install ./ice-box_*.deb`. GNOME-Tray benötigt `gnome-shell-extension-appindicator`. |
 | **Android** (arm64) | Android 14+ | `ice-box_<version>_android_arm64.apk` | Mit dem Projekt-Keystore signiert; Installation aus dieser Quelle erlauben. |
+| **CLI** (macOS / Windows / Linux) | macOS 12+ / Win 10+ / Ubuntu 22.04+ | `ice-box-cli_<version>_<os>_<arch>.tar.gz` / `.zip` | Headless-CLI & Daemon mit gebündeltem `sing-box` ([`docs/cli.md`](docs/cli.md)). |
+
+**CLI-Einzeiler-Installation** (lädt das passende Release-Archiv herunter und prüft `SHA256SUMS`):
+
+```bash
+# macOS (arm64) / Linux (x64, arm64)
+curl -fsSL https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.sh | bash
+
+# Windows (x64, PowerShell)
+irm https://raw.githubusercontent.com/yilong-musk/ice-box/main/scripts/install-cli.ps1 | iex
+```
 
 - **Schnellstart**: Abonnement importieren (**Abonnements**) → Modus & Knoten wählen (**Start** / **Knoten**) → Ein-/Aus-Schaltfläche drücken. Läuft auch ohne Abonnement im Direktmodus.
 - **Updates**: Signierte In-App-Updates unter **Einstellungen → App-Updates** (`.deb` öffnet Releases für `apt`; Android lädt die APK zur Systeminstallation herunter).
@@ -72,6 +83,7 @@ npm run dev
 | `npm run fetch-singbox -- win && npm run build:win` | Windows-Installer bauen |
 | `npm run fetch-singbox -- linux-x64 && npm run build:linux` | Linux-`.deb` & `.AppImage` bauen (`linux-arm64` auf arm64) |
 | `npm run acceptance` / `acceptance:tun` / `acceptance:win` / `acceptance:linux` / `acceptance:linux-tun` | Live-Akzeptanzgates auf einem echten Host |
+| `bash scripts/package-cli.sh` | Plattformübergreifendes Headless-CLI-Archiv für diesen Host bauen und prüfen |
 | `bash scripts/build-android-apk.sh debug arm64` | Android-Debug-APK bauen (`amd64` für Emulator) |
 
 ```text
@@ -86,6 +98,7 @@ crates/         Rust-Workspace (ice-app, ice-config, ice-core, ice-engine, ice-s
 | Dokument | Bereich |
 |---|---|
 | [`docs/architecture.md`](docs/architecture.md) | Architektur, Modulgrenzen und Datenfluss |
+| [`docs/cli.md`](docs/cli.md) | Plattformübergreifendes Headless-CLI, Daemon und Agenten-Automatisierung |
 | [`docs/mcp.md`](docs/mcp.md) | Desktop-MCP-Einrichtung, Werkzeuge und Sicherheitsmodell |
 | [`docs/tun.md`](docs/tun.md) | TUN-Erfassung, Rechteerweiterung, Wiederherstellung und Plattformgrenzen |
 | [`docs/testing.md`](docs/testing.md) | Lokale/CI-Gates und manuelle Live-Tests |

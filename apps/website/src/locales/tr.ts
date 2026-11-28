@@ -90,6 +90,13 @@ export const tr: Record<MarketingKey, string> = {
   "download.android.requires": "Android 14 veya üzeri",
   "download.android.note":
     "Henüz hiçbir uygulama mağazasında değil. Android sorduğunda bu kaynaktan kuruluma izin verin.",
+  "download.cli.subtitle":
+    "macOS, Windows ve Linux için arayüzsüz CLI ve arka plan servisi — ajanlar, sunucular ve betikler için.",
+  "download.cli.shellAria": "CLI kurulum komutunu seçin",
+  "download.cli.copy": "Kopyala",
+  "download.cli.copied": "Kopyalandı",
+  "download.cli.archives": "Doğrudan arşivler",
+  "download.cli.docs": "CLI belgeleri",
   "footer.source": "Kaynak kodu",
   "footer.releases": "Sürümler",
   "footer.changelog": "Değişiklik günlüğü",
