@@ -70,11 +70,15 @@ grep -Fq 'ice-box-cli_${bareVersion}_windows_x86_64' "$PS_SCRIPT" ||
 grep -Fq 'SHA256SUMS' "$PS_SCRIPT" ||
   fail "ps1: missing SHA256SUMS verification"
 if command -v pwsh >/dev/null 2>&1; then
-  pwsh -NoProfile -Command '
+  ICE_BOX_PS_SCRIPT="$PS_SCRIPT" pwsh -NoProfile -NonInteractive -Command '
+    $ErrorActionPreference = "Stop"
     $errors = $null
-    [void][System.Management.Automation.Language.Parser]::ParseFile($args[0], [ref]$null, [ref]$errors)
-    if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }
-  ' "$PS_SCRIPT"
+    [void][System.Management.Automation.Language.Parser]::ParseFile($env:ICE_BOX_PS_SCRIPT, [ref]$null, [ref]$errors)
+    if ($errors -and $errors.Count -gt 0) {
+      $errors | ForEach-Object { [Console]::Error.WriteLine($_.ToString()) }
+      exit 1
+    }
+  '
 fi
 
 echo "== happy path install + symlink + upgrade + uninstall =="
